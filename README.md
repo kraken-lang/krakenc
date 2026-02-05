@@ -63,3 +63,15 @@ The Kraken Compiler is licensed under the Apache License 2.0. See LICENSE for de
 - [Main Kraken Repository](https://github.com/kraken-lang/kraken)
 - [Documentation](https://github.com/kraken-lang/kraken)
 - [Issue Tracker](https://github.com/kraken-lang/kraken/issues)
+
+
+
+<!--// FOOTER
+================================================= -->
+
+<div align="center"><!--// COPYRIGHT  -->
+    <br>
+    <h2></h2>
+    <sup>Copyright <small>&copy;</small> 2026 <strong></strong></sup>
+</div>
+<!-- ============================================ -->
