@@ -1,0 +1,355 @@
+// Kraken Self-Hosted Compiler — Type Checker Tests
+
+module test_typechecker;
+
+import ast;
+import typechecker;
+
+// ---------------------------------------------------------------------------
+// Test: Numeric type checks
+// ---------------------------------------------------------------------------
+
+fn test_is_numeric() -> int {
+    let errors = 0;
+    if (!is_numeric_type(TYPE_INT())) {
+        puts("FAIL: int should be numeric");
+        errors = errors + 1;
+    }
+    if (!is_numeric_type(TYPE_FLOAT())) {
+        puts("FAIL: float should be numeric");
+        errors = errors + 1;
+    }
+    if (is_numeric_type(TYPE_BOOL())) {
+        puts("FAIL: bool should not be numeric");
+        errors = errors + 1;
+    }
+    if (is_numeric_type(TYPE_STRING())) {
+        puts("FAIL: string should not be numeric");
+        errors = errors + 1;
+    }
+    return errors;
+}
+
+// ---------------------------------------------------------------------------
+// Test: Boolean type check
+// ---------------------------------------------------------------------------
+
+fn test_is_boolean() -> int {
+    let errors = 0;
+    if (!is_boolean_type(TYPE_BOOL())) {
+        puts("FAIL: bool should be boolean");
+        errors = errors + 1;
+    }
+    if (is_boolean_type(TYPE_INT())) {
+        puts("FAIL: int should not be boolean");
+        errors = errors + 1;
+    }
+    return errors;
+}
+
+// ---------------------------------------------------------------------------
+// Test: String type check
+// ---------------------------------------------------------------------------
+
+fn test_is_string() -> int {
+    let errors = 0;
+    if (!is_string_type(TYPE_STRING())) {
+        puts("FAIL: string should be string type");
+        errors = errors + 1;
+    }
+    if (!is_string_type(TYPE_STR())) {
+        puts("FAIL: str should be string type");
+        errors = errors + 1;
+    }
+    if (is_string_type(TYPE_INT())) {
+        puts("FAIL: int should not be string type");
+        errors = errors + 1;
+    }
+    return errors;
+}
+
+// ---------------------------------------------------------------------------
+// Test: Type equality
+// ---------------------------------------------------------------------------
+
+fn test_types_equal() -> int {
+    let errors = 0;
+    if (!types_equal(TYPE_INT(), "", TYPE_INT(), "")) {
+        puts("FAIL: int == int");
+        errors = errors + 1;
+    }
+    if (types_equal(TYPE_INT(), "", TYPE_FLOAT(), "")) {
+        puts("FAIL: int != float");
+        errors = errors + 1;
+    }
+    if (!types_equal(TYPE_CUSTOM(), "Point", TYPE_CUSTOM(), "Point")) {
+        puts("FAIL: Point == Point");
+        errors = errors + 1;
+    }
+    if (types_equal(TYPE_CUSTOM(), "Point", TYPE_CUSTOM(), "Line")) {
+        puts("FAIL: Point != Line");
+        errors = errors + 1;
+    }
+    return errors;
+}
+
+// ---------------------------------------------------------------------------
+// Test: Binary operator type checking — arithmetic
+// ---------------------------------------------------------------------------
+
+fn test_binary_arithmetic() -> int {
+    let errors = 0;
+    // int + int = int
+    let r = check_binary_op(200, TYPE_INT(), TYPE_INT());
+    if (r != TYPE_INT()) {
+        puts("FAIL: int + int should be int");
+        errors = errors + 1;
+    }
+    // float + int = float
+    let r2 = check_binary_op(200, TYPE_FLOAT(), TYPE_INT());
+    if (r2 != TYPE_FLOAT()) {
+        puts("FAIL: float + int should be float");
+        errors = errors + 1;
+    }
+    // int * int = int
+    let r3 = check_binary_op(202, TYPE_INT(), TYPE_INT());
+    if (r3 != TYPE_INT()) {
+        puts("FAIL: int * int should be int");
+        errors = errors + 1;
+    }
+    // string + string = string (concatenation)
+    let r4 = check_binary_op(200, TYPE_STRING(), TYPE_STRING());
+    if (r4 != TYPE_STRING()) {
+        puts("FAIL: string + string should be string");
+        errors = errors + 1;
+    }
+    // bool + bool = error
+    let r5 = check_binary_op(200, TYPE_BOOL(), TYPE_BOOL());
+    if (r5 != -1) {
+        puts("FAIL: bool + bool should be type error");
+        errors = errors + 1;
+    }
+    return errors;
+}
+
+// ---------------------------------------------------------------------------
+// Test: Binary operator type checking — comparison
+// ---------------------------------------------------------------------------
+
+fn test_binary_comparison() -> int {
+    let errors = 0;
+    // int == int = bool
+    let r = check_binary_op(205, TYPE_INT(), TYPE_INT());
+    if (r != TYPE_BOOL()) {
+        puts("FAIL: int == int should be bool");
+        errors = errors + 1;
+    }
+    // int < int = bool
+    let r2 = check_binary_op(207, TYPE_INT(), TYPE_INT());
+    if (r2 != TYPE_BOOL()) {
+        puts("FAIL: int < int should be bool");
+        errors = errors + 1;
+    }
+    // int == float = error (strict)
+    let r3 = check_binary_op(205, TYPE_INT(), TYPE_FLOAT());
+    if (r3 != -1) {
+        puts("FAIL: int == float should be type error");
+        errors = errors + 1;
+    }
+    return errors;
+}
+
+// ---------------------------------------------------------------------------
+// Test: Binary operator type checking — logical
+// ---------------------------------------------------------------------------
+
+fn test_binary_logical() -> int {
+    let errors = 0;
+    // bool && bool = bool
+    let r = check_binary_op(211, TYPE_BOOL(), TYPE_BOOL());
+    if (r != TYPE_BOOL()) {
+        puts("FAIL: bool && bool should be bool");
+        errors = errors + 1;
+    }
+    // int && int = error
+    let r2 = check_binary_op(211, TYPE_INT(), TYPE_INT());
+    if (r2 != -1) {
+        puts("FAIL: int && int should be type error");
+        errors = errors + 1;
+    }
+    return errors;
+}
+
+// ---------------------------------------------------------------------------
+// Test: Binary operator type checking — bitwise
+// ---------------------------------------------------------------------------
+
+fn test_binary_bitwise() -> int {
+    let errors = 0;
+    // int & int = int
+    let r = check_binary_op(214, TYPE_INT(), TYPE_INT());
+    if (r != TYPE_INT()) {
+        puts("FAIL: int & int should be int");
+        errors = errors + 1;
+    }
+    // int << int = int
+    let r2 = check_binary_op(218, TYPE_INT(), TYPE_INT());
+    if (r2 != TYPE_INT()) {
+        puts("FAIL: int << int should be int");
+        errors = errors + 1;
+    }
+    // float & float = error
+    let r3 = check_binary_op(214, TYPE_FLOAT(), TYPE_FLOAT());
+    if (r3 != -1) {
+        puts("FAIL: float & float should be type error");
+        errors = errors + 1;
+    }
+    return errors;
+}
+
+// ---------------------------------------------------------------------------
+// Test: Unary operator type checking
+// ---------------------------------------------------------------------------
+
+fn test_unary_ops() -> int {
+    let errors = 0;
+    // -int = int
+    let r = check_unary_op(201, TYPE_INT());
+    if (r != TYPE_INT()) {
+        puts("FAIL: -int should be int");
+        errors = errors + 1;
+    }
+    // -float = float
+    let r2 = check_unary_op(201, TYPE_FLOAT());
+    if (r2 != TYPE_FLOAT()) {
+        puts("FAIL: -float should be float");
+        errors = errors + 1;
+    }
+    // !bool = bool
+    let r3 = check_unary_op(213, TYPE_BOOL());
+    if (r3 != TYPE_BOOL()) {
+        puts("FAIL: !bool should be bool");
+        errors = errors + 1;
+    }
+    // ~int = int
+    let r4 = check_unary_op(217, TYPE_INT());
+    if (r4 != TYPE_INT()) {
+        puts("FAIL: ~int should be int");
+        errors = errors + 1;
+    }
+    // -bool = error
+    let r5 = check_unary_op(201, TYPE_BOOL());
+    if (r5 != -1) {
+        puts("FAIL: -bool should be type error");
+        errors = errors + 1;
+    }
+    // !int = error
+    let r6 = check_unary_op(213, TYPE_INT());
+    if (r6 != -1) {
+        puts("FAIL: !int should be type error");
+        errors = errors + 1;
+    }
+    return errors;
+}
+
+// ---------------------------------------------------------------------------
+// Test: Scope management
+// ---------------------------------------------------------------------------
+
+fn test_scope() -> int {
+    let errors = 0;
+    let tc = new_typechecker("test.kr");
+    if (tc.scope_depth != 0) {
+        puts("FAIL: initial scope should be 0");
+        errors = errors + 1;
+    }
+    let tc2 = tc_enter_scope(tc);
+    if (tc2.scope_depth != 1) {
+        puts("FAIL: entered scope should be 1");
+        errors = errors + 1;
+    }
+    let tc3 = tc_enter_scope(tc2);
+    if (tc3.scope_depth != 2) {
+        puts("FAIL: nested scope should be 2");
+        errors = errors + 1;
+    }
+    let tc4 = tc_exit_scope(tc3);
+    if (tc4.scope_depth != 1) {
+        puts("FAIL: exited scope should be 1");
+        errors = errors + 1;
+    }
+    return errors;
+}
+
+// ---------------------------------------------------------------------------
+// Test: Symbol tracking
+// ---------------------------------------------------------------------------
+
+fn test_symbol_tracking() -> int {
+    let errors = 0;
+    let tc = new_typechecker("test.kr");
+    if (tc.symbol_count != 0) {
+        puts("FAIL: initial symbol count should be 0");
+        errors = errors + 1;
+    }
+    let tc2 = tc_add_symbol(tc);
+    if (tc2.symbol_count != 1) {
+        puts("FAIL: symbol count should be 1");
+        errors = errors + 1;
+    }
+    let tc3 = tc_add_symbol(tc2);
+    let tc4 = tc_add_symbol(tc3);
+    if (tc4.symbol_count != 3) {
+        puts("FAIL: symbol count should be 3");
+        errors = errors + 1;
+    }
+    return errors;
+}
+
+// ---------------------------------------------------------------------------
+// Test: Check program (smoke test)
+// ---------------------------------------------------------------------------
+
+fn test_check_program() -> int {
+    let errors = 0;
+    let tc = new_typechecker("test.kr");
+    let result = check_program(tc, 5);
+    if (!result.success) {
+        puts("FAIL: check_program should succeed on well-formed input");
+        errors = errors + 1;
+    }
+    if (result.symbol_count != 5) {
+        puts("FAIL: check_program should register 5 symbols");
+        errors = errors + 1;
+    }
+    return errors;
+}
+
+// ---------------------------------------------------------------------------
+// Test runner
+// ---------------------------------------------------------------------------
+
+fn main() -> int {
+    puts("=== Type Checker Tests ===");
+    let failures = 0;
+
+    failures = failures + test_is_numeric();
+    failures = failures + test_is_boolean();
+    failures = failures + test_is_string();
+    failures = failures + test_types_equal();
+    failures = failures + test_binary_arithmetic();
+    failures = failures + test_binary_comparison();
+    failures = failures + test_binary_logical();
+    failures = failures + test_binary_bitwise();
+    failures = failures + test_unary_ops();
+    failures = failures + test_scope();
+    failures = failures + test_symbol_tracking();
+    failures = failures + test_check_program();
+
+    if (failures == 0) {
+        puts("All type checker tests passed.");
+    } else {
+        puts("Type checker tests FAILED.");
+    }
+    return failures;
+}

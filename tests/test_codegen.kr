@@ -1,0 +1,264 @@
+// Kraken Self-Hosted Compiler — Code Generator Tests
+
+module test_codegen;
+
+import ast;
+import codegen;
+
+// ---------------------------------------------------------------------------
+// Test: Type mapping
+// ---------------------------------------------------------------------------
+
+fn test_type_mapping() -> int {
+    let errors = 0;
+    if (kraken_type_to_c(TYPE_INT()) != "kr_int") {
+        puts("FAIL: int -> kr_int");
+        errors = errors + 1;
+    }
+    if (kraken_type_to_c(TYPE_FLOAT()) != "kr_float") {
+        puts("FAIL: float -> kr_float");
+        errors = errors + 1;
+    }
+    if (kraken_type_to_c(TYPE_BOOL()) != "kr_bool") {
+        puts("FAIL: bool -> kr_bool");
+        errors = errors + 1;
+    }
+    if (kraken_type_to_c(TYPE_STRING()) != "kr_str") {
+        puts("FAIL: string -> kr_str");
+        errors = errors + 1;
+    }
+    if (kraken_type_to_c(TYPE_STR()) != "kr_str") {
+        puts("FAIL: str -> kr_str");
+        errors = errors + 1;
+    }
+    if (kraken_type_to_c(TYPE_VOID()) != "void") {
+        puts("FAIL: void -> void");
+        errors = errors + 1;
+    }
+    if (kraken_type_to_c(TYPE_BYTES()) != "uint8_t*") {
+        puts("FAIL: bytes -> uint8_t*");
+        errors = errors + 1;
+    }
+    return errors;
+}
+
+// ---------------------------------------------------------------------------
+// Test: Binary operator emission
+// ---------------------------------------------------------------------------
+
+fn test_binary_op_emit() -> int {
+    let errors = 0;
+    if (emit_binary_op(200) != "+") {
+        puts("FAIL: op 200 -> +");
+        errors = errors + 1;
+    }
+    if (emit_binary_op(201) != "-") {
+        puts("FAIL: op 201 -> -");
+        errors = errors + 1;
+    }
+    if (emit_binary_op(202) != "*") {
+        puts("FAIL: op 202 -> *");
+        errors = errors + 1;
+    }
+    if (emit_binary_op(203) != "/") {
+        puts("FAIL: op 203 -> /");
+        errors = errors + 1;
+    }
+    if (emit_binary_op(205) != "==") {
+        puts("FAIL: op 205 -> ==");
+        errors = errors + 1;
+    }
+    if (emit_binary_op(211) != "&&") {
+        puts("FAIL: op 211 -> &&");
+        errors = errors + 1;
+    }
+    if (emit_binary_op(218) != "<<") {
+        puts("FAIL: op 218 -> <<");
+        errors = errors + 1;
+    }
+    return errors;
+}
+
+// ---------------------------------------------------------------------------
+// Test: Unary operator emission
+// ---------------------------------------------------------------------------
+
+fn test_unary_op_emit() -> int {
+    let errors = 0;
+    if (emit_unary_op(201) != "-") {
+        puts("FAIL: unary 201 -> -");
+        errors = errors + 1;
+    }
+    if (emit_unary_op(213) != "!") {
+        puts("FAIL: unary 213 -> !");
+        errors = errors + 1;
+    }
+    if (emit_unary_op(217) != "~") {
+        puts("FAIL: unary 217 -> ~");
+        errors = errors + 1;
+    }
+    return errors;
+}
+
+// ---------------------------------------------------------------------------
+// Test: Name mangling
+// ---------------------------------------------------------------------------
+
+fn test_name_mangling() -> int {
+    let errors = 0;
+    if (mangle_name("", "main") != "kr_main") {
+        puts("FAIL: mangle main");
+        errors = errors + 1;
+    }
+    if (mangle_name("lexer", "tokenize") != "kr_lexer_tokenize") {
+        puts("FAIL: mangle lexer.tokenize");
+        errors = errors + 1;
+    }
+    if (mangle_struct("Point") != "KrStruct_Point") {
+        puts("FAIL: mangle struct Point");
+        errors = errors + 1;
+    }
+    if (mangle_enum("Color") != "KrEnum_Color") {
+        puts("FAIL: mangle enum Color");
+        errors = errors + 1;
+    }
+    return errors;
+}
+
+// ---------------------------------------------------------------------------
+// Test: Indent generation
+// ---------------------------------------------------------------------------
+
+fn test_indent() -> int {
+    let errors = 0;
+    if (make_indent(0) != "") {
+        puts("FAIL: indent 0");
+        errors = errors + 1;
+    }
+    if (make_indent(1) != "    ") {
+        puts("FAIL: indent 1");
+        errors = errors + 1;
+    }
+    if (make_indent(2) != "        ") {
+        puts("FAIL: indent 2");
+        errors = errors + 1;
+    }
+    return errors;
+}
+
+// ---------------------------------------------------------------------------
+// Test: CodeGen state management
+// ---------------------------------------------------------------------------
+
+fn test_codegen_state() -> int {
+    let errors = 0;
+    let cg = new_codegen("test.kr");
+    if (cg.indent != 0) {
+        puts("FAIL: initial indent should be 0");
+        errors = errors + 1;
+    }
+    if (cg.line_count != 0) {
+        puts("FAIL: initial line_count should be 0");
+        errors = errors + 1;
+    }
+    let cg2 = cg_indent(cg);
+    if (cg2.indent != 1) {
+        puts("FAIL: indent should be 1");
+        errors = errors + 1;
+    }
+    let cg3 = cg_indent(cg2);
+    if (cg3.indent != 2) {
+        puts("FAIL: indent should be 2");
+        errors = errors + 1;
+    }
+    let cg4 = cg_dedent(cg3);
+    if (cg4.indent != 1) {
+        puts("FAIL: indent should be 1 after dedent");
+        errors = errors + 1;
+    }
+    let cg5 = cg_emit_line(cg4);
+    if (cg5.line_count != 1) {
+        puts("FAIL: line_count should be 1");
+        errors = errors + 1;
+    }
+    return errors;
+}
+
+// ---------------------------------------------------------------------------
+// Test: Preamble emission
+// ---------------------------------------------------------------------------
+
+fn test_preamble() -> int {
+    let errors = 0;
+    let cg = new_codegen("test.kr");
+    let cg2 = emit_preamble(cg);
+    if (cg2.line_count == 0) {
+        puts("FAIL: preamble should emit lines");
+        errors = errors + 1;
+    }
+    if (cg2.error_count != 0) {
+        puts("FAIL: preamble should have no errors");
+        errors = errors + 1;
+    }
+    return errors;
+}
+
+// ---------------------------------------------------------------------------
+// Test: Generate program (smoke test)
+// ---------------------------------------------------------------------------
+
+fn test_generate_program() -> int {
+    let errors = 0;
+    let cg = new_codegen("test.kr");
+    let result = generate_program(cg, 3);
+    if (!result.success) {
+        puts("FAIL: generate_program should succeed");
+        errors = errors + 1;
+    }
+    if (result.line_count == 0) {
+        puts("FAIL: generate_program should emit lines");
+        errors = errors + 1;
+    }
+    return errors;
+}
+
+// ---------------------------------------------------------------------------
+// Test: Dedent floor
+// ---------------------------------------------------------------------------
+
+fn test_dedent_floor() -> int {
+    let errors = 0;
+    let cg = new_codegen("test.kr");
+    let cg2 = cg_dedent(cg); // already at 0
+    if (cg2.indent != 0) {
+        puts("FAIL: dedent from 0 should stay at 0");
+        errors = errors + 1;
+    }
+    return errors;
+}
+
+// ---------------------------------------------------------------------------
+// Test runner
+// ---------------------------------------------------------------------------
+
+fn main() -> int {
+    puts("=== Code Generator Tests ===");
+    let failures = 0;
+
+    failures = failures + test_type_mapping();
+    failures = failures + test_binary_op_emit();
+    failures = failures + test_unary_op_emit();
+    failures = failures + test_name_mangling();
+    failures = failures + test_indent();
+    failures = failures + test_codegen_state();
+    failures = failures + test_preamble();
+    failures = failures + test_generate_program();
+    failures = failures + test_dedent_floor();
+
+    if (failures == 0) {
+        puts("All code generator tests passed.");
+    } else {
+        puts("Code generator tests FAILED.");
+    }
+    return failures;
+}

@@ -1,0 +1,225 @@
+// Kraken Self-Hosted Compiler — Entry Point
+// CLI driver: parses arguments, orchestrates the compilation pipeline,
+// and reports diagnostics.
+//
+// Usage:
+//   krakenc <source.kr>                  Compile to executable
+//   krakenc --emit-c <source.kr>         Emit C source (bootstrap mode)
+//   krakenc --check <source.kr>          Type-check only (no codegen)
+//   krakenc --tokens <source.kr>         Dump token stream
+//   krakenc --ast <source.kr>            Dump AST
+//   krakenc --target <triple>            Cross-compile for target platform
+//   krakenc --targets                    List supported targets
+//   krakenc --version                    Print version
+//   krakenc --help                       Print usage
+
+module main;
+
+import token;
+import lexer;
+import ast;
+import parser;
+import typechecker;
+import codegen;
+import error;
+import platform;
+
+// ---------------------------------------------------------------------------
+// Version
+// ---------------------------------------------------------------------------
+
+fn COMPILER_VERSION() -> string { return "0.9.2"; }
+fn COMPILER_NAME() -> string    { return "krakenc"; }
+
+// ---------------------------------------------------------------------------
+// Compile mode
+// ---------------------------------------------------------------------------
+
+fn MODE_COMPILE() -> int  { return 0; }
+fn MODE_EMIT_C() -> int   { return 1; }
+fn MODE_CHECK() -> int    { return 2; }
+fn MODE_TOKENS() -> int   { return 3; }
+fn MODE_AST() -> int      { return 4; }
+fn MODE_VERSION() -> int  { return 5; }
+fn MODE_HELP() -> int     { return 6; }
+fn MODE_TARGETS() -> int  { return 7; }
+
+// ---------------------------------------------------------------------------
+// Compilation pipeline
+// ---------------------------------------------------------------------------
+
+struct CompileResult {
+    token_count: int;
+    node_count: int;
+    error_count: int;
+    warning_count: int;
+    success: bool;
+}
+
+fn compile(source: string, file: string, mode: int, target: Target) -> CompileResult {
+    let total_errors = 0;
+    let total_warnings = 0;
+
+    // Phase 1: Lexing
+    let ts: TokenStream = tokenize(source);
+    let token_count = ts.count;
+
+    if (mode == MODE_TOKENS()) {
+        return CompileResult {
+            token_count: token_count,
+            node_count: 0,
+            error_count: 0,
+            warning_count: 0,
+            success: true,
+        };
+    }
+
+    // Phase 2: Parsing
+    let p: Parser = new_parser(token_count, file);
+    let pr: ParseResult = parse_program(p);
+
+    total_errors = total_errors + pr.error_count;
+
+    if (mode == MODE_AST()) {
+        return CompileResult {
+            token_count: token_count,
+            node_count: pr.node_count,
+            error_count: total_errors,
+            warning_count: total_warnings,
+            success: total_errors == 0,
+        };
+    }
+
+    if (total_errors > 0) {
+        return CompileResult {
+            token_count: token_count,
+            node_count: pr.node_count,
+            error_count: total_errors,
+            warning_count: total_warnings,
+            success: false,
+        };
+    }
+
+    // Phase 3: Type Checking
+    let tc: TypeChecker = new_typechecker(file);
+    let tcr: TypeCheckResult = check_program(tc, pr.node_count);
+
+    total_errors = total_errors + tcr.error_count;
+    total_warnings = total_warnings + tcr.warning_count;
+
+    if (mode == MODE_CHECK()) {
+        return CompileResult {
+            token_count: token_count,
+            node_count: pr.node_count,
+            error_count: total_errors,
+            warning_count: total_warnings,
+            success: total_errors == 0,
+        };
+    }
+
+    if (total_errors > 0) {
+        return CompileResult {
+            token_count: token_count,
+            node_count: pr.node_count,
+            error_count: total_errors,
+            warning_count: total_warnings,
+            success: false,
+        };
+    }
+
+    // Phase 4: Code Generation (platform-aware)
+    let cg: CodeGen = new_codegen_with_target(file, target);
+    let cgr: CodeGenResult = generate_program(cg, pr.node_count);
+
+    total_errors = total_errors + cgr.error_count;
+
+    return CompileResult {
+        token_count: token_count,
+        node_count: pr.node_count,
+        error_count: total_errors,
+        warning_count: total_warnings,
+        success: total_errors == 0,
+    };
+}
+
+// ---------------------------------------------------------------------------
+// Banner
+// ---------------------------------------------------------------------------
+
+fn print_banner() -> void {
+    puts("  _  __          _              ");
+    puts(" | |/ /_ __ __ _| | _____ _ __  ");
+    puts(" | ' /| '__/ _` | |/ / _ \\ '_ \\ ");
+    puts(" | . \\| | | (_| |   <  __/ | | |");
+    puts(" |_|\\_\\_|  \\__,_|_|\\_\\___|_| |_|");
+    puts("");
+    puts(str_concat(" Kraken Language Compiler v", COMPILER_VERSION()));
+    puts("");
+}
+
+fn print_version() -> void {
+    puts(str_concat(str_concat(COMPILER_NAME(), " "), COMPILER_VERSION()));
+}
+
+fn print_help() -> void {
+    print_banner();
+    puts("Usage: krakenc [options] <source.kr>");
+    puts("");
+    puts("Options:");
+    puts("  --emit-c              Emit C source (bootstrap mode)");
+    puts("  --check               Type-check only, no code generation");
+    puts("  --tokens              Dump token stream");
+    puts("  --ast                 Dump abstract syntax tree");
+    puts("  --target <triple>     Cross-compile for target platform");
+    puts("  --targets             List all supported target platforms");
+    puts("  --version             Print compiler version");
+    puts("  --help                Print this help message");
+    puts("");
+    puts("Target shortcuts: linux, macos, windows, freebsd, wasm");
+    puts("");
+}
+
+// ---------------------------------------------------------------------------
+// Main
+// ---------------------------------------------------------------------------
+
+fn main() -> int {
+    print_banner();
+
+    // Detect host platform (used as default target)
+    let target: Target = detect_host_target();
+
+    // Placeholder: in the bootstrapped compiler, argc/argv are provided
+    // via FFI from the C runtime. For now, compile a small test program.
+    // When --target <triple> is provided, override the default target.
+    let test_source = "fn main() -> int {\n    let x = 42;\n    return x;\n}\n";
+    let test_file = "test.kr";
+    let mode = MODE_COMPILE();
+
+    // Display target info
+    puts(str_concat("  Host:     ", format_target(detect_host_target())));
+    puts(str_concat("  Target:   ", format_target(target)));
+    puts(str_concat("  CC:       ", default_cc(target)));
+    let lflags = linker_flags(target);
+    if (lflags != "") {
+        puts(str_concat("  Linker:   ", lflags));
+    }
+    puts(str_concat("  Obj ext:  ", object_ext(target)));
+    puts(str_concat("  Exe ext:  ", exe_ext(target)));
+    puts("");
+
+    let result: CompileResult = compile(test_source, test_file, mode, target);
+
+    if (result.success) {
+        puts("Compilation successful.");
+        puts(str_concat("  Tokens:   ", fmt_int(result.token_count)));
+        puts(str_concat("  Nodes:    ", fmt_int(result.node_count)));
+        puts(str_concat("  Warnings: ", fmt_int(result.warning_count)));
+        return 0;
+    } else {
+        puts("Compilation failed.");
+        puts(str_concat("  Errors:   ", fmt_int(result.error_count)));
+        puts(str_concat("  Warnings: ", fmt_int(result.warning_count)));
+        return 1;
+    }
+}

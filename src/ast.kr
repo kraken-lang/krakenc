@@ -1,0 +1,285 @@
+// Kraken Self-Hosted Compiler — Abstract Syntax Tree
+// Node types representing the parsed structure of a Kraken program.
+
+module ast;
+
+// ---------------------------------------------------------------------------
+// Node kind constants — Statement types
+// ---------------------------------------------------------------------------
+
+pub fn NODE_MODULE() -> int           { return 1; }
+pub fn NODE_IMPORT() -> int           { return 2; }
+pub fn NODE_VAR_DECL() -> int         { return 3; }
+pub fn NODE_CONST_DECL() -> int       { return 4; }
+pub fn NODE_FN_DECL() -> int          { return 5; }
+pub fn NODE_STRUCT_DECL() -> int      { return 6; }
+pub fn NODE_ENUM_DECL() -> int        { return 7; }
+pub fn NODE_TRAIT_DECL() -> int       { return 8; }
+pub fn NODE_IMPL_BLOCK() -> int       { return 9; }
+pub fn NODE_TRAIT_IMPL() -> int       { return 10; }
+pub fn NODE_TYPE_ALIAS() -> int       { return 11; }
+pub fn NODE_RETURN() -> int           { return 12; }
+pub fn NODE_IF() -> int               { return 13; }
+pub fn NODE_WHILE() -> int            { return 14; }
+pub fn NODE_FOR() -> int              { return 15; }
+pub fn NODE_FOR_IN() -> int           { return 16; }
+pub fn NODE_MATCH() -> int            { return 17; }
+pub fn NODE_BREAK() -> int            { return 18; }
+pub fn NODE_CONTINUE() -> int         { return 19; }
+pub fn NODE_DEFER() -> int            { return 20; }
+pub fn NODE_UNSAFE() -> int           { return 21; }
+pub fn NODE_EXPRESSION() -> int       { return 22; }
+pub fn NODE_CLASS_DECL() -> int       { return 23; }
+pub fn NODE_INTERFACE_DECL() -> int   { return 24; }
+pub fn NODE_UNION_DECL() -> int       { return 25; }
+pub fn NODE_MACRO_DECL() -> int       { return 26; }
+pub fn NODE_STATIC_ASSERT() -> int    { return 27; }
+pub fn NODE_ATTRIBUTE() -> int        { return 28; }
+
+// ---------------------------------------------------------------------------
+// Node kind constants — Expression types
+// ---------------------------------------------------------------------------
+
+pub fn EXPR_INT_LIT() -> int          { return 50; }
+pub fn EXPR_FLOAT_LIT() -> int        { return 51; }
+pub fn EXPR_STRING_LIT() -> int       { return 52; }
+pub fn EXPR_BOOL_LIT() -> int         { return 53; }
+pub fn EXPR_NULL_LIT() -> int         { return 54; }
+pub fn EXPR_IDENTIFIER() -> int       { return 55; }
+pub fn EXPR_BINARY() -> int           { return 56; }
+pub fn EXPR_UNARY() -> int            { return 57; }
+pub fn EXPR_CALL() -> int             { return 58; }
+pub fn EXPR_ARRAY() -> int            { return 59; }
+pub fn EXPR_INDEX() -> int            { return 60; }
+pub fn EXPR_MEMBER() -> int           { return 61; }
+pub fn EXPR_STRUCT_LIT() -> int       { return 62; }
+pub fn EXPR_ASSIGNMENT() -> int       { return 63; }
+pub fn EXPR_REFERENCE() -> int        { return 64; }
+pub fn EXPR_DEREF() -> int            { return 65; }
+pub fn EXPR_ENUM_VARIANT() -> int     { return 66; }
+pub fn EXPR_TUPLE() -> int            { return 67; }
+pub fn EXPR_RANGE() -> int            { return 68; }
+pub fn EXPR_CLOSURE() -> int          { return 69; }
+pub fn EXPR_AWAIT() -> int            { return 70; }
+pub fn EXPR_SPAWN() -> int            { return 71; }
+pub fn EXPR_TRY() -> int              { return 72; }
+pub fn EXPR_SLICE() -> int            { return 73; }
+
+// ---------------------------------------------------------------------------
+// Type kind constants
+// ---------------------------------------------------------------------------
+
+pub fn TYPE_INT() -> int              { return 100; }
+pub fn TYPE_FLOAT() -> int            { return 101; }
+pub fn TYPE_BOOL() -> int             { return 102; }
+pub fn TYPE_STRING() -> int           { return 103; }
+pub fn TYPE_STR() -> int              { return 104; }
+pub fn TYPE_BYTES() -> int            { return 105; }
+pub fn TYPE_VOID() -> int             { return 106; }
+pub fn TYPE_CUSTOM() -> int           { return 107; }
+pub fn TYPE_ARRAY() -> int            { return 108; }
+pub fn TYPE_REFERENCE() -> int        { return 109; }
+pub fn TYPE_POINTER() -> int          { return 110; }
+pub fn TYPE_TUPLE() -> int            { return 111; }
+pub fn TYPE_FUNCTION() -> int         { return 112; }
+pub fn TYPE_GENERIC() -> int          { return 113; }
+
+// ---------------------------------------------------------------------------
+// Pattern kind constants
+// ---------------------------------------------------------------------------
+
+pub fn PAT_LITERAL() -> int           { return 150; }
+pub fn PAT_IDENTIFIER() -> int        { return 151; }
+pub fn PAT_WILDCARD() -> int          { return 152; }
+pub fn PAT_ENUM_VARIANT() -> int      { return 153; }
+pub fn PAT_TUPLE() -> int             { return 154; }
+pub fn PAT_RANGE() -> int             { return 155; }
+pub fn PAT_OR() -> int                { return 156; }
+pub fn PAT_STRUCT() -> int            { return 157; }
+
+// ---------------------------------------------------------------------------
+// AST Node — Flat, arena-friendly representation
+// ---------------------------------------------------------------------------
+
+pub struct AstNode {
+    kind: int;
+    name: string;
+    str_value: string;
+    int_value: int;
+    line: int;
+    column: int;
+    flags: int;
+    parent_id: int;
+    first_child: int;
+    next_sibling: int;
+}
+
+// Flag bits
+pub fn FLAG_PUBLIC() -> int     { return 1; }
+pub fn FLAG_MUTABLE() -> int    { return 2; }
+pub fn FLAG_ASYNC() -> int      { return 4; }
+pub fn FLAG_UNSAFE() -> int     { return 8; }
+pub fn FLAG_VARIADIC() -> int   { return 16; }
+pub fn FLAG_REFERENCE() -> int  { return 32; }
+
+pub fn has_flag(node: AstNode, flag: int) -> bool {
+    return (node.flags & flag) != 0;
+}
+
+pub fn new_node(kind: int, name: string, line: int, column: int) -> AstNode {
+    return AstNode {
+        kind: kind,
+        name: name,
+        str_value: "",
+        int_value: 0,
+        line: line,
+        column: column,
+        flags: 0,
+        parent_id: -1,
+        first_child: -1,
+        next_sibling: -1,
+    };
+}
+
+// ---------------------------------------------------------------------------
+// AST Arena — flat array of nodes
+// ---------------------------------------------------------------------------
+
+pub struct AstArena {
+    count: int;
+}
+
+pub fn new_arena() -> AstArena {
+    return AstArena { count: 0 };
+}
+
+pub fn arena_add(arena: AstArena) -> AstArena {
+    return AstArena { count: arena.count + 1 };
+}
+
+// ---------------------------------------------------------------------------
+// Type Node — represents a type annotation
+// ---------------------------------------------------------------------------
+
+pub struct TypeNode {
+    kind: int;
+    name: string;
+    is_mutable: bool;
+}
+
+pub fn new_type(kind: int, name: string) -> TypeNode {
+    return TypeNode { kind: kind, name: name, is_mutable: false };
+}
+
+pub fn type_from_keyword(kw: int) -> TypeNode {
+    if (kw == 150) { return new_type(TYPE_INT(), "int"); }
+    if (kw == 151) { return new_type(TYPE_FLOAT(), "float"); }
+    if (kw == 152) { return new_type(TYPE_BOOL(), "bool"); }
+    if (kw == 153) { return new_type(TYPE_STRING(), "string"); }
+    if (kw == 154) { return new_type(TYPE_STR(), "str"); }
+    if (kw == 155) { return new_type(TYPE_BYTES(), "bytes"); }
+    if (kw == 156) { return new_type(TYPE_VOID(), "void"); }
+    return new_type(TYPE_CUSTOM(), "unknown");
+}
+
+// ---------------------------------------------------------------------------
+// Parameter
+// ---------------------------------------------------------------------------
+
+pub struct Parameter {
+    name: string;
+    type_kind: int;
+    type_name: string;
+    is_reference: bool;
+}
+
+pub fn new_param(name: string, type_kind: int, type_name: string) -> Parameter {
+    return Parameter {
+        name: name,
+        type_kind: type_kind,
+        type_name: type_name,
+        is_reference: false,
+    };
+}
+
+// ---------------------------------------------------------------------------
+// Struct Field
+// ---------------------------------------------------------------------------
+
+pub struct Field {
+    name: string;
+    type_kind: int;
+    type_name: string;
+    is_public: bool;
+}
+
+pub fn new_field(name: string, type_kind: int, type_name: string) -> Field {
+    return Field {
+        name: name,
+        type_kind: type_kind,
+        type_name: type_name,
+        is_public: false,
+    };
+}
+
+// ---------------------------------------------------------------------------
+// Match Arm
+// ---------------------------------------------------------------------------
+
+pub struct MatchArm {
+    pattern_kind: int;
+    pattern_value: string;
+    body_start: int;
+    body_count: int;
+}
+
+pub fn new_match_arm(pattern_kind: int, pattern_value: string) -> MatchArm {
+    return MatchArm {
+        pattern_kind: pattern_kind,
+        pattern_value: pattern_value,
+        body_start: 0,
+        body_count: 0,
+    };
+}
+
+// ---------------------------------------------------------------------------
+// AST Utility
+// ---------------------------------------------------------------------------
+
+pub fn node_kind_name(kind: int) -> string {
+    if (kind == NODE_MODULE())         { return "module"; }
+    if (kind == NODE_IMPORT())         { return "import"; }
+    if (kind == NODE_VAR_DECL())       { return "variable_declaration"; }
+    if (kind == NODE_CONST_DECL())     { return "constant_declaration"; }
+    if (kind == NODE_FN_DECL())        { return "function_declaration"; }
+    if (kind == NODE_STRUCT_DECL())    { return "struct_declaration"; }
+    if (kind == NODE_ENUM_DECL())      { return "enum_declaration"; }
+    if (kind == NODE_TRAIT_DECL())     { return "trait_declaration"; }
+    if (kind == NODE_IMPL_BLOCK())     { return "impl_block"; }
+    if (kind == NODE_TRAIT_IMPL())     { return "trait_impl"; }
+    if (kind == NODE_TYPE_ALIAS())     { return "type_alias"; }
+    if (kind == NODE_RETURN())         { return "return"; }
+    if (kind == NODE_IF())             { return "if"; }
+    if (kind == NODE_WHILE())          { return "while"; }
+    if (kind == NODE_FOR())            { return "for"; }
+    if (kind == NODE_FOR_IN())         { return "for_in"; }
+    if (kind == NODE_MATCH())          { return "match"; }
+    if (kind == NODE_BREAK())          { return "break"; }
+    if (kind == NODE_CONTINUE())       { return "continue"; }
+    if (kind == NODE_DEFER())          { return "defer"; }
+    if (kind == NODE_EXPRESSION())     { return "expression"; }
+    if (kind == EXPR_INT_LIT())        { return "int_literal"; }
+    if (kind == EXPR_FLOAT_LIT())      { return "float_literal"; }
+    if (kind == EXPR_STRING_LIT())     { return "string_literal"; }
+    if (kind == EXPR_BOOL_LIT())       { return "bool_literal"; }
+    if (kind == EXPR_IDENTIFIER())     { return "identifier"; }
+    if (kind == EXPR_BINARY())         { return "binary"; }
+    if (kind == EXPR_UNARY())          { return "unary"; }
+    if (kind == EXPR_CALL())           { return "call"; }
+    if (kind == EXPR_ARRAY())          { return "array"; }
+    if (kind == EXPR_INDEX())          { return "index"; }
+    if (kind == EXPR_MEMBER())         { return "member_access"; }
+    if (kind == EXPR_STRUCT_LIT())     { return "struct_literal"; }
+    if (kind == EXPR_ASSIGNMENT())     { return "assignment"; }
+    return "unknown";
+}

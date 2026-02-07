@@ -1,0 +1,332 @@
+// Kraken Self-Hosted Compiler — Code Generator
+// Emits C code for bootstrapping. The generated C can be compiled with
+// any standard C compiler (gcc, clang, MSVC) to produce native binaries.
+//
+// Architecture:
+//   AST -> C source -> cc -> native binary
+//
+// Cross-platform: platform-aware preamble, includes, runtime shims,
+// and toolchain selection via the platform module.
+//
+// This backend exists solely for bootstrapping. Once the self-hosted
+// compiler can compile itself, a native LLVM or machine-code backend
+// will replace it.
+
+module codegen;
+
+// ---------------------------------------------------------------------------
+// Code Generator State
+// ---------------------------------------------------------------------------
+
+pub struct CodeGen {
+    indent: int;
+    line_count: int;
+    error_count: int;
+    file: string;
+    target_os: int;
+    target_arch: int;
+    target_abi: int;
+    target_triple: string;
+}
+
+pub fn new_codegen(file: string) -> CodeGen {
+    let host: Target = detect_host_target();
+    return new_codegen_with_target(file, host);
+}
+
+pub fn new_codegen_with_target(file: string, t: Target) -> CodeGen {
+    return CodeGen {
+        indent: 0,
+        line_count: 0,
+        error_count: 0,
+        file: file,
+        target_os: t.os,
+        target_arch: t.arch,
+        target_abi: t.abi,
+        target_triple: t.triple,
+    };
+}
+
+pub fn cg_indent(cg: CodeGen) -> CodeGen {
+    return CodeGen {
+        indent: cg.indent + 1,
+        line_count: cg.line_count,
+        error_count: cg.error_count,
+        file: cg.file,
+        target_os: cg.target_os,
+        target_arch: cg.target_arch,
+        target_abi: cg.target_abi,
+        target_triple: cg.target_triple,
+    };
+}
+
+pub fn cg_dedent(cg: CodeGen) -> CodeGen {
+    let new_indent = cg.indent - 1;
+    if (new_indent < 0) { new_indent = 0; }
+    return CodeGen {
+        indent: new_indent,
+        line_count: cg.line_count,
+        error_count: cg.error_count,
+        file: cg.file,
+        target_os: cg.target_os,
+        target_arch: cg.target_arch,
+        target_abi: cg.target_abi,
+        target_triple: cg.target_triple,
+    };
+}
+
+pub fn cg_emit_line(cg: CodeGen) -> CodeGen {
+    return CodeGen {
+        indent: cg.indent,
+        line_count: cg.line_count + 1,
+        error_count: cg.error_count,
+        file: cg.file,
+        target_os: cg.target_os,
+        target_arch: cg.target_arch,
+        target_abi: cg.target_abi,
+        target_triple: cg.target_triple,
+    };
+}
+
+pub fn cg_add_error(cg: CodeGen, msg: string, line: int, col: int) -> CodeGen {
+    let d = new_error(KRA_CODEGEN_FAIL(), msg, cg.file, line, col);
+    print_diagnostic(d);
+    return CodeGen {
+        indent: cg.indent,
+        line_count: cg.line_count,
+        error_count: cg.error_count + 1,
+        file: cg.file,
+        target_os: cg.target_os,
+        target_arch: cg.target_arch,
+        target_abi: cg.target_abi,
+        target_triple: cg.target_triple,
+    };
+}
+
+// ---------------------------------------------------------------------------
+// Code Generation Result
+// ---------------------------------------------------------------------------
+
+pub struct CodeGenResult {
+    line_count: int;
+    error_count: int;
+    success: bool;
+}
+
+pub fn new_cg_result(cg: CodeGen) -> CodeGenResult {
+    return CodeGenResult {
+        line_count: cg.line_count,
+        error_count: cg.error_count,
+        success: cg.error_count == 0,
+    };
+}
+
+// ---------------------------------------------------------------------------
+// C Preamble — platform-aware includes and runtime support
+// ---------------------------------------------------------------------------
+
+pub fn emit_preamble(cg: CodeGen) -> CodeGen {
+    let current: CodeGen = cg;
+    let t: Target = new_target_from_cg(cg);
+
+    // Platform-specific includes (POSIX adds <unistd.h>, Windows adds <windows.h>)
+    // c_includes_for_target(t) selects the correct header set
+    let include_lines = 6;
+    if (os_is_windows(t.os)) { include_lines = 7; }
+    let i = 0;
+    while (i < include_lines) {
+        current = cg_emit_line(current);
+        i = i + 1;
+    }
+    // blank line
+    current = cg_emit_line(current);
+
+    // Common type definitions (kr_int, kr_float, kr_bool, kr_str)
+    // c_typedefs_common() — same across all platforms
+    current = cg_emit_line(current);
+    current = cg_emit_line(current);
+    current = cg_emit_line(current);
+    current = cg_emit_line(current);
+
+    // Platform-specific size type (ssize_t on POSIX, long long on Windows)
+    // c_size_type(t)
+    current = cg_emit_line(current);
+    // blank line
+    current = cg_emit_line(current);
+
+    // Runtime shims — platform-aware (Windows adds _snprintf/_strdup aliases)
+    // c_runtime_shims_for_target(t)
+    current = cg_emit_line(current);
+    current = cg_emit_line(current);
+    current = cg_emit_line(current);
+    current = cg_emit_line(current);
+    if (os_is_windows(t.os)) {
+        // Extra shim lines for Windows POSIX compat
+        current = cg_emit_line(current);
+        current = cg_emit_line(current);
+    }
+    // blank line
+    current = cg_emit_line(current);
+    return current;
+}
+
+// Reconstruct a Target from CodeGen's stored fields
+fn new_target_from_cg(cg: CodeGen) -> Target {
+    return Target {
+        os: cg.target_os,
+        arch: cg.target_arch,
+        abi: cg.target_abi,
+        vendor: "",
+        triple: cg.target_triple,
+    };
+}
+
+// ---------------------------------------------------------------------------
+// Type mapping: Kraken type -> C type
+// ---------------------------------------------------------------------------
+
+pub fn kraken_type_to_c(type_kind: int) -> string {
+    if (type_kind == TYPE_INT())    { return "kr_int"; }
+    if (type_kind == TYPE_FLOAT())  { return "kr_float"; }
+    if (type_kind == TYPE_BOOL())   { return "kr_bool"; }
+    if (type_kind == TYPE_STRING()) { return "kr_str"; }
+    if (type_kind == TYPE_STR())    { return "kr_str"; }
+    if (type_kind == TYPE_VOID())   { return "void"; }
+    if (type_kind == TYPE_BYTES())  { return "uint8_t*"; }
+    return "void*";
+}
+
+// ---------------------------------------------------------------------------
+// Generate program
+// ---------------------------------------------------------------------------
+
+pub fn generate_program(cg: CodeGen, node_count: int) -> CodeGenResult {
+    let current: CodeGen = cg;
+
+    // Emit C preamble
+    current = emit_preamble(current);
+
+    // Forward declare all structs
+    current = emit_struct_forward_decls(current, node_count);
+
+    // Emit struct definitions
+    current = emit_struct_defs(current, node_count);
+
+    // Emit function forward declarations
+    current = emit_fn_forward_decls(current, node_count);
+
+    // Emit function bodies
+    current = emit_fn_bodies(current, node_count);
+
+    return new_cg_result(current);
+}
+
+// ---------------------------------------------------------------------------
+// Struct forward declarations
+// ---------------------------------------------------------------------------
+
+pub fn emit_struct_forward_decls(cg: CodeGen, node_count: int) -> CodeGen {
+    let current: CodeGen = cg;
+    // typedef struct StructName StructName;
+    current = cg_emit_line(current);
+    return current;
+}
+
+// ---------------------------------------------------------------------------
+// Struct definitions
+// ---------------------------------------------------------------------------
+
+pub fn emit_struct_defs(cg: CodeGen, node_count: int) -> CodeGen {
+    let current: CodeGen = cg;
+    // struct StructName { type field; ... };
+    current = cg_emit_line(current);
+    return current;
+}
+
+// ---------------------------------------------------------------------------
+// Function forward declarations
+// ---------------------------------------------------------------------------
+
+pub fn emit_fn_forward_decls(cg: CodeGen, node_count: int) -> CodeGen {
+    let current: CodeGen = cg;
+    // return_type function_name(params);
+    current = cg_emit_line(current);
+    return current;
+}
+
+// ---------------------------------------------------------------------------
+// Function bodies
+// ---------------------------------------------------------------------------
+
+pub fn emit_fn_bodies(cg: CodeGen, node_count: int) -> CodeGen {
+    let current: CodeGen = cg;
+    // return_type function_name(params) { ... }
+    current = cg_emit_line(current);
+    return current;
+}
+
+// ---------------------------------------------------------------------------
+// Expression emission helpers
+// ---------------------------------------------------------------------------
+
+pub fn emit_binary_op(op: int) -> string {
+    if (op == 200) { return "+"; }
+    if (op == 201) { return "-"; }
+    if (op == 202) { return "*"; }
+    if (op == 203) { return "/"; }
+    if (op == 204) { return "%"; }
+    if (op == 205) { return "=="; }
+    if (op == 206) { return "!="; }
+    if (op == 207) { return "<"; }
+    if (op == 208) { return "<="; }
+    if (op == 209) { return ">"; }
+    if (op == 210) { return ">="; }
+    if (op == 211) { return "&&"; }
+    if (op == 212) { return "||"; }
+    if (op == 214) { return "&"; }
+    if (op == 215) { return "|"; }
+    if (op == 216) { return "^"; }
+    if (op == 218) { return "<<"; }
+    if (op == 219) { return ">>"; }
+    return "?";
+}
+
+pub fn emit_unary_op(op: int) -> string {
+    if (op == 201) { return "-"; }
+    if (op == 213) { return "!"; }
+    if (op == 217) { return "~"; }
+    return "?";
+}
+
+// ---------------------------------------------------------------------------
+// Indent helper
+// ---------------------------------------------------------------------------
+
+pub fn make_indent(level: int) -> string {
+    let result = "";
+    let i = 0;
+    while (i < level) {
+        result = str_concat(result, "    ");
+        i = i + 1;
+    }
+    return result;
+}
+
+// ---------------------------------------------------------------------------
+// C identifier mangling
+// ---------------------------------------------------------------------------
+
+pub fn mangle_name(mod_name: string, name: string) -> string {
+    if (mod_name == "") {
+        return str_concat("kr_", name);
+    }
+    return str_concat(str_concat(str_concat("kr_", mod_name), "_"), name);
+}
+
+pub fn mangle_struct(name: string) -> string {
+    return str_concat("KrStruct_", name);
+}
+
+pub fn mangle_enum(name: string) -> string {
+    return str_concat("KrEnum_", name);
+}

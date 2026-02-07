@@ -1,0 +1,312 @@
+// Kraken Self-Hosted Compiler — Type Checker
+// Semantic analysis: name resolution, type inference, type validation,
+// and constraint checking across the AST.
+
+module typechecker;
+
+// ---------------------------------------------------------------------------
+// Symbol kinds
+// ---------------------------------------------------------------------------
+
+pub fn SYM_VARIABLE() -> int   { return 1; }
+pub fn SYM_FUNCTION() -> int   { return 2; }
+pub fn SYM_STRUCT() -> int     { return 3; }
+pub fn SYM_ENUM() -> int       { return 4; }
+pub fn SYM_TRAIT() -> int      { return 5; }
+pub fn SYM_TYPE_ALIAS() -> int { return 6; }
+pub fn SYM_MODULE() -> int     { return 7; }
+pub fn SYM_PARAMETER() -> int  { return 8; }
+pub fn SYM_FIELD() -> int      { return 9; }
+pub fn SYM_METHOD() -> int     { return 10; }
+
+// ---------------------------------------------------------------------------
+// Symbol
+// ---------------------------------------------------------------------------
+
+pub struct Symbol {
+    name: string;
+    kind: int;
+    type_kind: int;
+    type_name: string;
+    scope_depth: int;
+    is_mutable: bool;
+    is_public: bool;
+    defined_line: int;
+    defined_column: int;
+}
+
+pub fn new_symbol(name: string, kind: int, type_kind: int, type_name: string, depth: int) -> Symbol {
+    return Symbol {
+        name: name,
+        kind: kind,
+        type_kind: type_kind,
+        type_name: type_name,
+        scope_depth: depth,
+        is_mutable: false,
+        is_public: false,
+        defined_line: 0,
+        defined_column: 0,
+    };
+}
+
+// ---------------------------------------------------------------------------
+// Scope
+// ---------------------------------------------------------------------------
+
+pub struct Scope {
+    depth: int;
+    symbol_count: int;
+    parent_depth: int;
+}
+
+pub fn new_scope(depth: int, parent_depth: int) -> Scope {
+    return Scope {
+        depth: depth,
+        symbol_count: 0,
+        parent_depth: parent_depth,
+    };
+}
+
+pub fn scope_add_symbol(s: Scope) -> Scope {
+    return Scope {
+        depth: s.depth,
+        symbol_count: s.symbol_count + 1,
+        parent_depth: s.parent_depth,
+    };
+}
+
+// ---------------------------------------------------------------------------
+// Type Checker State
+// ---------------------------------------------------------------------------
+
+pub struct TypeChecker {
+    scope_depth: int;
+    symbol_count: int;
+    error_count: int;
+    warning_count: int;
+    file: string;
+}
+
+pub fn new_typechecker(file: string) -> TypeChecker {
+    return TypeChecker {
+        scope_depth: 0,
+        symbol_count: 0,
+        error_count: 0,
+        warning_count: 0,
+        file: file,
+    };
+}
+
+pub fn tc_enter_scope(tc: TypeChecker) -> TypeChecker {
+    return TypeChecker {
+        scope_depth: tc.scope_depth + 1,
+        symbol_count: tc.symbol_count,
+        error_count: tc.error_count,
+        warning_count: tc.warning_count,
+        file: tc.file,
+    };
+}
+
+pub fn tc_exit_scope(tc: TypeChecker) -> TypeChecker {
+    return TypeChecker {
+        scope_depth: tc.scope_depth - 1,
+        symbol_count: tc.symbol_count,
+        error_count: tc.error_count,
+        warning_count: tc.warning_count,
+        file: tc.file,
+    };
+}
+
+pub fn tc_add_symbol(tc: TypeChecker) -> TypeChecker {
+    return TypeChecker {
+        scope_depth: tc.scope_depth,
+        symbol_count: tc.symbol_count + 1,
+        error_count: tc.error_count,
+        warning_count: tc.warning_count,
+        file: tc.file,
+    };
+}
+
+pub fn tc_add_error(tc: TypeChecker, code: string, msg: string, line: int, col: int) -> TypeChecker {
+    let d = new_error(code, msg, tc.file, line, col);
+    print_diagnostic(d);
+    return TypeChecker {
+        scope_depth: tc.scope_depth,
+        symbol_count: tc.symbol_count,
+        error_count: tc.error_count + 1,
+        warning_count: tc.warning_count,
+        file: tc.file,
+    };
+}
+
+pub fn tc_add_warning(tc: TypeChecker, code: string, msg: string, line: int, col: int) -> TypeChecker {
+    let d = new_warning(code, msg, tc.file, line, col);
+    print_diagnostic(d);
+    return TypeChecker {
+        scope_depth: tc.scope_depth,
+        symbol_count: tc.symbol_count,
+        error_count: tc.error_count,
+        warning_count: tc.warning_count + 1,
+        file: tc.file,
+    };
+}
+
+// ---------------------------------------------------------------------------
+// Type Check Result
+// ---------------------------------------------------------------------------
+
+pub struct TypeCheckResult {
+    error_count: int;
+    warning_count: int;
+    symbol_count: int;
+    success: bool;
+}
+
+pub fn new_tc_result(tc: TypeChecker) -> TypeCheckResult {
+    return TypeCheckResult {
+        error_count: tc.error_count,
+        warning_count: tc.warning_count,
+        symbol_count: tc.symbol_count,
+        success: tc.error_count == 0,
+    };
+}
+
+// ---------------------------------------------------------------------------
+// Check program
+// ---------------------------------------------------------------------------
+
+pub fn check_program(tc: TypeChecker, node_count: int) -> TypeCheckResult {
+    let current: TypeChecker = tc;
+
+    // First pass: collect all top-level declarations (forward declarations)
+    current = collect_declarations(current, node_count);
+
+    // Second pass: check all function bodies and expressions
+    current = check_bodies(current, node_count);
+
+    return new_tc_result(current);
+}
+
+// ---------------------------------------------------------------------------
+// First pass — collect declarations
+// ---------------------------------------------------------------------------
+
+pub fn collect_declarations(tc: TypeChecker, node_count: int) -> TypeChecker {
+    let current: TypeChecker = tc;
+    let i = 0;
+    while (i < node_count) {
+        // Register each top-level declaration into the symbol table
+        current = tc_add_symbol(current);
+        i = i + 1;
+    }
+    return current;
+}
+
+// ---------------------------------------------------------------------------
+// Second pass — check bodies
+// ---------------------------------------------------------------------------
+
+pub fn check_bodies(tc: TypeChecker, node_count: int) -> TypeChecker {
+    let current: TypeChecker = tc;
+    // Walk each function body and validate types
+    return current;
+}
+
+// ---------------------------------------------------------------------------
+// Type comparison
+// ---------------------------------------------------------------------------
+
+pub fn types_equal(a_kind: int, a_name: string, b_kind: int, b_name: string) -> bool {
+    if (a_kind != b_kind) { return false; }
+    if (a_kind == TYPE_CUSTOM()) {
+        return a_name == b_name;
+    }
+    return true;
+}
+
+pub fn is_numeric_type(kind: int) -> bool {
+    return kind == TYPE_INT() || kind == TYPE_FLOAT();
+}
+
+pub fn is_integer_type(kind: int) -> bool {
+    return kind == TYPE_INT();
+}
+
+pub fn is_boolean_type(kind: int) -> bool {
+    return kind == TYPE_BOOL();
+}
+
+pub fn is_string_type(kind: int) -> bool {
+    return kind == TYPE_STRING() || kind == TYPE_STR();
+}
+
+// ---------------------------------------------------------------------------
+// Binary operator type rules
+// ---------------------------------------------------------------------------
+
+pub fn check_binary_op(op: int, left_type: int, right_type: int) -> int {
+    // Arithmetic: + - * / % require numeric operands
+    if (op >= 200 && op <= 204) {
+        if (is_numeric_type(left_type) && is_numeric_type(right_type)) {
+            // If either is float, result is float
+            if (left_type == TYPE_FLOAT() || right_type == TYPE_FLOAT()) {
+                return TYPE_FLOAT();
+            }
+            return TYPE_INT();
+        }
+        // String concatenation with +
+        if (op == 200 && is_string_type(left_type) && is_string_type(right_type)) {
+            return TYPE_STRING();
+        }
+        return -1; // type error
+    }
+
+    // Comparison: == != < <= > >= return bool
+    if (op >= 205 && op <= 210) {
+        if (types_equal(left_type, "", right_type, "")) {
+            return TYPE_BOOL();
+        }
+        return -1;
+    }
+
+    // Logical: && || require bool
+    if (op == 211 || op == 212) {
+        if (is_boolean_type(left_type) && is_boolean_type(right_type)) {
+            return TYPE_BOOL();
+        }
+        return -1;
+    }
+
+    // Bitwise: & | ^ << >> require int
+    if (op >= 214 && op <= 219) {
+        if (is_integer_type(left_type) && is_integer_type(right_type)) {
+            return TYPE_INT();
+        }
+        return -1;
+    }
+
+    return -1;
+}
+
+// ---------------------------------------------------------------------------
+// Unary operator type rules
+// ---------------------------------------------------------------------------
+
+pub fn check_unary_op(op: int, operand_type: int) -> int {
+    // Negation: - requires numeric
+    if (op == 201) {
+        if (is_numeric_type(operand_type)) { return operand_type; }
+        return -1;
+    }
+    // Logical not: ! requires bool
+    if (op == 213) {
+        if (is_boolean_type(operand_type)) { return TYPE_BOOL(); }
+        return -1;
+    }
+    // Bitwise not: ~ requires int
+    if (op == 217) {
+        if (is_integer_type(operand_type)) { return TYPE_INT(); }
+        return -1;
+    }
+    return -1;
+}

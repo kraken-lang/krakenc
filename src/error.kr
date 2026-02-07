@@ -1,0 +1,107 @@
+// Kraken Self-Hosted Compiler — Error & Diagnostic Types
+// Structured compiler errors with source location tracking and diagnostic codes.
+
+module error;
+
+// ---------------------------------------------------------------------------
+// Severity Levels
+// ---------------------------------------------------------------------------
+
+pub fn SEV_ERROR() -> int   { return 0; }
+pub fn SEV_WARNING() -> int { return 1; }
+pub fn SEV_INFO() -> int    { return 2; }
+pub fn SEV_HINT() -> int    { return 3; }
+
+// ---------------------------------------------------------------------------
+// Diagnostic
+// ---------------------------------------------------------------------------
+
+pub struct Diagnostic {
+    severity: int;
+    code: string;
+    message: string;
+    file: string;
+    line: int;
+    column: int;
+    hint: string;
+}
+
+pub fn new_error(code: string, message: string, file: string, line: int, column: int) -> Diagnostic {
+    return Diagnostic {
+        severity: SEV_ERROR(),
+        code: code,
+        message: message,
+        file: file,
+        line: line,
+        column: column,
+        hint: "",
+    };
+}
+
+pub fn new_warning(code: string, message: string, file: string, line: int, column: int) -> Diagnostic {
+    return Diagnostic {
+        severity: SEV_WARNING(),
+        code: code,
+        message: message,
+        file: file,
+        line: line,
+        column: column,
+        hint: "",
+    };
+}
+
+pub fn with_hint(d: Diagnostic, hint: string) -> Diagnostic {
+    return Diagnostic {
+        severity: d.severity,
+        code: d.code,
+        message: d.message,
+        file: d.file,
+        line: d.line,
+        column: d.column,
+        hint: hint,
+    };
+}
+
+// ---------------------------------------------------------------------------
+// Diagnostic codes
+// ---------------------------------------------------------------------------
+
+pub fn KRA_UNEXPECTED_CHAR() -> string   { return "KRA0001"; }
+pub fn KRA_UNTERMINATED_STR() -> string  { return "KRA0002"; }
+pub fn KRA_EXPECTED_TOKEN() -> string    { return "KRA0003"; }
+pub fn KRA_UNEXPECTED_TOKEN() -> string  { return "KRA0004"; }
+pub fn KRA_TYPE_MISMATCH() -> string     { return "KRA0005"; }
+pub fn KRA_UNDEFINED_VAR() -> string     { return "KRA0006"; }
+pub fn KRA_DUPLICATE_DECL() -> string    { return "KRA0007"; }
+pub fn KRA_MISSING_RETURN() -> string    { return "KRA0008"; }
+pub fn KRA_INVALID_ASSIGN() -> string    { return "KRA0009"; }
+pub fn KRA_UNKNOWN_TYPE() -> string      { return "KRA0010"; }
+pub fn KRA_ARG_COUNT() -> string         { return "KRA0011"; }
+pub fn KRA_UNREACHABLE() -> string       { return "KRA0012"; }
+pub fn KRA_CODEGEN_FAIL() -> string      { return "KRA0013"; }
+pub fn KRA_IO_ERROR() -> string          { return "KRA0014"; }
+
+// ---------------------------------------------------------------------------
+// Formatting
+// ---------------------------------------------------------------------------
+
+pub fn severity_label(severity: int) -> string {
+    if (severity == SEV_ERROR())   { return "error"; }
+    if (severity == SEV_WARNING()) { return "warning"; }
+    if (severity == SEV_INFO())    { return "info"; }
+    if (severity == SEV_HINT())    { return "hint"; }
+    return "unknown";
+}
+
+pub fn format_diagnostic(d: Diagnostic) -> string {
+    // Format: severity[code]: message
+    //   --> file:line:column
+    let header = severity_label(d.severity);
+    let result = str_concat(str_concat(str_concat(str_concat(header, "["), d.code), "]: "), d.message);
+    return result;
+}
+
+pub fn print_diagnostic(d: Diagnostic) -> void {
+    let msg = format_diagnostic(d);
+    puts(msg);
+}

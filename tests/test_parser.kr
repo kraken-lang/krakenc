@@ -1,0 +1,260 @@
+// Kraken Self-Hosted Compiler — Parser Tests
+
+module test_parser;
+
+import token;
+import lexer;
+import ast;
+import parser;
+
+// ---------------------------------------------------------------------------
+// Test: Parse empty source
+// ---------------------------------------------------------------------------
+
+fn test_parse_empty() -> int {
+    let ts = tokenize("");
+    let p = new_parser(ts.count, "test.kr");
+    let result = parse_program(p);
+    if (result.node_count != 0) {
+        puts("FAIL: test_parse_empty — expected 0 nodes");
+        return 1;
+    }
+    if (!result.success) {
+        puts("FAIL: test_parse_empty — should succeed");
+        return 1;
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Test: Parse single function
+// ---------------------------------------------------------------------------
+
+fn test_parse_function() -> int {
+    let src = "fn main() -> int { return 42; }";
+    let ts = tokenize(src);
+    let p = new_parser(ts.count, "test.kr");
+    let result = parse_program(p);
+    if (result.node_count == 0) {
+        puts("FAIL: test_parse_function — expected nodes");
+        return 1;
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Test: Parse struct declaration
+// ---------------------------------------------------------------------------
+
+fn test_parse_struct() -> int {
+    let src = "struct Point { x: int; y: int; }";
+    let ts = tokenize(src);
+    let p = new_parser(ts.count, "test.kr");
+    let result = parse_program(p);
+    if (result.node_count == 0) {
+        puts("FAIL: test_parse_struct — expected nodes");
+        return 1;
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Test: Parse variable declaration
+// ---------------------------------------------------------------------------
+
+fn test_parse_var_decl() -> int {
+    let src = "let x = 42;";
+    let ts = tokenize(src);
+    let p = new_parser(ts.count, "test.kr");
+    let result = parse_program(p);
+    if (result.node_count == 0) {
+        puts("FAIL: test_parse_var_decl — expected nodes");
+        return 1;
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Test: Parse module and import
+// ---------------------------------------------------------------------------
+
+fn test_parse_module_import() -> int {
+    let src = "module test;\nimport other;";
+    let ts = tokenize(src);
+    let p = new_parser(ts.count, "test.kr");
+    let result = parse_program(p);
+    if (result.node_count == 0) {
+        puts("FAIL: test_parse_module_import — expected nodes");
+        return 1;
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Test: Parse enum
+// ---------------------------------------------------------------------------
+
+fn test_parse_enum() -> int {
+    let src = "enum Color { Red, Green, Blue }";
+    let ts = tokenize(src);
+    let p = new_parser(ts.count, "test.kr");
+    let result = parse_program(p);
+    if (result.node_count == 0) {
+        puts("FAIL: test_parse_enum — expected nodes");
+        return 1;
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Test: Parse match
+// ---------------------------------------------------------------------------
+
+fn test_parse_match() -> int {
+    let src = "match (x) { 1 -> { return 1; } _ -> { return 0; } }";
+    let ts = tokenize(src);
+    let p = new_parser(ts.count, "test.kr");
+    let result = parse_program(p);
+    if (result.node_count == 0) {
+        puts("FAIL: test_parse_match — expected nodes");
+        return 1;
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Test: ParseResult fields
+// ---------------------------------------------------------------------------
+
+fn test_parse_result() -> int {
+    let errors = 0;
+    let r = new_parse_result(10, 0);
+    if (r.node_count != 10) {
+        puts("FAIL: node_count should be 10");
+        errors = errors + 1;
+    }
+    if (!r.success) {
+        puts("FAIL: should be success with 0 errors");
+        errors = errors + 1;
+    }
+    let r2 = new_parse_result(5, 3);
+    if (r2.success) {
+        puts("FAIL: should not be success with 3 errors");
+        errors = errors + 1;
+    }
+    return errors;
+}
+
+// ---------------------------------------------------------------------------
+// Test: AST node creation
+// ---------------------------------------------------------------------------
+
+fn test_ast_node() -> int {
+    let errors = 0;
+    let n = new_node(NODE_FN_DECL(), "main", 1, 1);
+    if (n.kind != NODE_FN_DECL()) {
+        puts("FAIL: node kind should be fn_decl");
+        errors = errors + 1;
+    }
+    if (n.name != "main") {
+        puts("FAIL: node name should be main");
+        errors = errors + 1;
+    }
+    if (n.first_child != -1) {
+        puts("FAIL: first_child should be -1");
+        errors = errors + 1;
+    }
+    return errors;
+}
+
+// ---------------------------------------------------------------------------
+// Test: AST node flags
+// ---------------------------------------------------------------------------
+
+fn test_ast_flags() -> int {
+    let errors = 0;
+    let n = new_node(NODE_FN_DECL(), "test", 1, 1);
+    if (has_flag(n, FLAG_PUBLIC())) {
+        puts("FAIL: new node should not have PUBLIC flag");
+        errors = errors + 1;
+    }
+    // Manually set flags (in real code, parser would set these)
+    let n2 = AstNode {
+        kind: n.kind,
+        name: n.name,
+        str_value: n.str_value,
+        int_value: n.int_value,
+        line: n.line,
+        column: n.column,
+        flags: FLAG_PUBLIC() | FLAG_ASYNC(),
+        parent_id: n.parent_id,
+        first_child: n.first_child,
+        next_sibling: n.next_sibling,
+    };
+    if (!has_flag(n2, FLAG_PUBLIC())) {
+        puts("FAIL: should have PUBLIC flag");
+        errors = errors + 1;
+    }
+    if (!has_flag(n2, FLAG_ASYNC())) {
+        puts("FAIL: should have ASYNC flag");
+        errors = errors + 1;
+    }
+    if (has_flag(n2, FLAG_UNSAFE())) {
+        puts("FAIL: should not have UNSAFE flag");
+        errors = errors + 1;
+    }
+    return errors;
+}
+
+// ---------------------------------------------------------------------------
+// Test: Node kind names
+// ---------------------------------------------------------------------------
+
+fn test_node_kind_names() -> int {
+    let errors = 0;
+    if (node_kind_name(NODE_FN_DECL()) != "function_declaration") {
+        puts("FAIL: fn_decl name");
+        errors = errors + 1;
+    }
+    if (node_kind_name(NODE_STRUCT_DECL()) != "struct_declaration") {
+        puts("FAIL: struct_decl name");
+        errors = errors + 1;
+    }
+    if (node_kind_name(EXPR_INT_LIT()) != "int_literal") {
+        puts("FAIL: int_lit name");
+        errors = errors + 1;
+    }
+    if (node_kind_name(EXPR_CALL()) != "call") {
+        puts("FAIL: call name");
+        errors = errors + 1;
+    }
+    return errors;
+}
+
+// ---------------------------------------------------------------------------
+// Test runner
+// ---------------------------------------------------------------------------
+
+fn main() -> int {
+    puts("=== Parser Tests ===");
+    let failures = 0;
+
+    failures = failures + test_parse_empty();
+    failures = failures + test_parse_function();
+    failures = failures + test_parse_struct();
+    failures = failures + test_parse_var_decl();
+    failures = failures + test_parse_module_import();
+    failures = failures + test_parse_enum();
+    failures = failures + test_parse_match();
+    failures = failures + test_parse_result();
+    failures = failures + test_ast_node();
+    failures = failures + test_ast_flags();
+    failures = failures + test_node_kind_names();
+
+    if (failures == 0) {
+        puts("All parser tests passed.");
+    } else {
+        puts("Parser tests FAILED.");
+    }
+    return failures;
+}

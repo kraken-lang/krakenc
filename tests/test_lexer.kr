@@ -1,0 +1,263 @@
+// Kraken Self-Hosted Compiler — Lexer Tests
+
+module test_lexer;
+
+import token;
+import lexer;
+
+// ---------------------------------------------------------------------------
+// Test: Empty source produces zero tokens
+// ---------------------------------------------------------------------------
+
+fn test_empty_source() -> int {
+    let ts = tokenize("");
+    if (ts.count != 0) {
+        puts("FAIL: test_empty_source — expected 0 tokens");
+        return 1;
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Test: Single identifier
+// ---------------------------------------------------------------------------
+
+fn test_single_identifier() -> int {
+    let ts = tokenize("hello");
+    if (ts.count != 1) {
+        puts("FAIL: test_single_identifier — expected 1 token");
+        return 1;
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Test: Integer literal
+// ---------------------------------------------------------------------------
+
+fn test_integer_literal() -> int {
+    let ts = tokenize("42");
+    if (ts.count != 1) {
+        puts("FAIL: test_integer_literal — expected 1 token");
+        return 1;
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Test: String literal
+// ---------------------------------------------------------------------------
+
+fn test_string_literal() -> int {
+    let ts = tokenize("\"hello world\"");
+    if (ts.count != 1) {
+        puts("FAIL: test_string_literal — expected 1 token");
+        return 1;
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Test: Keywords
+// ---------------------------------------------------------------------------
+
+fn test_keywords() -> int {
+    let ts = tokenize("fn let if else while for return struct enum trait impl");
+    if (ts.count != 11) {
+        puts("FAIL: test_keywords — expected 11 tokens");
+        return 1;
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Test: Operators
+// ---------------------------------------------------------------------------
+
+fn test_operators() -> int {
+    let ts = tokenize("+ - * / == != < > <= >= && ||");
+    if (ts.count != 12) {
+        puts("FAIL: test_operators — expected 12 tokens");
+        return 1;
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Test: Delimiters
+// ---------------------------------------------------------------------------
+
+fn test_delimiters() -> int {
+    let ts = tokenize("( ) { } [ ] ; , . : -> ::");
+    if (ts.count != 12) {
+        puts("FAIL: test_delimiters — expected 12 tokens");
+        return 1;
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Test: Line comments are skipped
+// ---------------------------------------------------------------------------
+
+fn test_line_comment() -> int {
+    let ts = tokenize("x // this is a comment\ny");
+    if (ts.count != 2) {
+        puts("FAIL: test_line_comment — expected 2 tokens");
+        return 1;
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Test: Block comments are skipped
+// ---------------------------------------------------------------------------
+
+fn test_block_comment() -> int {
+    let ts = tokenize("x /* block */ y");
+    if (ts.count != 2) {
+        puts("FAIL: test_block_comment — expected 2 tokens");
+        return 1;
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Test: Full function tokenization
+// ---------------------------------------------------------------------------
+
+fn test_full_function() -> int {
+    let src = "fn main() -> int { return 42; }";
+    let ts = tokenize(src);
+    // fn main ( ) -> int { return 42 ; } = 11 tokens
+    if (ts.count != 11) {
+        puts("FAIL: test_full_function — expected 11 tokens");
+        return 1;
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Test: Keyword lookup
+// ---------------------------------------------------------------------------
+
+fn test_keyword_lookup() -> int {
+    let errors = 0;
+    if (lookup_keyword("fn") != TK_KW_FN()) {
+        puts("FAIL: lookup fn");
+        errors = errors + 1;
+    }
+    if (lookup_keyword("let") != TK_KW_LET()) {
+        puts("FAIL: lookup let");
+        errors = errors + 1;
+    }
+    if (lookup_keyword("struct") != TK_KW_STRUCT()) {
+        puts("FAIL: lookup struct");
+        errors = errors + 1;
+    }
+    if (lookup_keyword("notakeyword") != 0) {
+        puts("FAIL: lookup notakeyword should return 0");
+        errors = errors + 1;
+    }
+    return errors;
+}
+
+// ---------------------------------------------------------------------------
+// Test: Token kind classification
+// ---------------------------------------------------------------------------
+
+fn test_token_kind_classification() -> int {
+    let errors = 0;
+    if (!is_keyword(TK_KW_FN())) {
+        puts("FAIL: fn should be keyword");
+        errors = errors + 1;
+    }
+    if (!is_operator(TK_OP_PLUS())) {
+        puts("FAIL: + should be operator");
+        errors = errors + 1;
+    }
+    if (!is_delimiter(TK_LPAREN())) {
+        puts("FAIL: ( should be delimiter");
+        errors = errors + 1;
+    }
+    if (!is_type_keyword(TK_KW_INT())) {
+        puts("FAIL: int should be type keyword");
+        errors = errors + 1;
+    }
+    if (is_keyword(TK_OP_PLUS())) {
+        puts("FAIL: + should not be keyword");
+        errors = errors + 1;
+    }
+    return errors;
+}
+
+// ---------------------------------------------------------------------------
+// Test: Whitespace handling
+// ---------------------------------------------------------------------------
+
+fn test_whitespace() -> int {
+    let ts = tokenize("   \t\n   x   \n   y   ");
+    if (ts.count != 2) {
+        puts("FAIL: test_whitespace — expected 2 tokens");
+        return 1;
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Test: Float literal
+// ---------------------------------------------------------------------------
+
+fn test_float_literal() -> int {
+    let ts = tokenize("3.14");
+    if (ts.count != 1) {
+        puts("FAIL: test_float_literal — expected 1 token");
+        return 1;
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Test: Compound assignment operators
+// ---------------------------------------------------------------------------
+
+fn test_compound_assign() -> int {
+    let ts = tokenize("+= -= *= /= %=");
+    if (ts.count != 5) {
+        puts("FAIL: test_compound_assign — expected 5 tokens");
+        return 1;
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Test runner
+// ---------------------------------------------------------------------------
+
+fn main() -> int {
+    puts("=== Lexer Tests ===");
+    let failures = 0;
+
+    failures = failures + test_empty_source();
+    failures = failures + test_single_identifier();
+    failures = failures + test_integer_literal();
+    failures = failures + test_string_literal();
+    failures = failures + test_keywords();
+    failures = failures + test_operators();
+    failures = failures + test_delimiters();
+    failures = failures + test_line_comment();
+    failures = failures + test_block_comment();
+    failures = failures + test_full_function();
+    failures = failures + test_keyword_lookup();
+    failures = failures + test_token_kind_classification();
+    failures = failures + test_whitespace();
+    failures = failures + test_float_literal();
+    failures = failures + test_compound_assign();
+
+    if (failures == 0) {
+        puts("All lexer tests passed.");
+    } else {
+        puts("Lexer tests FAILED.");
+    }
+    return failures;
+}

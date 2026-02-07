@@ -1,0 +1,249 @@
+// Kraken Self-Hosted Compiler — Token Definitions
+// Defines all token types, keywords, operators, and source locations.
+
+module token;
+
+// ---------------------------------------------------------------------------
+// Source Location
+// ---------------------------------------------------------------------------
+
+pub struct SourceLocation {
+    line: int;
+    column: int;
+    offset: int;
+}
+
+pub fn new_location(line: int, column: int, offset: int) -> SourceLocation {
+    return SourceLocation { line: line, column: column, offset: offset };
+}
+
+// ---------------------------------------------------------------------------
+// Token
+// ---------------------------------------------------------------------------
+
+pub struct Token {
+    kind: int;
+    lexeme: string;
+    line: int;
+    column: int;
+}
+
+pub fn new_token(kind: int, lexeme: string, line: int, column: int) -> Token {
+    return Token { kind: kind, lexeme: lexeme, line: line, column: column };
+}
+
+// ---------------------------------------------------------------------------
+// Token Kind Constants
+// ---------------------------------------------------------------------------
+
+// Literals
+pub fn TK_INT_LIT() -> int       { return 1; }
+pub fn TK_FLOAT_LIT() -> int     { return 2; }
+pub fn TK_STRING_LIT() -> int    { return 3; }
+pub fn TK_BOOL_LIT() -> int      { return 4; }
+
+// Identifiers
+pub fn TK_IDENTIFIER() -> int    { return 10; }
+
+// Keywords (100-199)
+pub fn TK_KW_IF() -> int         { return 100; }
+pub fn TK_KW_ELSE() -> int       { return 101; }
+pub fn TK_KW_MATCH() -> int      { return 102; }
+pub fn TK_KW_FOR() -> int        { return 103; }
+pub fn TK_KW_WHILE() -> int      { return 104; }
+pub fn TK_KW_DO() -> int         { return 105; }
+pub fn TK_KW_BREAK() -> int      { return 106; }
+pub fn TK_KW_CONTINUE() -> int   { return 107; }
+pub fn TK_KW_RETURN() -> int     { return 108; }
+pub fn TK_KW_FN() -> int         { return 109; }
+pub fn TK_KW_LET() -> int        { return 110; }
+pub fn TK_KW_CONST() -> int      { return 111; }
+pub fn TK_KW_MODULE() -> int     { return 112; }
+pub fn TK_KW_IMPORT() -> int     { return 113; }
+pub fn TK_KW_STRUCT() -> int     { return 114; }
+pub fn TK_KW_ENUM() -> int       { return 115; }
+pub fn TK_KW_TRAIT() -> int      { return 116; }
+pub fn TK_KW_IMPL() -> int       { return 117; }
+pub fn TK_KW_TYPE() -> int       { return 118; }
+pub fn TK_KW_PUB() -> int        { return 119; }
+pub fn TK_KW_PRIV() -> int       { return 120; }
+pub fn TK_KW_STATIC() -> int     { return 121; }
+pub fn TK_KW_ASYNC() -> int      { return 122; }
+pub fn TK_KW_AWAIT() -> int      { return 123; }
+pub fn TK_KW_SPAWN() -> int      { return 124; }
+pub fn TK_KW_REF() -> int        { return 125; }
+pub fn TK_KW_MUT() -> int        { return 126; }
+pub fn TK_KW_MOVE() -> int       { return 127; }
+pub fn TK_KW_UNSAFE() -> int     { return 128; }
+pub fn TK_KW_TRUE() -> int       { return 129; }
+pub fn TK_KW_FALSE() -> int      { return 130; }
+pub fn TK_KW_NULL() -> int       { return 131; }
+pub fn TK_KW_SELF() -> int       { return 132; }
+pub fn TK_KW_SUPER() -> int      { return 133; }
+pub fn TK_KW_DEFER() -> int      { return 134; }
+pub fn TK_KW_WHERE() -> int      { return 135; }
+pub fn TK_KW_AS() -> int         { return 136; }
+pub fn TK_KW_IN() -> int         { return 137; }
+pub fn TK_KW_DYN() -> int        { return 138; }
+pub fn TK_KW_UNION() -> int      { return 139; }
+pub fn TK_KW_CLASS() -> int      { return 140; }
+pub fn TK_KW_INTERFACE() -> int  { return 141; }
+
+// Type keywords (150-179)
+pub fn TK_KW_INT() -> int        { return 150; }
+pub fn TK_KW_FLOAT() -> int      { return 151; }
+pub fn TK_KW_BOOL() -> int       { return 152; }
+pub fn TK_KW_STRING() -> int     { return 153; }
+pub fn TK_KW_STR() -> int        { return 154; }
+pub fn TK_KW_BYTES() -> int      { return 155; }
+pub fn TK_KW_VOID() -> int       { return 156; }
+
+// Operators (200-249)
+pub fn TK_OP_PLUS() -> int       { return 200; }
+pub fn TK_OP_MINUS() -> int      { return 201; }
+pub fn TK_OP_STAR() -> int       { return 202; }
+pub fn TK_OP_SLASH() -> int      { return 203; }
+pub fn TK_OP_PERCENT() -> int    { return 204; }
+pub fn TK_OP_EQ() -> int         { return 205; }
+pub fn TK_OP_NEQ() -> int        { return 206; }
+pub fn TK_OP_LT() -> int         { return 207; }
+pub fn TK_OP_LTE() -> int        { return 208; }
+pub fn TK_OP_GT() -> int         { return 209; }
+pub fn TK_OP_GTE() -> int        { return 210; }
+pub fn TK_OP_AND() -> int        { return 211; }
+pub fn TK_OP_OR() -> int         { return 212; }
+pub fn TK_OP_NOT() -> int        { return 213; }
+pub fn TK_OP_BIT_AND() -> int    { return 214; }
+pub fn TK_OP_BIT_OR() -> int     { return 215; }
+pub fn TK_OP_BIT_XOR() -> int    { return 216; }
+pub fn TK_OP_BIT_NOT() -> int    { return 217; }
+pub fn TK_OP_LSHIFT() -> int     { return 218; }
+pub fn TK_OP_RSHIFT() -> int     { return 219; }
+pub fn TK_OP_ASSIGN() -> int     { return 220; }
+pub fn TK_OP_PLUS_ASSIGN() -> int    { return 221; }
+pub fn TK_OP_MINUS_ASSIGN() -> int   { return 222; }
+pub fn TK_OP_STAR_ASSIGN() -> int    { return 223; }
+pub fn TK_OP_SLASH_ASSIGN() -> int   { return 224; }
+pub fn TK_OP_PERCENT_ASSIGN() -> int { return 225; }
+pub fn TK_OP_DOT_DOT() -> int    { return 226; }
+pub fn TK_OP_DOT_DOT_EQ() -> int { return 227; }
+
+// Delimiters (250-279)
+pub fn TK_LPAREN() -> int        { return 250; }
+pub fn TK_RPAREN() -> int        { return 251; }
+pub fn TK_LBRACE() -> int        { return 252; }
+pub fn TK_RBRACE() -> int        { return 253; }
+pub fn TK_LBRACKET() -> int      { return 254; }
+pub fn TK_RBRACKET() -> int      { return 255; }
+pub fn TK_SEMICOLON() -> int     { return 256; }
+pub fn TK_COMMA() -> int         { return 257; }
+pub fn TK_DOT() -> int           { return 258; }
+pub fn TK_COLON() -> int         { return 259; }
+pub fn TK_COLON_COLON() -> int   { return 260; }
+pub fn TK_ARROW() -> int         { return 261; }
+pub fn TK_QUESTION() -> int      { return 262; }
+pub fn TK_PIPE() -> int          { return 263; }
+pub fn TK_HASH() -> int          { return 264; }
+
+// Special
+pub fn TK_EOF() -> int           { return 300; }
+pub fn TK_NEWLINE() -> int       { return 301; }
+pub fn TK_COMMENT() -> int       { return 302; }
+
+// ---------------------------------------------------------------------------
+// Keyword lookup
+// ---------------------------------------------------------------------------
+
+pub fn lookup_keyword(s: string) -> int {
+    if (s == "if")         { return TK_KW_IF(); }
+    if (s == "else")       { return TK_KW_ELSE(); }
+    if (s == "match")      { return TK_KW_MATCH(); }
+    if (s == "for")        { return TK_KW_FOR(); }
+    if (s == "while")      { return TK_KW_WHILE(); }
+    if (s == "do")         { return TK_KW_DO(); }
+    if (s == "break")      { return TK_KW_BREAK(); }
+    if (s == "continue")   { return TK_KW_CONTINUE(); }
+    if (s == "return")     { return TK_KW_RETURN(); }
+    if (s == "fn")         { return TK_KW_FN(); }
+    if (s == "let")        { return TK_KW_LET(); }
+    if (s == "const")      { return TK_KW_CONST(); }
+    if (s == "module")     { return TK_KW_MODULE(); }
+    if (s == "import")     { return TK_KW_IMPORT(); }
+    if (s == "struct")     { return TK_KW_STRUCT(); }
+    if (s == "enum")       { return TK_KW_ENUM(); }
+    if (s == "trait")      { return TK_KW_TRAIT(); }
+    if (s == "impl")       { return TK_KW_IMPL(); }
+    if (s == "type")       { return TK_KW_TYPE(); }
+    if (s == "pub")        { return TK_KW_PUB(); }
+    if (s == "priv")       { return TK_KW_PRIV(); }
+    if (s == "static")     { return TK_KW_STATIC(); }
+    if (s == "async")      { return TK_KW_ASYNC(); }
+    if (s == "await")      { return TK_KW_AWAIT(); }
+    if (s == "spawn")      { return TK_KW_SPAWN(); }
+    if (s == "ref")        { return TK_KW_REF(); }
+    if (s == "mut")        { return TK_KW_MUT(); }
+    if (s == "move")       { return TK_KW_MOVE(); }
+    if (s == "unsafe")     { return TK_KW_UNSAFE(); }
+    if (s == "true")       { return TK_KW_TRUE(); }
+    if (s == "false")      { return TK_KW_FALSE(); }
+    if (s == "null")       { return TK_KW_NULL(); }
+    if (s == "self")       { return TK_KW_SELF(); }
+    if (s == "super")      { return TK_KW_SUPER(); }
+    if (s == "defer")      { return TK_KW_DEFER(); }
+    if (s == "where")      { return TK_KW_WHERE(); }
+    if (s == "as")         { return TK_KW_AS(); }
+    if (s == "in")         { return TK_KW_IN(); }
+    if (s == "dyn")        { return TK_KW_DYN(); }
+    if (s == "union")      { return TK_KW_UNION(); }
+    if (s == "class")      { return TK_KW_CLASS(); }
+    if (s == "interface")  { return TK_KW_INTERFACE(); }
+    if (s == "int")        { return TK_KW_INT(); }
+    if (s == "float")      { return TK_KW_FLOAT(); }
+    if (s == "bool")       { return TK_KW_BOOL(); }
+    if (s == "string")     { return TK_KW_STRING(); }
+    if (s == "str")        { return TK_KW_STR(); }
+    if (s == "bytes")      { return TK_KW_BYTES(); }
+    if (s == "void")       { return TK_KW_VOID(); }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Token kind name (for diagnostics)
+// ---------------------------------------------------------------------------
+
+pub fn token_kind_name(kind: int) -> string {
+    if (kind == TK_INT_LIT())     { return "integer literal"; }
+    if (kind == TK_FLOAT_LIT())   { return "float literal"; }
+    if (kind == TK_STRING_LIT())  { return "string literal"; }
+    if (kind == TK_BOOL_LIT())    { return "bool literal"; }
+    if (kind == TK_IDENTIFIER())  { return "identifier"; }
+    if (kind == TK_EOF())         { return "end of file"; }
+    if (kind == TK_NEWLINE())     { return "newline"; }
+    if (kind == TK_COMMENT())     { return "comment"; }
+    if (kind >= 100) {
+        if (kind < 200) { return "keyword"; }
+    }
+    if (kind >= 200) {
+        if (kind < 250) { return "operator"; }
+    }
+    if (kind >= 250) {
+        if (kind < 300) { return "delimiter"; }
+    }
+    return "unknown";
+}
+
+pub fn is_keyword(kind: int) -> bool {
+    return kind >= 100 && kind < 200;
+}
+
+pub fn is_operator(kind: int) -> bool {
+    return kind >= 200 && kind < 250;
+}
+
+pub fn is_delimiter(kind: int) -> bool {
+    return kind >= 250 && kind < 300;
+}
+
+pub fn is_type_keyword(kind: int) -> bool {
+    return kind >= 150 && kind < 180;
+}

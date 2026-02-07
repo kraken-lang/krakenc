@@ -1,0 +1,334 @@
+// Kraken Self-Hosted Compiler — Lexer
+// Tokenizes Kraken source code into a token stream.
+
+module lexer;
+
+// ---------------------------------------------------------------------------
+// Lexer State
+// ---------------------------------------------------------------------------
+
+pub struct Lexer {
+    source: string;
+    pos: int;
+    line: int;
+    column: int;
+    length: int;
+}
+
+pub fn new_lexer(source: string) -> Lexer {
+    return Lexer {
+        source: source,
+        pos: 0,
+        line: 1,
+        column: 1,
+        length: strlen(source),
+    };
+}
+
+// ---------------------------------------------------------------------------
+// Character helpers
+// ---------------------------------------------------------------------------
+
+pub fn is_alpha(c: int) -> bool {
+    return (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 95;
+}
+
+pub fn is_digit(c: int) -> bool {
+    return c >= 48 && c <= 57;
+}
+
+pub fn is_alnum(c: int) -> bool {
+    return is_alpha(c) || is_digit(c);
+}
+
+pub fn is_whitespace(c: int) -> bool {
+    return c == 32 || c == 9 || c == 13;
+}
+
+// ---------------------------------------------------------------------------
+// Lexer core
+// ---------------------------------------------------------------------------
+
+pub fn at_end(lex: Lexer) -> bool {
+    return lex.pos >= lex.length;
+}
+
+pub fn peek_char(lex: Lexer) -> int {
+    if (at_end(lex)) { return 0; }
+    return str_char_at(lex.source, lex.pos);
+}
+
+pub fn peek_next(lex: Lexer) -> int {
+    if (lex.pos + 1 >= lex.length) { return 0; }
+    return str_char_at(lex.source, lex.pos + 1);
+}
+
+pub fn advance(lex: Lexer) -> Lexer {
+    let c = peek_char(lex);
+    let new_pos = lex.pos + 1;
+    let new_line = lex.line;
+    let new_col = lex.column + 1;
+    if (c == 10) {
+        new_line = lex.line + 1;
+        new_col = 1;
+    }
+    return Lexer {
+        source: lex.source,
+        pos: new_pos,
+        line: new_line,
+        column: new_col,
+        length: lex.length,
+    };
+}
+
+// ---------------------------------------------------------------------------
+// Skip whitespace and comments
+// ---------------------------------------------------------------------------
+
+pub fn skip_whitespace(lex: Lexer) -> Lexer {
+    let current: Lexer = lex;
+    while (!at_end(current)) {
+        let c = peek_char(current);
+        if (is_whitespace(c) || c == 10) {
+            current = advance(current);
+        } else {
+            if (c == 47) {
+                let next = peek_next(current);
+                if (next == 47) {
+                    // Line comment: skip to end of line
+                    current = advance(current);
+                    current = advance(current);
+                    while (!at_end(current) && peek_char(current) != 10) {
+                        current = advance(current);
+                    }
+                } else {
+                    if (next == 42) {
+                        // Block comment: skip to */
+                        current = advance(current);
+                        current = advance(current);
+                        while (!at_end(current)) {
+                            if (peek_char(current) == 42 && peek_next(current) == 47) {
+                                current = advance(current);
+                                current = advance(current);
+                                break;
+                            }
+                            current = advance(current);
+                        }
+                    } else {
+                        return current;
+                    }
+                }
+            } else {
+                return current;
+            }
+        }
+    }
+    return current;
+}
+
+// ---------------------------------------------------------------------------
+// Read identifier or keyword
+// ---------------------------------------------------------------------------
+
+pub fn read_identifier(lex: Lexer) -> Token {
+    let start = lex.pos;
+    let start_col = lex.column;
+    let current: Lexer = lex;
+    while (!at_end(current) && is_alnum(peek_char(current))) {
+        current = advance(current);
+    }
+    let text = str_slice(lex.source, start, current.pos);
+    let kw = lookup_keyword(text);
+    if (kw != 0) {
+        return new_token(kw, text, lex.line, start_col);
+    }
+    return new_token(TK_IDENTIFIER(), text, lex.line, start_col);
+}
+
+// ---------------------------------------------------------------------------
+// Read number literal
+// ---------------------------------------------------------------------------
+
+pub fn read_number(lex: Lexer) -> Token {
+    let start = lex.pos;
+    let start_col = lex.column;
+    let current: Lexer = lex;
+    let is_float = 0;
+    while (!at_end(current) && is_digit(peek_char(current))) {
+        current = advance(current);
+    }
+    if (!at_end(current) && peek_char(current) == 46) {
+        if (is_digit(peek_next(current))) {
+            is_float = 1;
+            current = advance(current);
+            while (!at_end(current) && is_digit(peek_char(current))) {
+                current = advance(current);
+            }
+        }
+    }
+    let text = str_slice(lex.source, start, current.pos);
+    if (is_float == 1) {
+        return new_token(TK_FLOAT_LIT(), text, lex.line, start_col);
+    }
+    return new_token(TK_INT_LIT(), text, lex.line, start_col);
+}
+
+// ---------------------------------------------------------------------------
+// Read string literal
+// ---------------------------------------------------------------------------
+
+pub fn read_string(lex: Lexer) -> Token {
+    let start_col = lex.column;
+    let current: Lexer = advance(lex); // skip opening quote
+    let start = current.pos;
+    while (!at_end(current) && peek_char(current) != 34) {
+        if (peek_char(current) == 92) {
+            current = advance(current); // skip escape char
+        }
+        current = advance(current);
+    }
+    let text = str_slice(lex.source, start, current.pos);
+    if (!at_end(current)) {
+        current = advance(current); // skip closing quote
+    }
+    return new_token(TK_STRING_LIT(), text, lex.line, start_col);
+}
+
+// ---------------------------------------------------------------------------
+// Read operator or delimiter
+// ---------------------------------------------------------------------------
+
+pub fn read_operator(lex: Lexer) -> Token {
+    let c = peek_char(lex);
+    let next = peek_next(lex);
+    let col = lex.column;
+    let ln = lex.line;
+
+    // Two-character operators
+    if (c == 61 && next == 61) { return new_token(TK_OP_EQ(), "==", ln, col); }
+    if (c == 33 && next == 61) { return new_token(TK_OP_NEQ(), "!=", ln, col); }
+    if (c == 60 && next == 61) { return new_token(TK_OP_LTE(), "<=", ln, col); }
+    if (c == 62 && next == 61) { return new_token(TK_OP_GTE(), ">=", ln, col); }
+    if (c == 38 && next == 38) { return new_token(TK_OP_AND(), "&&", ln, col); }
+    if (c == 124 && next == 124) { return new_token(TK_OP_OR(), "||", ln, col); }
+    if (c == 60 && next == 60) { return new_token(TK_OP_LSHIFT(), "<<", ln, col); }
+    if (c == 62 && next == 62) { return new_token(TK_OP_RSHIFT(), ">>", ln, col); }
+    if (c == 43 && next == 61) { return new_token(TK_OP_PLUS_ASSIGN(), "+=", ln, col); }
+    if (c == 45 && next == 61) { return new_token(TK_OP_MINUS_ASSIGN(), "-=", ln, col); }
+    if (c == 42 && next == 61) { return new_token(TK_OP_STAR_ASSIGN(), "*=", ln, col); }
+    if (c == 47 && next == 61) { return new_token(TK_OP_SLASH_ASSIGN(), "/=", ln, col); }
+    if (c == 37 && next == 61) { return new_token(TK_OP_PERCENT_ASSIGN(), "%=", ln, col); }
+    if (c == 45 && next == 62) { return new_token(TK_ARROW(), "->", ln, col); }
+    if (c == 58 && next == 58) { return new_token(TK_COLON_COLON(), "::", ln, col); }
+    if (c == 46 && next == 46) { return new_token(TK_OP_DOT_DOT(), "..", ln, col); }
+
+    // Single-character operators
+    if (c == 43) { return new_token(TK_OP_PLUS(), "+", ln, col); }
+    if (c == 45) { return new_token(TK_OP_MINUS(), "-", ln, col); }
+    if (c == 42) { return new_token(TK_OP_STAR(), "*", ln, col); }
+    if (c == 47) { return new_token(TK_OP_SLASH(), "/", ln, col); }
+    if (c == 37) { return new_token(TK_OP_PERCENT(), "%", ln, col); }
+    if (c == 60) { return new_token(TK_OP_LT(), "<", ln, col); }
+    if (c == 62) { return new_token(TK_OP_GT(), ">", ln, col); }
+    if (c == 33) { return new_token(TK_OP_NOT(), "!", ln, col); }
+    if (c == 38) { return new_token(TK_OP_BIT_AND(), "&", ln, col); }
+    if (c == 124) { return new_token(TK_OP_BIT_OR(), "|", ln, col); }
+    if (c == 94) { return new_token(TK_OP_BIT_XOR(), "^", ln, col); }
+    if (c == 126) { return new_token(TK_OP_BIT_NOT(), "~", ln, col); }
+    if (c == 61) { return new_token(TK_OP_ASSIGN(), "=", ln, col); }
+
+    // Delimiters
+    if (c == 40) { return new_token(TK_LPAREN(), "(", ln, col); }
+    if (c == 41) { return new_token(TK_RPAREN(), ")", ln, col); }
+    if (c == 123) { return new_token(TK_LBRACE(), "{", ln, col); }
+    if (c == 125) { return new_token(TK_RBRACE(), "}", ln, col); }
+    if (c == 91) { return new_token(TK_LBRACKET(), "[", ln, col); }
+    if (c == 93) { return new_token(TK_RBRACKET(), "]", ln, col); }
+    if (c == 59) { return new_token(TK_SEMICOLON(), ";", ln, col); }
+    if (c == 44) { return new_token(TK_COMMA(), ",", ln, col); }
+    if (c == 46) { return new_token(TK_DOT(), ".", ln, col); }
+    if (c == 58) { return new_token(TK_COLON(), ":", ln, col); }
+    if (c == 63) { return new_token(TK_QUESTION(), "?", ln, col); }
+    if (c == 35) { return new_token(TK_HASH(), "#", ln, col); }
+
+    // Unknown character — return EOF as sentinel
+    return new_token(TK_EOF(), "", ln, col);
+}
+
+// ---------------------------------------------------------------------------
+// Compute how many characters to advance for a token
+// ---------------------------------------------------------------------------
+
+pub fn token_advance_count(tok: Token) -> int {
+    return strlen(tok.lexeme);
+}
+
+// ---------------------------------------------------------------------------
+// Main tokenize entry point — produces token array
+// ---------------------------------------------------------------------------
+
+// Note: In the self-hosted compiler, we use a fixed-capacity token buffer.
+// The Kraken language supports arrays, so we store tokens in a VecInt-like
+// structure. For bootstrapping, we use a fixed upper bound.
+
+pub struct TokenStream {
+    count: int;
+}
+
+pub fn tokenize(source: string) -> TokenStream {
+    let lex: Lexer = new_lexer(source);
+    let count = 0;
+
+    while (!at_end(lex)) {
+        lex = skip_whitespace(lex);
+        if (at_end(lex)) { break; }
+
+        let c = peek_char(lex);
+
+        if (is_alpha(c)) {
+            let tok: Token = read_identifier(lex);
+            let adv = strlen(tok.lexeme);
+            let i = 0;
+            while (i < adv) {
+                lex = advance(lex);
+                i = i + 1;
+            }
+            count = count + 1;
+        } else {
+            if (is_digit(c)) {
+                let tok: Token = read_number(lex);
+                let adv = strlen(tok.lexeme);
+                let i = 0;
+                while (i < adv) {
+                    lex = advance(lex);
+                    i = i + 1;
+                }
+                count = count + 1;
+            } else {
+                if (c == 34) {
+                    let tok: Token = read_string(lex);
+                    // advance past opening quote + string content + closing quote
+                    let adv = strlen(tok.lexeme) + 2;
+                    let i = 0;
+                    while (i < adv) {
+                        lex = advance(lex);
+                        i = i + 1;
+                    }
+                    count = count + 1;
+                } else {
+                    let tok: Token = read_operator(lex);
+                    let adv = strlen(tok.lexeme);
+                    if (adv == 0) { adv = 1; }
+                    let i = 0;
+                    while (i < adv) {
+                        lex = advance(lex);
+                        i = i + 1;
+                    }
+                    count = count + 1;
+                }
+            }
+        }
+    }
+
+    return TokenStream { count: count };
+}

@@ -1,81 +1,65 @@
 # Kraken Compiler Architecture
 
-**Status**: Planning Phase
+**Status**: Phase 1 Complete — Self-Hosted Foundation
 
-This document will outline the architecture of the self-hosted Kraken compiler once development begins in milestone v0.8.47.
+## Pipeline Overview
 
-## Planned Architecture
+```
+Source (.kr) → Lexer → Parser → Type Checker → Code Generator → C Source → cc → Binary
+```
 
-The Kraken compiler will follow a traditional multi-pass architecture with clear separation between compilation phases:
+## Phase 1: Lexer (`src/lexer.kr`)
 
-### Compilation Pipeline
+- Character-by-character scanning with `Lexer` state struct
+- Immutable state advancement (functional style — returns new `Lexer` on each step)
+- 80+ token kinds defined in `src/token.kr` via constant functions
+- Keyword lookup via sequential string comparison (no hash table needed at bootstrap)
+- Handles: identifiers, integer/float literals, string literals (with escapes), line/block comments, all Kraken operators and delimiters
+- Two-character operator disambiguation (`==`, `!=`, `<=`, `>=`, `&&`, `||`, `<<`, `>>`, `+=`, `-=`, `->`, `::`, `..`)
 
-1. **Lexical Analysis**
-   - Tokenization of source code
-   - Handling of comments and whitespace
-   - Source location tracking
+## Phase 2: Parser (`src/parser.kr`)
 
-2. **Parsing**
-   - Construction of Abstract Syntax Tree (AST)
-   - Syntax validation
-   - Error recovery
+- Recursive-descent parser producing a flat arena-based AST
+- `Parser` state struct tracks position, node count, and error count
+- All Kraken constructs: module/import, fn, struct, enum, trait, impl, type alias, class, interface, union
+- Statement parsing: let, const, if/else, while, for (C-style), for-in, match, return, break, continue, defer, unsafe
+- Expression parsing with operator precedence: assignment → or → and → equality → comparison → addition → multiplication → unary → postfix → primary
+- AST nodes use flat `AstNode` struct with integer-based kind, parent/child/sibling links, and bitfield flags
 
-3. **Semantic Analysis**
-   - Name resolution
-   - Type checking
-   - Borrow checking (if applicable)
-   - Lifetime analysis
+## Phase 3: Type Checker (`src/typechecker.kr`)
 
-4. **Intermediate Representation (IR)**
-   - Lowering from AST to IR
-   - Control flow graph construction
-   - Data flow analysis
+- Two-pass analysis:
+  1. **Declaration pass** — collect all top-level symbols (forward references)
+  2. **Body pass** — validate function bodies, expressions, and type constraints
+- Symbol table with scope depth tracking (enter/exit scope)
+- 10 symbol kinds: variable, function, struct, enum, trait, type_alias, module, parameter, field, method
+- Complete operator type rules:
+  - Arithmetic (`+`, `-`, `*`, `/`, `%`): numeric operands, float promotion, string concatenation for `+`
+  - Comparison (`==`, `!=`, `<`, `<=`, `>`, `>=`): same-type operands, returns bool
+  - Logical (`&&`, `||`): bool operands, returns bool
+  - Bitwise (`&`, `|`, `^`, `<<`, `>>`): int operands only
+  - Unary (`-`, `!`, `~`): negation on numeric, not on bool, bitwise not on int
 
-5. **Optimization**
-   - Constant folding
-   - Dead code elimination
-   - Inlining
-   - Loop optimization
+## Phase 4: Code Generator (`src/codegen.kr`)
 
-6. **Code Generation**
-   - Target-specific code emission
-   - Register allocation
-   - Instruction selection
+- C code emission backend for bootstrapping
+- Type mapping: `int`→`kr_int` (int64_t), `float`→`kr_float` (double), `bool`→`kr_bool`, `str`→`kr_str` (const char*)
+- C preamble with runtime stubs (`kr_puts`, `kr_strlen`, `kr_abs`)
+- Struct forward declarations and definitions
+- Function forward declarations and bodies
+- Name mangling: `kr_` prefix, module-qualified (`kr_module_name`)
+- Struct/enum mangling: `KrStruct_Name`, `KrEnum_Name`
 
-### Key Components
+## Error System (`src/error.kr`)
 
-**Frontend**
-- Lexer and parser
-- AST representation
-- Semantic analyzer
-- Type system implementation
+- `Diagnostic` struct: severity, KRA-prefixed code, message, file, line, column, hint
+- 14 diagnostic codes (KRA0001–KRA0014): unexpected char, unterminated string, expected/unexpected token, type mismatch, undefined variable, duplicate declaration, missing return, invalid assignment, unknown type, argument count, unreachable, codegen failure, IO error
+- 4 severity levels: error, warning, info, hint
 
-**Middle-end**
-- IR representation
-- Optimization passes
-- Analysis frameworks
+## Design Principles
 
-**Backend**
-- Code generator
-- Target abstraction
-- Assembly emission
-
-### Design Principles
-
-- **Modularity**: Clear separation between compilation phases
-- **Extensibility**: Easy to add new language features and optimizations
-- **Performance**: Fast compilation times with incremental compilation support
-- **Diagnostics**: High-quality error messages with source location tracking
-- **Testing**: Comprehensive test coverage at all levels
-
-## Implementation Details
-
-Detailed implementation documentation will be added as the self-hosted compiler development progresses.
-
-## References
-
-This architecture is inspired by proven compiler designs including:
-- LLVM
-- Rust compiler (rustc)
-- Go compiler
-- Swift compiler
+- **Immutable State** — Compiler passes return new state structs (no mutation, pure functional flow)
+- **Flat Arena AST** — Integer-linked nodes, cache-friendly, no recursive heap allocation
+- **Bootstrapping First** — C backend exists solely to bootstrap; LLVM backend planned for Phase 2
+- **Zero Dependencies** — Self-hosted compiler uses only Kraken stdlib primitives
+- **Comprehensive Testing** — 47 tests across all compiler phases

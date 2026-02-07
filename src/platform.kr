@@ -1,0 +1,464 @@
+// Kraken Self-Hosted Compiler — Platform & Cross-Compilation Support
+// OS/architecture detection, target triples, and platform-specific C codegen.
+//
+// Supported targets:
+//   x86_64-apple-darwin       macOS (Intel)
+//   aarch64-apple-darwin      macOS (Apple Silicon)
+//   x86_64-unknown-linux-gnu  Linux (x86_64, glibc)
+//   aarch64-unknown-linux-gnu Linux (ARM64, glibc)
+//   x86_64-pc-windows-msvc    Windows (MSVC toolchain)
+//   x86_64-pc-windows-gnu     Windows (MinGW toolchain)
+//   aarch64-pc-windows-msvc   Windows (ARM64)
+//   x86_64-unknown-freebsd    FreeBSD
+//   wasm32-unknown-wasi       WebAssembly (WASI)
+
+module platform;
+
+// ---------------------------------------------------------------------------
+// Operating System Constants
+// ---------------------------------------------------------------------------
+
+pub fn OS_UNKNOWN() -> int  { return 0; }
+pub fn OS_LINUX() -> int    { return 1; }
+pub fn OS_MACOS() -> int    { return 2; }
+pub fn OS_WINDOWS() -> int  { return 3; }
+pub fn OS_FREEBSD() -> int  { return 4; }
+pub fn OS_WASI() -> int     { return 5; }
+
+pub fn os_name(os: int) -> string {
+    if (os == OS_LINUX())   { return "linux"; }
+    if (os == OS_MACOS())   { return "darwin"; }
+    if (os == OS_WINDOWS()) { return "windows"; }
+    if (os == OS_FREEBSD()) { return "freebsd"; }
+    if (os == OS_WASI())    { return "wasi"; }
+    return "unknown";
+}
+
+pub fn os_display_name(os: int) -> string {
+    if (os == OS_LINUX())   { return "Linux"; }
+    if (os == OS_MACOS())   { return "macOS"; }
+    if (os == OS_WINDOWS()) { return "Windows"; }
+    if (os == OS_FREEBSD()) { return "FreeBSD"; }
+    if (os == OS_WASI())    { return "WebAssembly (WASI)"; }
+    return "Unknown OS";
+}
+
+pub fn os_is_posix(os: int) -> bool {
+    return os == OS_LINUX() || os == OS_MACOS() || os == OS_FREEBSD();
+}
+
+pub fn os_is_windows(os: int) -> bool {
+    return os == OS_WINDOWS();
+}
+
+// ---------------------------------------------------------------------------
+// Architecture Constants
+// ---------------------------------------------------------------------------
+
+pub fn ARCH_UNKNOWN() -> int  { return 0; }
+pub fn ARCH_X86_64() -> int   { return 1; }
+pub fn ARCH_AARCH64() -> int  { return 2; }
+pub fn ARCH_ARM() -> int      { return 3; }
+pub fn ARCH_RISCV64() -> int  { return 4; }
+pub fn ARCH_WASM32() -> int   { return 5; }
+
+pub fn arch_name(arch: int) -> string {
+    if (arch == ARCH_X86_64())  { return "x86_64"; }
+    if (arch == ARCH_AARCH64()) { return "aarch64"; }
+    if (arch == ARCH_ARM())     { return "arm"; }
+    if (arch == ARCH_RISCV64()) { return "riscv64"; }
+    if (arch == ARCH_WASM32())  { return "wasm32"; }
+    return "unknown";
+}
+
+pub fn arch_pointer_width(arch: int) -> int {
+    if (arch == ARCH_WASM32()) { return 4; }
+    if (arch == ARCH_ARM())    { return 4; }
+    return 8;
+}
+
+pub fn arch_is_64bit(arch: int) -> bool {
+    return arch == ARCH_X86_64() || arch == ARCH_AARCH64() || arch == ARCH_RISCV64();
+}
+
+// ---------------------------------------------------------------------------
+// ABI / Toolchain Constants
+// ---------------------------------------------------------------------------
+
+pub fn ABI_UNKNOWN() -> int  { return 0; }
+pub fn ABI_GNU() -> int      { return 1; }
+pub fn ABI_MSVC() -> int     { return 2; }
+pub fn ABI_MUSL() -> int     { return 3; }
+pub fn ABI_NONE() -> int     { return 4; }
+
+pub fn abi_name(abi: int) -> string {
+    if (abi == ABI_GNU())  { return "gnu"; }
+    if (abi == ABI_MSVC()) { return "msvc"; }
+    if (abi == ABI_MUSL()) { return "musl"; }
+    if (abi == ABI_NONE()) { return ""; }
+    return "unknown";
+}
+
+// ---------------------------------------------------------------------------
+// Target — full platform specification
+// ---------------------------------------------------------------------------
+
+pub struct Target {
+    os: int;
+    arch: int;
+    abi: int;
+    vendor: string;
+    triple: string;
+}
+
+// Construct a Target from a parsed triple string.
+// Accepts: arch-vendor-os[-abi]
+pub fn parse_target(triple: string) -> Target {
+    // Try well-known triples first (fast path)
+    if (triple == "x86_64-apple-darwin") {
+        return new_target(OS_MACOS(), ARCH_X86_64(), ABI_NONE(), "apple", triple);
+    }
+    if (triple == "aarch64-apple-darwin") {
+        return new_target(OS_MACOS(), ARCH_AARCH64(), ABI_NONE(), "apple", triple);
+    }
+    if (triple == "x86_64-unknown-linux-gnu") {
+        return new_target(OS_LINUX(), ARCH_X86_64(), ABI_GNU(), "unknown", triple);
+    }
+    if (triple == "aarch64-unknown-linux-gnu") {
+        return new_target(OS_LINUX(), ARCH_AARCH64(), ABI_GNU(), "unknown", triple);
+    }
+    if (triple == "x86_64-unknown-linux-musl") {
+        return new_target(OS_LINUX(), ARCH_X86_64(), ABI_MUSL(), "unknown", triple);
+    }
+    if (triple == "aarch64-unknown-linux-musl") {
+        return new_target(OS_LINUX(), ARCH_AARCH64(), ABI_MUSL(), "unknown", triple);
+    }
+    if (triple == "x86_64-pc-windows-msvc") {
+        return new_target(OS_WINDOWS(), ARCH_X86_64(), ABI_MSVC(), "pc", triple);
+    }
+    if (triple == "x86_64-pc-windows-gnu") {
+        return new_target(OS_WINDOWS(), ARCH_X86_64(), ABI_GNU(), "pc", triple);
+    }
+    if (triple == "aarch64-pc-windows-msvc") {
+        return new_target(OS_WINDOWS(), ARCH_AARCH64(), ABI_MSVC(), "pc", triple);
+    }
+    if (triple == "x86_64-unknown-freebsd") {
+        return new_target(OS_FREEBSD(), ARCH_X86_64(), ABI_NONE(), "unknown", triple);
+    }
+    if (triple == "aarch64-unknown-freebsd") {
+        return new_target(OS_FREEBSD(), ARCH_AARCH64(), ABI_NONE(), "unknown", triple);
+    }
+    if (triple == "wasm32-unknown-wasi") {
+        return new_target(OS_WASI(), ARCH_WASM32(), ABI_NONE(), "unknown", triple);
+    }
+
+    // Shorthand aliases
+    if (triple == "linux")   { return parse_target("x86_64-unknown-linux-gnu"); }
+    if (triple == "macos")   { return parse_target("x86_64-apple-darwin"); }
+    if (triple == "darwin")  { return parse_target("x86_64-apple-darwin"); }
+    if (triple == "windows") { return parse_target("x86_64-pc-windows-msvc"); }
+    if (triple == "win32")   { return parse_target("x86_64-pc-windows-msvc"); }
+    if (triple == "freebsd") { return parse_target("x86_64-unknown-freebsd"); }
+    if (triple == "wasm")    { return parse_target("wasm32-unknown-wasi"); }
+    if (triple == "wasi")    { return parse_target("wasm32-unknown-wasi"); }
+
+    // Unknown triple — return unknown target with the original string preserved
+    return new_target(OS_UNKNOWN(), ARCH_UNKNOWN(), ABI_UNKNOWN(), "unknown", triple);
+}
+
+fn new_target(os: int, arch: int, abi: int, vendor: string, triple: string) -> Target {
+    return Target {
+        os: os,
+        arch: arch,
+        abi: abi,
+        vendor: vendor,
+        triple: triple,
+    };
+}
+
+// Detect the host platform at compile time.
+// Uses conditional compilation markers that the Kraken compiler provides.
+// Fallback: defaults to x86_64-apple-darwin (primary dev platform).
+pub fn detect_host_target() -> Target {
+    // The Kraken runtime exposes platform info via predefined constants.
+    // For the bootstrap compiler, we detect at C level via #ifdef.
+    // For now, return the build-time default; the C preamble handles runtime checks.
+    return parse_target("x86_64-apple-darwin");
+}
+
+pub fn target_is_valid(t: Target) -> bool {
+    return t.os != OS_UNKNOWN() && t.arch != ARCH_UNKNOWN();
+}
+
+pub fn format_target(t: Target) -> string {
+    return t.triple;
+}
+
+pub fn format_target_display(t: Target) -> string {
+    let os_str = os_display_name(t.os);
+    let arch_str = arch_name(t.arch);
+    return str_concat(str_concat(os_str, " ("), str_concat(arch_str, ")"));
+}
+
+// ---------------------------------------------------------------------------
+// C Compiler Selection — platform-aware toolchain
+// ---------------------------------------------------------------------------
+
+pub fn default_cc(t: Target) -> string {
+    if (t.os == OS_WINDOWS() && t.abi == ABI_MSVC()) { return "cl.exe"; }
+    if (t.os == OS_WINDOWS() && t.abi == ABI_GNU())  { return "x86_64-w64-mingw32-gcc"; }
+    if (t.os == OS_MACOS())   { return "cc"; }
+    if (t.os == OS_FREEBSD()) { return "cc"; }
+    if (t.os == OS_WASI())    { return "clang"; }
+    return "cc";
+}
+
+pub fn cc_cross_flags(t: Target) -> string {
+    // Cross-compilation flags for the C compiler.
+    // When targeting a different platform than the host, the C compiler
+    // needs extra flags to select the correct target triple.
+    if (t.os == OS_WASI()) {
+        return "--target=wasm32-unknown-wasi --sysroot=/opt/wasi-sdk/share/wasi-sysroot";
+    }
+    return "";
+}
+
+// ---------------------------------------------------------------------------
+// Platform-Specific C Includes
+// ---------------------------------------------------------------------------
+
+pub fn c_includes_posix() -> string {
+    return str_concat(
+        str_concat(
+            str_concat(
+                str_concat(
+                    str_concat(
+                        "#include <stdio.h>\n",
+                        "#include <stdlib.h>\n"
+                    ),
+                    "#include <string.h>\n"
+                ),
+                "#include <stdint.h>\n"
+            ),
+            "#include <stdbool.h>\n"
+        ),
+        "#include <unistd.h>\n"
+    );
+}
+
+pub fn c_includes_windows() -> string {
+    return str_concat(
+        str_concat(
+            str_concat(
+                str_concat(
+                    str_concat(
+                        str_concat(
+                            "#include <stdio.h>\n",
+                            "#include <stdlib.h>\n"
+                        ),
+                        "#include <string.h>\n"
+                    ),
+                    "#include <stdint.h>\n"
+                ),
+                "#include <stdbool.h>\n"
+            ),
+            "#define WIN32_LEAN_AND_MEAN\n"
+        ),
+        "#include <windows.h>\n"
+    );
+}
+
+pub fn c_includes_wasi() -> string {
+    return str_concat(
+        str_concat(
+            str_concat(
+                str_concat(
+                    "#include <stdio.h>\n",
+                    "#include <stdlib.h>\n"
+                ),
+                "#include <string.h>\n"
+            ),
+            "#include <stdint.h>\n"
+        ),
+        "#include <stdbool.h>\n"
+    );
+}
+
+pub fn c_includes_for_target(t: Target) -> string {
+    if (os_is_windows(t.os)) { return c_includes_windows(); }
+    if (t.os == OS_WASI())   { return c_includes_wasi(); }
+    return c_includes_posix();
+}
+
+// ---------------------------------------------------------------------------
+// Platform-Specific C Type Definitions
+// ---------------------------------------------------------------------------
+
+pub fn c_typedefs_common() -> string {
+    return str_concat(
+        str_concat(
+            str_concat(
+                "typedef int64_t kr_int;\n",
+                "typedef double kr_float;\n"
+            ),
+            "typedef bool kr_bool;\n"
+        ),
+        "typedef const char* kr_str;\n"
+    );
+}
+
+// Size type varies per platform
+pub fn c_size_type(t: Target) -> string {
+    if (os_is_windows(t.os)) { return "typedef long long kr_size;\n"; }
+    return "typedef ssize_t kr_size;\n";
+}
+
+// ---------------------------------------------------------------------------
+// Platform-Specific Runtime Shims
+// ---------------------------------------------------------------------------
+
+pub fn c_runtime_shims_posix() -> string {
+    return str_concat(
+        str_concat(
+            str_concat(
+                "void kr_puts(kr_str s) { puts(s); }\n",
+                "int64_t kr_strlen(kr_str s) { return (int64_t)strlen(s); }\n"
+            ),
+            "int64_t kr_abs(int64_t x) { return x < 0 ? -x : x; }\n"
+        ),
+        "int kr_strcmp(kr_str a, kr_str b) { return strcmp(a, b); }\n"
+    );
+}
+
+pub fn c_runtime_shims_windows() -> string {
+    return str_concat(
+        str_concat(
+            str_concat(
+                str_concat(
+                    str_concat(
+                        "void kr_puts(kr_str s) { puts(s); }\n",
+                        "int64_t kr_strlen(kr_str s) { return (int64_t)strlen(s); }\n"
+                    ),
+                    "int64_t kr_abs(int64_t x) { return x < 0 ? -x : x; }\n"
+                ),
+                "int kr_strcmp(kr_str a, kr_str b) { return strcmp(a, b); }\n"
+            ),
+            // Windows-specific shims for POSIX compatibility
+            "#define kr_snprintf _snprintf\n"
+        ),
+        "#define kr_strdup _strdup\n"
+    );
+}
+
+pub fn c_runtime_shims_wasi() -> string {
+    // WASI has limited I/O; some functions need stubs
+    return str_concat(
+        str_concat(
+            str_concat(
+                "void kr_puts(kr_str s) { puts(s); }\n",
+                "int64_t kr_strlen(kr_str s) { return (int64_t)strlen(s); }\n"
+            ),
+            "int64_t kr_abs(int64_t x) { return x < 0 ? -x : x; }\n"
+        ),
+        "int kr_strcmp(kr_str a, kr_str b) { return strcmp(a, b); }\n"
+    );
+}
+
+pub fn c_runtime_shims_for_target(t: Target) -> string {
+    if (os_is_windows(t.os)) { return c_runtime_shims_windows(); }
+    if (t.os == OS_WASI())   { return c_runtime_shims_wasi(); }
+    return c_runtime_shims_posix();
+}
+
+// ---------------------------------------------------------------------------
+// Platform-Specific Entry Point
+// ---------------------------------------------------------------------------
+
+pub fn c_main_signature(t: Target) -> string {
+    if (os_is_windows(t.os) && t.abi == ABI_MSVC()) {
+        // MSVC can use wmain for Unicode, but standard main works too
+        return "int main(int argc, char* argv[])";
+    }
+    return "int main(int argc, char* argv[])";
+}
+
+// ---------------------------------------------------------------------------
+// Platform-Specific Linker Flags
+// ---------------------------------------------------------------------------
+
+pub fn linker_flags(t: Target) -> string {
+    if (t.os == OS_LINUX() && t.abi == ABI_GNU())  { return "-lm -lpthread"; }
+    if (t.os == OS_LINUX() && t.abi == ABI_MUSL()) { return "-static -lm"; }
+    if (t.os == OS_MACOS())                        { return "-lm"; }
+    if (t.os == OS_FREEBSD())                      { return "-lm -lpthread"; }
+    if (t.os == OS_WINDOWS() && t.abi == ABI_MSVC()) { return "/link /DEFAULTLIB:msvcrt.lib"; }
+    if (t.os == OS_WINDOWS() && t.abi == ABI_GNU())  { return "-lm"; }
+    if (t.os == OS_WASI())   { return ""; }
+    return "";
+}
+
+// ---------------------------------------------------------------------------
+// Object File Extension
+// ---------------------------------------------------------------------------
+
+pub fn object_ext(t: Target) -> string {
+    if (os_is_windows(t.os)) { return ".obj"; }
+    return ".o";
+}
+
+pub fn exe_ext(t: Target) -> string {
+    if (os_is_windows(t.os)) { return ".exe"; }
+    if (t.os == OS_WASI())   { return ".wasm"; }
+    return "";
+}
+
+// ---------------------------------------------------------------------------
+// Full C Preamble — assembled from platform-specific components
+// ---------------------------------------------------------------------------
+
+pub fn emit_c_preamble(t: Target) -> string {
+    let includes = c_includes_for_target(t);
+    let typedefs = c_typedefs_common();
+    let size_t = c_size_type(t);
+    let shims = c_runtime_shims_for_target(t);
+
+    return str_concat(
+        str_concat(
+            str_concat(
+                str_concat(
+                    str_concat(
+                        "// Generated by krakenc — Kraken Self-Hosted Compiler\n",
+                        str_concat("// Target: ", str_concat(t.triple, "\n"))
+                    ),
+                    str_concat("\n", includes)
+                ),
+                str_concat("\n", typedefs)
+            ),
+            size_t
+        ),
+        str_concat("\n", shims)
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Supported Targets List
+// ---------------------------------------------------------------------------
+
+pub fn print_supported_targets() -> void {
+    puts("Supported targets:");
+    puts("  x86_64-apple-darwin         macOS (Intel)");
+    puts("  aarch64-apple-darwin        macOS (Apple Silicon)");
+    puts("  x86_64-unknown-linux-gnu    Linux x86_64 (glibc)");
+    puts("  aarch64-unknown-linux-gnu   Linux ARM64 (glibc)");
+    puts("  x86_64-unknown-linux-musl   Linux x86_64 (musl, static)");
+    puts("  aarch64-unknown-linux-musl  Linux ARM64 (musl, static)");
+    puts("  x86_64-pc-windows-msvc      Windows x64 (MSVC)");
+    puts("  x86_64-pc-windows-gnu       Windows x64 (MinGW)");
+    puts("  aarch64-pc-windows-msvc     Windows ARM64 (MSVC)");
+    puts("  x86_64-unknown-freebsd      FreeBSD x86_64");
+    puts("  aarch64-unknown-freebsd     FreeBSD ARM64");
+    puts("  wasm32-unknown-wasi         WebAssembly (WASI)");
+    puts("");
+    puts("Shorthand aliases:");
+    puts("  linux, macos, darwin, windows, win32, freebsd, wasm, wasi");
+}

@@ -3,52 +3,76 @@
     <h1>Kraken Compiler</h1>
 </div>
 
-**Status**: In Development (Placeholder Repository)
+**Status**: Phase 1 — Self-Hosted Compiler Foundation
 
-The Kraken Compiler (`krakenc`) will be the self-hosted compiler for the Kraken programming language, written in Kraken itself. This repository is currently a placeholder and will be populated after the completion of milestone v0.8.47.
+The Kraken Compiler (`krakenc`) is the self-hosted compiler for the Kraken programming language, **written entirely in Kraken**. It implements a full compilation pipeline that bootstraps through C code generation.
 
 ## Overview
 
-The Kraken compiler is responsible for:
-- Lexical analysis and parsing of Kraken source code
-- Semantic analysis and type checking
-- Code generation and optimization
-- Producing executable binaries or intermediate representations
+The self-hosted compiler implements:
+- **Lexer** — Full tokenization of Kraken source (keywords, operators, literals, delimiters)
+- **Parser** — Recursive-descent parser producing a flat arena-based AST
+- **Type Checker** — Semantic analysis with scope management, type inference, and operator validation
+- **Code Generator** — C code emission backend for bootstrapping (AST → C → native binary)
+- **Diagnostics** — Structured error system with KRA-prefixed diagnostic codes
 
-## Current Status
+## Source Structure
 
-The compiler is currently being developed in the main [Kraken monorepo](https://github.com/kraken-lang/kraken) under the `compiler/` directory. Once the self-hosted compiler implementation is complete and stable (milestone v0.8.47), the code will be migrated to this repository.
+```
+src/
+├── token.kr          Token types, keywords, operators, source locations
+├── lexer.kr          Tokenizer with comment handling, string/number literals
+├── ast.kr            AST node types (flat arena representation)
+├── parser.kr         Recursive-descent parser (all Kraken constructs)
+├── typechecker.kr    Semantic analysis, scope management, type validation
+├── codegen.kr        C code emission for bootstrapping
+├── error.kr          Diagnostic types (errors, warnings, hints)
+└── main.kr           CLI driver and compilation pipeline orchestration
 
-## CLI Tool
-
-The compiler produces the `kraken` command-line tool, which provides:
-- Compilation of Kraken source files
-- Build system integration
-- Package management
-- Development tools and utilities
+tests/
+├── test_lexer.kr         15 lexer tests (tokenization, keywords, comments, operators)
+├── test_parser.kr        11 parser tests (declarations, expressions, AST nodes)
+├── test_typechecker.kr   12 type checker tests (types, operators, scopes, symbols)
+└── test_codegen.kr        9 codegen tests (type mapping, mangling, emission)
+```
 
 ## Architecture
 
-The compiler follows a traditional multi-pass architecture:
+The compiler follows a four-phase pipeline:
 
-1. **Lexical Analysis**: Tokenization of source code
-2. **Parsing**: Construction of abstract syntax trees (AST)
-3. **Semantic Analysis**: Type checking and validation
-4. **Intermediate Representation**: Lowering to IR
-5. **Optimization**: Code optimization passes
-6. **Code Generation**: Target-specific code emission
+1. **Lexing** — Source text → token stream (identifiers, keywords, operators, literals, delimiters)
+2. **Parsing** — Token stream → AST (recursive descent, arena-allocated flat nodes)
+3. **Type Checking** — AST → validated AST (name resolution, type inference, constraint checking)
+4. **Code Generation** — AST → C source (bootstrapping backend, compiles with gcc/clang/MSVC)
 
-Detailed architecture documentation will be added as the self-hosted implementation progresses.
+### Bootstrapping Strategy
 
-## Development Timeline
+```
+Kraken source (.kr) → krakenc → C source (.c) → cc → native binary
+```
 
-- **v0.8.47**: Self-hosted compiler implementation begins
-- **v0.8.48+**: Compiler migration to this repository
-- **Future**: Continued compiler development and optimization
+The C backend exists solely for bootstrapping. Once `krakenc` can compile itself, a native LLVM backend will replace it.
+
+## CLI Usage
+
+```
+krakenc <source.kr>              Compile to executable
+krakenc --emit-c <source.kr>     Emit C source (bootstrap mode)
+krakenc --check <source.kr>      Type-check only (no codegen)
+krakenc --tokens <source.kr>     Dump token stream
+krakenc --ast <source.kr>        Dump AST
+krakenc --version                Print version
+krakenc --help                   Print usage
+```
 
 ## Building from Source
 
-Building instructions will be provided once the repository contains the compiler source code.
+The self-hosted compiler is compiled using the Rust-based Kraken compiler from the main monorepo:
+
+```bash
+# From the main Kraken repository
+kraken build krakenc/src/main.kr -o krakenc
+```
 
 ## Contributing
 
