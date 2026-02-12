@@ -10,6 +10,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Token-Driven Translator** (`src/parser.kr`) — replaced AST-based parser with single-pass token-to-C translator
+  - `Translator` struct with token position, output buffer, indent depth, error tracking, and source file context
+  - Token access helpers: `tr_at_end`, `tr_kind`, `tr_lexeme`, `tr_line`, `tr_col`, `tr_advance`, `tr_skip`
+  - Output emission: `tr_emit`, `tr_emit_indent`, `tr_emit_line` with indentation management (`tr_indent`, `tr_dedent`)
+  - Error reporting: `tr_error` with file, line, column context
+  - Forward declaration emission (`emit_forward_decls`) — two-pass: struct typedefs then function prototypes
+  - Function prototype emission (`emit_fn_prototype`) with Kraken-to-C return type and parameter type mapping
+  - Full expression translator with precedence climbing:
+    - `translate_or` → `translate_and` → `translate_equality` → `translate_comparison` → `translate_addition` → `translate_multiplication` → `translate_unary` → `translate_postfix` → `translate_primary`
+  - Statement translation: `translate_var_decl`, `translate_return`, `translate_if`, `translate_while`, `translate_for`, `translate_expr_stmt`, `break`/`continue`
+  - Top-level declarations: `translate_fn` (with C prototype + body), `translate_struct` (with C struct emission)
+  - Kraken-to-C type mapping: `type_to_c` (parameter/return types), `type_to_c_value` (default values)
+  - Struct literal translation to C compound initializer syntax `(TypeName){.field = value}`
+  - Function call translation with `kr_` prefix name mangling
+  - Member access (`.`), array subscript (`[]`), and call (`()`) postfix operators
+  - `TranslateResult` struct with error count and success flag
+  - `join_output()` helper for concatenating `VecString` output into a single string
+  - `skip_brace_block()` utility for skipping `{ ... }` blocks during forward declaration scanning
+
+### Changed
+- **Lexer** (`src/lexer.kr`)
+  - Refactored `tokenize()` to use `VecInt`/`VecString` output parameters (3 params to avoid LLVM codegen limitation with 4+ params + struct returns)
+  - Added `push_token()` helper for cleaner token storage into parallel vectors
+  - Added `advance_n()` helper for multi-character token advancement
+- **Codegen** (`src/codegen.kr`) — trimmed to minimal stubs; the translator now handles C emission directly
+- **CLI Driver** (`src/main.kr`)
+  - Integrated new translator pipeline: lex → translate → write C → invoke cc
+  - Environment variable mode selection via `KRAKENC_MODE` (`emit-c`, `tokens`, `version`, `help`, `targets`)
+  - Added `--tokens` mode with `dump_tokens()` for token stream inspection
+  - Added `derive_c_path()` and `derive_exe_path()` helpers for output path derivation
+  - Version bumped to `0.10.0-beta`
+
 ## [0.9.2] - 2026-02-06
 
 ### Added

@@ -267,15 +267,39 @@ pub fn token_advance_count(tok: Token) -> int {
 // Main tokenize entry point — produces token array
 // ---------------------------------------------------------------------------
 
-// Note: In the self-hosted compiler, we use a fixed-capacity token buffer.
-// The Kraken language supports arrays, so we store tokens in a VecInt-like
-// structure. For bootstrapping, we use a fixed upper bound.
+// ---------------------------------------------------------------------------
+// Push a token into SOA storage
+// ---------------------------------------------------------------------------
 
-pub struct TokenStream {
-    count: int;
+fn push_token(kinds: VecInt, lexemes: VecString, lines: VecInt, cols: VecInt, tok: Token) -> void {
+    vec_int_push(kinds, tok.kind);
+    vec_string_push(lexemes, tok.lexeme);
+    vec_int_push(lines, tok.line);
+    vec_int_push(cols, tok.column);
 }
 
-pub fn tokenize(source: string) -> TokenStream {
+// ---------------------------------------------------------------------------
+// Advance lexer by n characters
+// ---------------------------------------------------------------------------
+
+fn advance_n(lex: Lexer, n: int) -> Lexer {
+    let current: Lexer = lex;
+    let i = 0;
+    while (i < n) {
+        current = advance(current);
+        i = i + 1;
+    }
+    return current;
+}
+
+// ---------------------------------------------------------------------------
+// Main tokenize entry point — populates SOA token arrays
+// ---------------------------------------------------------------------------
+
+// Interleaved layout in int_data: [kind0, line0, col0, kind1, line1, col1, ...]
+// Access helpers: kind = int_data[i*3], line = int_data[i*3+1], col = int_data[i*3+2]
+// Only 3 params to avoid LLVM codegen bug with 4+ params + struct returns.
+pub fn tokenize(source: string, int_data: VecInt, lexemes: VecString) -> int {
     let lex: Lexer = new_lexer(source);
     let count = 0;
 
@@ -287,48 +311,51 @@ pub fn tokenize(source: string) -> TokenStream {
 
         if (is_alpha(c)) {
             let tok: Token = read_identifier(lex);
-            let adv = strlen(tok.lexeme);
-            let i = 0;
-            while (i < adv) {
-                lex = advance(lex);
-                i = i + 1;
-            }
+            vec_int_push(int_data, tok.kind);
+            vec_int_push(int_data, tok.line);
+            vec_int_push(int_data, tok.column);
+            vec_string_push(lexemes, tok.lexeme);
+            lex = advance_n(lex, strlen(tok.lexeme));
             count = count + 1;
         } else {
             if (is_digit(c)) {
                 let tok: Token = read_number(lex);
-                let adv = strlen(tok.lexeme);
-                let i = 0;
-                while (i < adv) {
-                    lex = advance(lex);
-                    i = i + 1;
-                }
+                vec_int_push(int_data, tok.kind);
+                vec_int_push(int_data, tok.line);
+                vec_int_push(int_data, tok.column);
+                vec_string_push(lexemes, tok.lexeme);
+                lex = advance_n(lex, strlen(tok.lexeme));
                 count = count + 1;
             } else {
                 if (c == 34) {
                     let tok: Token = read_string(lex);
-                    // advance past opening quote + string content + closing quote
-                    let adv = strlen(tok.lexeme) + 2;
-                    let i = 0;
-                    while (i < adv) {
-                        lex = advance(lex);
-                        i = i + 1;
-                    }
+                    vec_int_push(int_data, tok.kind);
+                    vec_int_push(int_data, tok.line);
+                    vec_int_push(int_data, tok.column);
+                    vec_string_push(lexemes, tok.lexeme);
+                    lex = advance_n(lex, strlen(tok.lexeme) + 2);
                     count = count + 1;
                 } else {
                     let tok: Token = read_operator(lex);
+                    vec_int_push(int_data, tok.kind);
+                    vec_int_push(int_data, tok.line);
+                    vec_int_push(int_data, tok.column);
+                    vec_string_push(lexemes, tok.lexeme);
                     let adv = strlen(tok.lexeme);
                     if (adv == 0) { adv = 1; }
-                    let i = 0;
-                    while (i < adv) {
-                        lex = advance(lex);
-                        i = i + 1;
-                    }
+                    lex = advance_n(lex, adv);
                     count = count + 1;
                 }
             }
         }
     }
 
-    return TokenStream { count: count };
+    // Append EOF sentinel
+    vec_int_push(int_data, TK_EOF());
+    vec_int_push(int_data, lex.line);
+    vec_int_push(int_data, lex.column);
+    vec_string_push(lexemes, "");
+    count = count + 1;
+
+    return count;
 }

@@ -1,14 +1,12 @@
 // Kraken Self-Hosted Compiler — Entry Point
-// CLI driver: parses arguments, orchestrates the compilation pipeline,
-// and reports diagnostics.
+// CLI driver: reads source files, orchestrates the compilation pipeline
+// (lex → translate → write C → invoke cc), and reports diagnostics.
 //
 // Usage:
 //   krakenc <source.kr>                  Compile to executable
-//   krakenc --emit-c <source.kr>         Emit C source (bootstrap mode)
-//   krakenc --check <source.kr>          Type-check only (no codegen)
+//   krakenc --emit-c <source.kr>         Emit C source only
 //   krakenc --tokens <source.kr>         Dump token stream
-//   krakenc --ast <source.kr>            Dump AST
-//   krakenc --target <triple>            Cross-compile for target platform
+//   krakenc --target <triple> <file>     Cross-compile for target
 //   krakenc --targets                    List supported targets
 //   krakenc --version                    Print version
 //   krakenc --help                       Print usage
@@ -19,7 +17,6 @@ import token;
 import lexer;
 import ast;
 import parser;
-import typechecker;
 import codegen;
 import error;
 import platform;
@@ -28,7 +25,7 @@ import platform;
 // Version
 // ---------------------------------------------------------------------------
 
-fn COMPILER_VERSION() -> string { return "0.9.2"; }
+fn COMPILER_VERSION() -> string { return "0.10.0-beta"; }
 fn COMPILER_NAME() -> string    { return "krakenc"; }
 
 // ---------------------------------------------------------------------------
@@ -37,110 +34,10 @@ fn COMPILER_NAME() -> string    { return "krakenc"; }
 
 fn MODE_COMPILE() -> int  { return 0; }
 fn MODE_EMIT_C() -> int   { return 1; }
-fn MODE_CHECK() -> int    { return 2; }
 fn MODE_TOKENS() -> int   { return 3; }
-fn MODE_AST() -> int      { return 4; }
 fn MODE_VERSION() -> int  { return 5; }
 fn MODE_HELP() -> int     { return 6; }
 fn MODE_TARGETS() -> int  { return 7; }
-
-// ---------------------------------------------------------------------------
-// Compilation pipeline
-// ---------------------------------------------------------------------------
-
-struct CompileResult {
-    token_count: int;
-    node_count: int;
-    error_count: int;
-    warning_count: int;
-    success: bool;
-}
-
-fn compile(source: string, file: string, mode: int, target: Target) -> CompileResult {
-    let total_errors = 0;
-    let total_warnings = 0;
-
-    // Phase 1: Lexing
-    let ts: TokenStream = tokenize(source);
-    let token_count = ts.count;
-
-    if (mode == MODE_TOKENS()) {
-        return CompileResult {
-            token_count: token_count,
-            node_count: 0,
-            error_count: 0,
-            warning_count: 0,
-            success: true,
-        };
-    }
-
-    // Phase 2: Parsing
-    let p: Parser = new_parser(token_count, file);
-    let pr: ParseResult = parse_program(p);
-
-    total_errors = total_errors + pr.error_count;
-
-    if (mode == MODE_AST()) {
-        return CompileResult {
-            token_count: token_count,
-            node_count: pr.node_count,
-            error_count: total_errors,
-            warning_count: total_warnings,
-            success: total_errors == 0,
-        };
-    }
-
-    if (total_errors > 0) {
-        return CompileResult {
-            token_count: token_count,
-            node_count: pr.node_count,
-            error_count: total_errors,
-            warning_count: total_warnings,
-            success: false,
-        };
-    }
-
-    // Phase 3: Type Checking
-    let tc: TypeChecker = new_typechecker(file);
-    let tcr: TypeCheckResult = check_program(tc, pr.node_count);
-
-    total_errors = total_errors + tcr.error_count;
-    total_warnings = total_warnings + tcr.warning_count;
-
-    if (mode == MODE_CHECK()) {
-        return CompileResult {
-            token_count: token_count,
-            node_count: pr.node_count,
-            error_count: total_errors,
-            warning_count: total_warnings,
-            success: total_errors == 0,
-        };
-    }
-
-    if (total_errors > 0) {
-        return CompileResult {
-            token_count: token_count,
-            node_count: pr.node_count,
-            error_count: total_errors,
-            warning_count: total_warnings,
-            success: false,
-        };
-    }
-
-    // Phase 4: Code Generation (platform-aware)
-    let cg: CodeGen = new_codegen_with_target(file, target);
-    let cgr: CodeGenResult = generate_program(cg, pr.node_count);
-
-    total_errors = total_errors + cgr.error_count;
-
-    return CompileResult {
-        token_count: token_count,
-        node_count: pr.node_count,
-        error_count: total_errors,
-        warning_count: total_warnings,
-        success: total_errors == 0,
-    };
-}
 
 // ---------------------------------------------------------------------------
 // Banner
@@ -166,10 +63,8 @@ fn print_help() -> void {
     puts("Usage: krakenc [options] <source.kr>");
     puts("");
     puts("Options:");
-    puts("  --emit-c              Emit C source (bootstrap mode)");
-    puts("  --check               Type-check only, no code generation");
+    puts("  --emit-c              Emit C source only (no cc invocation)");
     puts("  --tokens              Dump token stream");
-    puts("  --ast                 Dump abstract syntax tree");
     puts("  --target <triple>     Cross-compile for target platform");
     puts("  --targets             List all supported target platforms");
     puts("  --version             Print compiler version");
@@ -180,21 +75,87 @@ fn print_help() -> void {
 }
 
 // ---------------------------------------------------------------------------
-// Main
+// Derive output file paths from input path
+// ---------------------------------------------------------------------------
+
+fn derive_c_path(input: string) -> string {
+    if (str_ends_with(input, ".kr")) {
+        let base = str_slice(input, 0, strlen(input) - 3);
+        return str_concat(base, ".c");
+    }
+    return str_concat(input, ".c");
+}
+
+fn derive_exe_path(input: string, target: Target) -> string {
+    if (str_ends_with(input, ".kr")) {
+        let base = str_slice(input, 0, strlen(input) - 3);
+        return str_concat(base, exe_ext(target));
+    }
+    return str_concat(input, exe_ext(target));
+}
+
+// ---------------------------------------------------------------------------
+// Dump token stream (--tokens mode)
+// ---------------------------------------------------------------------------
+
+// Interleaved int_data layout: [kind0, line0, col0, kind1, line1, col1, ...]
+fn dump_tokens(int_data: VecInt, lexemes: VecString, count: int) -> void {
+    let i = 0;
+    while (i < count) {
+        let k = vec_int_get(int_data, i * 3);
+        let lex = vec_string_get(lexemes, i);
+        let ln = vec_int_get(int_data, i * 3 + 1);
+        let co = vec_int_get(int_data, i * 3 + 2);
+        puts(str_concat(
+            str_concat(fmt_int(ln), str_concat(":", str_concat(fmt_int(co), "  "))),
+            str_concat(str_concat(token_kind_name(k), "  "), lex)
+        ));
+        i = i + 1;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Main — end-to-end compilation pipeline
 // ---------------------------------------------------------------------------
 
 fn main() -> int {
-    print_banner();
-
-    // Detect host platform (used as default target)
+    // Detect host platform
     let target: Target = detect_host_target();
-
-    // Placeholder: in the bootstrapped compiler, argc/argv are provided
-    // via FFI from the C runtime. For now, compile a small test program.
-    // When --target <triple> is provided, override the default target.
-    let test_source = "fn main() -> int {\n    let x = 42;\n    return x;\n}\n";
-    let test_file = "test.kr";
     let mode = MODE_COMPILE();
+    let source_file = "";
+
+    // Check for source file path via environment variables
+    let has_input = false;
+    let env_source = getenv("KRAKENC_INPUT");
+    let env_mode = getenv("KRAKENC_MODE");
+    let env_target = getenv("KRAKENC_TARGET");
+
+    if (env_source != "") {
+        source_file = env_source;
+        has_input = true;
+    }
+    if (env_mode == "emit-c") { mode = MODE_EMIT_C(); }
+    if (env_mode == "tokens") { mode = MODE_TOKENS(); }
+    if (env_mode == "version") { mode = MODE_VERSION(); }
+    if (env_mode == "help") { mode = MODE_HELP(); }
+    if (env_mode == "targets") { mode = MODE_TARGETS(); }
+    if (env_target != "") { target = parse_target(env_target); }
+
+    // Handle non-compilation modes
+    if (mode == MODE_VERSION()) {
+        print_version();
+        return 0;
+    }
+    if (mode == MODE_HELP()) {
+        print_help();
+        return 0;
+    }
+    if (mode == MODE_TARGETS()) {
+        print_supported_targets();
+        return 0;
+    }
+
+    print_banner();
 
     // Display target info
     puts(str_concat("  Host:     ", format_target(detect_host_target())));
@@ -204,22 +165,92 @@ fn main() -> int {
     if (lflags != "") {
         puts(str_concat("  Linker:   ", lflags));
     }
-    puts(str_concat("  Obj ext:  ", object_ext(target)));
-    puts(str_concat("  Exe ext:  ", exe_ext(target)));
     puts("");
 
-    let result: CompileResult = compile(test_source, test_file, mode, target);
-
-    if (result.success) {
-        puts("Compilation successful.");
-        puts(str_concat("  Tokens:   ", fmt_int(result.token_count)));
-        puts(str_concat("  Nodes:    ", fmt_int(result.node_count)));
-        puts(str_concat("  Warnings: ", fmt_int(result.warning_count)));
-        return 0;
+    // Read source
+    let source = "";
+    if (has_input) {
+        puts(str_concat("  Input:    ", source_file));
+        source = file_read_string(source_file);
+        if (source == "") {
+            puts(str_concat("error: could not read file: ", source_file));
+            return 1;
+        }
     } else {
+        // Built-in test program for development
+        source_file = "test.kr";
+        source = "fn main() -> int { return 0; }";
+        puts("  Input:    <built-in test>");
+    }
+
+    // Phase 1: Lexing — tokenize into interleaved int_data + lexemes
+    let int_data: VecInt = vec_int_new();
+    let tok_lexemes: VecString = vec_string_new();
+
+    let token_count = tokenize(source, int_data, tok_lexemes);
+    puts(str_concat("  Tokens:   ", fmt_int(token_count)));
+
+    if (mode == MODE_TOKENS()) {
+        dump_tokens(int_data, tok_lexemes, token_count);
+        vec_int_free(int_data);
+        vec_string_free(tok_lexemes);
+        return 0;
+    }
+
+    // Phase 2: Translate — single-pass parse + C codegen
+    let out: VecString = vec_string_new();
+    let result: TranslateResult = translate(int_data, tok_lexemes, token_count, source_file, target, out);
+
+    if (!result.success) {
+        puts(str_concat("  Errors:   ", fmt_int(result.errors)));
         puts("Compilation failed.");
-        puts(str_concat("  Errors:   ", fmt_int(result.error_count)));
-        puts(str_concat("  Warnings: ", fmt_int(result.warning_count)));
+        vec_string_free(out);
+        vec_int_free(int_data);
+        vec_string_free(tok_lexemes);
         return 1;
     }
+
+    // Join output fragments into C source string
+    let c_source: string = join_output(out);
+    vec_string_free(out);
+
+    // Determine output paths
+    let c_path = derive_c_path(source_file);
+    let exe_path = derive_exe_path(source_file, target);
+
+    // Write C source to file
+    let c_file: bytes = fopen(c_path, "w");
+    fputs(c_source, c_file);
+    fclose(c_file);
+    puts(str_concat("  C output: ", c_path));
+
+    if (mode == MODE_EMIT_C()) {
+        puts("C source emitted successfully.");
+        vec_int_free(int_data);
+        vec_string_free(tok_lexemes);
+        return 0;
+    }
+
+    // Phase 3: Invoke C compiler
+    let cc = default_cc(target);
+    let cc_cmd = str_concat(cc, str_concat(" -o ", str_concat(exe_path, str_concat(" ", c_path))));
+    let cc_lflags = linker_flags(target);
+    if (cc_lflags != "") {
+        cc_cmd = str_concat(cc_cmd, str_concat(" ", cc_lflags));
+    }
+    puts(str_concat("  CC cmd:   ", cc_cmd));
+
+    let cc_result = system(cc_cmd);
+    if (cc_result != 0) {
+        puts("error: C compilation failed.");
+        return 1;
+    }
+
+    puts(str_concat("  Output:   ", exe_path));
+    puts("Build complete.");
+
+    // Cleanup
+    vec_int_free(int_data);
+    vec_string_free(tok_lexemes);
+    return 0;
 }

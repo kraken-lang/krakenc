@@ -1,454 +1,785 @@
-// Kraken Self-Hosted Compiler — Parser
-// Transforms a token stream into an Abstract Syntax Tree.
-// Implements recursive-descent parsing for all Kraken language constructs.
+// Kraken Self-Hosted Compiler — Parser / Translator
+// Single-pass recursive descent: reads tokens from SOA arrays, emits C code
+// into a VecString output buffer. Handles the Kraken language subset needed
+// for bootstrapping: functions, structs, variables, control flow, expressions.
 
 module parser;
 
 // ---------------------------------------------------------------------------
-// Parser State
+// Translator State
 // ---------------------------------------------------------------------------
 
-pub struct Parser {
+pub struct Translator {
     pos: int;
-    token_count: int;
-    node_count: int;
-    error_count: int;
+    count: int;
+    indent: int;
+    errors: int;
     file: string;
+    int_data: VecInt;
+    lexemes: VecString;
+    out: VecString;
 }
 
-pub fn new_parser(token_count: int, file: string) -> Parser {
-    return Parser {
+pub fn new_translator(token_count: int, file: string, id: VecInt, lex: VecString, o: VecString) -> Translator {
+    return Translator {
         pos: 0,
-        token_count: token_count,
-        node_count: 0,
-        error_count: 0,
+        count: token_count,
+        indent: 0,
+        errors: 0,
         file: file,
+        int_data: id,
+        lexemes: lex,
+        out: o,
     };
 }
 
 // ---------------------------------------------------------------------------
-// Token navigation
+// Token access helpers — all read from embedded vecs via single Translator
 // ---------------------------------------------------------------------------
 
-pub fn parser_at_end(p: Parser) -> bool {
-    return p.pos >= p.token_count;
+fn tr_at_end(tr: Translator) -> bool {
+    return tr.pos >= tr.count;
 }
 
-pub fn parser_advance(p: Parser) -> Parser {
-    return Parser {
-        pos: p.pos + 1,
-        token_count: p.token_count,
-        node_count: p.node_count,
-        error_count: p.error_count,
-        file: p.file,
+fn tr_kind(tr: Translator) -> int {
+    if (tr_at_end(tr)) { return TK_EOF(); }
+    return vec_int_get(tr.int_data, tr.pos * 3);
+}
+
+fn tr_lexeme(tr: Translator) -> string {
+    if (tr_at_end(tr)) { return ""; }
+    return vec_string_get(tr.lexemes, tr.pos);
+}
+
+fn tr_line(tr: Translator) -> int {
+    if (tr_at_end(tr)) { return 0; }
+    return vec_int_get(tr.int_data, tr.pos * 3 + 1);
+}
+
+fn tr_col(tr: Translator) -> int {
+    if (tr_at_end(tr)) { return 0; }
+    return vec_int_get(tr.int_data, tr.pos * 3 + 2);
+}
+
+fn tr_advance(tr: Translator) -> Translator {
+    return Translator {
+        pos: tr.pos + 1, count: tr.count, indent: tr.indent, errors: tr.errors,
+        file: tr.file, int_data: tr.int_data, lexemes: tr.lexemes, out: tr.out,
     };
 }
 
-pub fn parser_add_node(p: Parser) -> Parser {
-    return Parser {
-        pos: p.pos,
-        token_count: p.token_count,
-        node_count: p.node_count + 1,
-        error_count: p.error_count,
-        file: p.file,
+fn tr_skip(tr: Translator, n: int) -> Translator {
+    return Translator {
+        pos: tr.pos + n, count: tr.count, indent: tr.indent, errors: tr.errors,
+        file: tr.file, int_data: tr.int_data, lexemes: tr.lexemes, out: tr.out,
     };
 }
 
-pub fn parser_add_error(p: Parser) -> Parser {
-    return Parser {
-        pos: p.pos,
-        token_count: p.token_count,
-        node_count: p.node_count,
-        error_count: p.error_count + 1,
-        file: p.file,
+fn tr_indent(tr: Translator) -> Translator {
+    return Translator {
+        pos: tr.pos, count: tr.count, indent: tr.indent + 1, errors: tr.errors,
+        file: tr.file, int_data: tr.int_data, lexemes: tr.lexemes, out: tr.out,
+    };
+}
+
+fn tr_dedent(tr: Translator) -> Translator {
+    let new_i = tr.indent - 1;
+    if (new_i < 0) { new_i = 0; }
+    return Translator {
+        pos: tr.pos, count: tr.count, indent: new_i, errors: tr.errors,
+        file: tr.file, int_data: tr.int_data, lexemes: tr.lexemes, out: tr.out,
+    };
+}
+
+fn tr_reset_pos(tr: Translator) -> Translator {
+    return Translator {
+        pos: 0, count: tr.count, indent: 0, errors: tr.errors,
+        file: tr.file, int_data: tr.int_data, lexemes: tr.lexemes, out: tr.out,
+    };
+}
+
+fn tr_error(tr: Translator, msg: string) -> Translator {
+    let ln = tr_line(tr);
+    let co = tr_col(tr);
+    let d = new_error(KRA_UNEXPECTED_TOKEN(), msg, tr.file, ln, co);
+    print_diagnostic(d);
+    return Translator {
+        pos: tr.pos, count: tr.count, indent: tr.indent, errors: tr.errors + 1,
+        file: tr.file, int_data: tr.int_data, lexemes: tr.lexemes, out: tr.out,
     };
 }
 
 // ---------------------------------------------------------------------------
-// Parse result
+// Output helpers — emit to tr.out
 // ---------------------------------------------------------------------------
 
-pub struct ParseResult {
-    node_count: int;
-    error_count: int;
+fn tr_emit(tr: Translator, s: string) -> void {
+    vec_string_push(tr.out, s);
+}
+
+fn tr_emit_indent(tr: Translator) -> void {
+    let i = 0;
+    while (i < tr.indent) {
+        vec_string_push(tr.out, "    ");
+        i = i + 1;
+    }
+}
+
+fn tr_emit_line(tr: Translator, s: string) -> void {
+    tr_emit_indent(tr);
+    vec_string_push(tr.out, s);
+    vec_string_push(tr.out, "\n");
+}
+
+// ---------------------------------------------------------------------------
+// Kraken type -> C type mapping
+// ---------------------------------------------------------------------------
+
+fn type_to_c(kind: int, name: string) -> string {
+    if (kind == TK_KW_INT())    { return "int64_t"; }
+    if (kind == TK_KW_FLOAT())  { return "double"; }
+    if (kind == TK_KW_BOOL())   { return "bool"; }
+    if (kind == TK_KW_STRING()) { return "const char*"; }
+    if (kind == TK_KW_STR())    { return "const char*"; }
+    if (kind == TK_KW_BYTES())  { return "uint8_t*"; }
+    if (kind == TK_KW_VOID())   { return "void"; }
+    if (kind == TK_IDENTIFIER()) {
+        return str_concat("struct ", str_concat(name, "*"));
+    }
+    return "void*";
+}
+
+fn type_to_c_value(kind: int) -> string {
+    if (kind == TK_KW_INT())    { return "0"; }
+    if (kind == TK_KW_FLOAT())  { return "0.0"; }
+    if (kind == TK_KW_BOOL())   { return "false"; }
+    if (kind == TK_KW_STRING()) { return "\"\""; }
+    if (kind == TK_KW_STR())    { return "\"\""; }
+    return "NULL";
+}
+
+// ---------------------------------------------------------------------------
+// Translate Result
+// ---------------------------------------------------------------------------
+
+pub struct TranslateResult {
+    errors: int;
     success: bool;
 }
 
-pub fn new_parse_result(node_count: int, error_count: int) -> ParseResult {
-    return ParseResult {
-        node_count: node_count,
-        error_count: error_count,
-        success: error_count == 0,
-    };
+// ---------------------------------------------------------------------------
+// Entry point: translate token stream to C source
+// ---------------------------------------------------------------------------
+
+pub fn translate(int_data: VecInt, lexemes: VecString, token_count: int, file: string, target: Target, out: VecString) -> TranslateResult {
+    let tr: Translator = new_translator(token_count, file, int_data, lexemes, out);
+
+    // Emit C preamble (platform-aware)
+    tr_emit(tr, emit_c_preamble(target));
+    tr_emit(tr, "\n");
+
+    // First pass: forward declarations
+    tr = emit_forward_decls(tr);
+    tr = tr_reset_pos(tr);
+
+    // Second pass: emit struct definitions and function bodies
+    tr = translate_program(tr);
+
+    // Emit C main() entry point wrapper
+    tr_emit(tr, "\nint main(int argc, char* argv[]) {\n");
+    tr_emit(tr, "    return (int)kr_main();\n");
+    tr_emit(tr, "}\n");
+
+    return TranslateResult { errors: tr.errors, success: tr.errors == 0 };
 }
 
 // ---------------------------------------------------------------------------
-// Parsing helpers — check current token kind
+// Forward declarations pass
 // ---------------------------------------------------------------------------
 
-pub fn check(p: Parser, kind: int, tok: Token) -> bool {
-    if (parser_at_end(p)) { return false; }
-    return tok.kind == kind;
-}
+fn emit_forward_decls(tr: Translator) -> Translator {
+    let c: Translator = tr;
+    tr_emit_line(c, "/* Forward declarations */");
 
-pub fn expect(p: Parser, kind: int, tok: Token) -> Parser {
-    if (tok.kind != kind) {
-        let msg = str_concat(str_concat(str_concat("expected ", token_kind_name(kind)), " but found "), token_kind_name(tok.kind));
-        let d = new_error(KRA_EXPECTED_TOKEN(), msg, p.file, tok.line, tok.column);
-        print_diagnostic(d);
-        return parser_add_error(p);
+    while (!tr_at_end(c)) {
+        let k = tr_kind(c);
+        if (k == TK_KW_PUB()) {
+            c = tr_advance(c);
+            let k2 = tr_kind(c);
+            if (k2 == TK_KW_STRUCT()) {
+                c = tr_advance(c);
+                let name = tr_lexeme(c);
+                tr_emit_line(c, str_concat(str_concat("typedef struct ", name), str_concat(" ", str_concat(name, ";"))));
+                c = tr_advance(c);
+            } else {
+                if (k2 == TK_KW_FN()) {
+                    c = emit_fn_prototype(c);
+                } else { c = tr_advance(c); }
+            }
+        } else {
+            if (k == TK_KW_STRUCT()) {
+                c = tr_advance(c);
+                let name = tr_lexeme(c);
+                tr_emit_line(c, str_concat(str_concat("typedef struct ", name), str_concat(" ", str_concat(name, ";"))));
+                c = tr_advance(c);
+            } else {
+                if (k == TK_KW_FN()) {
+                    c = emit_fn_prototype(c);
+                } else { c = tr_advance(c); }
+            }
+        }
     }
-    return parser_advance(p);
+    tr_emit(c, "\n");
+    return c;
 }
 
-// ---------------------------------------------------------------------------
-// Parse top-level program
-// ---------------------------------------------------------------------------
+fn emit_fn_prototype(tr: Translator) -> Translator {
+    let c: Translator = tr_advance(tr);
+    let fname = tr_lexeme(c);
+    c = tr_advance(c);
+    c = tr_advance(c);
 
-pub fn parse_program(p: Parser) -> ParseResult {
-    let current: Parser = p;
+    let params = "";
+    let first = 1;
+    while (!tr_at_end(c) && tr_kind(c) != TK_RPAREN()) {
+        if (first == 0) { params = str_concat(params, ", "); c = tr_advance(c); }
+        let pname = tr_lexeme(c);
+        c = tr_advance(c);
+        c = tr_advance(c);
+        let ptype_kind = tr_kind(c);
+        let ptype_name = tr_lexeme(c);
+        c = tr_advance(c);
+        params = str_concat(params, str_concat(type_to_c(ptype_kind, ptype_name), str_concat(" ", pname)));
+        first = 0;
+    }
+    c = tr_advance(c);
 
-    while (!parser_at_end(current)) {
-        current = parse_top_level(current);
+    let ret_c = "void";
+    if (!tr_at_end(c) && tr_kind(c) == TK_ARROW()) {
+        c = tr_advance(c);
+        let rk = tr_kind(c);
+        let rn = tr_lexeme(c);
+        ret_c = type_to_c(rk, rn);
+        c = tr_advance(c);
     }
 
-    return new_parse_result(current.node_count, current.error_count);
+    let mangled = str_concat("kr_", fname);
+    tr_emit_line(c, str_concat(ret_c, str_concat(" ", str_concat(mangled, str_concat("(", str_concat(params, ");"))))));
+    c = skip_brace_block(c);
+    return c;
+}
+
+fn skip_brace_block(tr: Translator) -> Translator {
+    let c: Translator = tr;
+    if (tr_at_end(c) || tr_kind(c) != TK_LBRACE()) { return c; }
+    c = tr_advance(c);
+    let depth = 1;
+    while (!tr_at_end(c) && depth > 0) {
+        let k = tr_kind(c);
+        if (k == TK_LBRACE()) { depth = depth + 1; }
+        if (k == TK_RBRACE()) { depth = depth - 1; }
+        c = tr_advance(c);
+    }
+    return c;
 }
 
 // ---------------------------------------------------------------------------
-// Parse top-level declaration
+// Main translation pass
 // ---------------------------------------------------------------------------
 
-pub fn parse_top_level(p: Parser) -> Parser {
-    // This dispatches to specific parsers based on the current token.
-    // In a full implementation, we'd peek the token kind and branch.
-    // For bootstrapping, we advance and count nodes.
-    let current: Parser = parser_advance(p);
-    current = parser_add_node(current);
-    return current;
+fn translate_program(tr: Translator) -> Translator {
+    let c: Translator = tr;
+    while (!tr_at_end(c)) {
+        let k = tr_kind(c);
+        if (k == TK_EOF()) { break; }
+        if (k == TK_KW_MODULE()) {
+            c = tr_advance(c); c = tr_advance(c);
+            if (!tr_at_end(c) && tr_kind(c) == TK_SEMICOLON()) { c = tr_advance(c); }
+        } else {
+            if (k == TK_KW_IMPORT()) {
+                c = tr_advance(c); c = tr_advance(c);
+                if (!tr_at_end(c) && tr_kind(c) == TK_SEMICOLON()) { c = tr_advance(c); }
+            } else {
+                if (k == TK_KW_PUB()) { c = tr_advance(c); c = translate_top_level(c); }
+                else { c = translate_top_level(c); }
+            }
+        }
+    }
+    return c;
+}
+
+fn translate_top_level(tr: Translator) -> Translator {
+    let k = tr_kind(tr);
+    if (k == TK_KW_FN()) { return translate_fn(tr); }
+    if (k == TK_KW_STRUCT()) { return translate_struct(tr); }
+    return tr_advance(tr);
 }
 
 // ---------------------------------------------------------------------------
-// Parse module declaration: module path;
+// Struct declaration
 // ---------------------------------------------------------------------------
 
-pub fn parse_module(p: Parser, tok: Token) -> Parser {
-    let current: Parser = p;
-    // Already consumed 'module' keyword
-    // Expect identifier
-    current = parser_advance(current);
-    // Expect semicolon
-    current = parser_advance(current);
-    current = parser_add_node(current);
-    return current;
+fn translate_struct(tr: Translator) -> Translator {
+    let c: Translator = tr_advance(tr);
+    let name = tr_lexeme(c);
+    c = tr_advance(c);
+    c = tr_advance(c);
+
+    tr_emit_line(c, str_concat("struct ", str_concat(name, " {")));
+    while (!tr_at_end(c) && tr_kind(c) != TK_RBRACE()) {
+        let fname = tr_lexeme(c); c = tr_advance(c); c = tr_advance(c);
+        let fk = tr_kind(c); let fn_name = tr_lexeme(c); c = tr_advance(c);
+        tr_emit_line(c, str_concat(type_to_c(fk, fn_name), str_concat(" ", str_concat(fname, ";"))));
+        if (!tr_at_end(c) && tr_kind(c) == TK_SEMICOLON()) { c = tr_advance(c); }
+    }
+    c = tr_advance(c);
+    tr_emit_line(c, "};");
+    tr_emit(c, "\n");
+    return c;
 }
 
 // ---------------------------------------------------------------------------
-// Parse import declaration: import path;
+// Function declaration
 // ---------------------------------------------------------------------------
 
-pub fn parse_import(p: Parser, tok: Token) -> Parser {
-    let current: Parser = p;
-    current = parser_advance(current);
-    current = parser_advance(current);
-    current = parser_add_node(current);
-    return current;
+fn translate_fn(tr: Translator) -> Translator {
+    let c: Translator = tr_advance(tr);
+    let fname = tr_lexeme(c); c = tr_advance(c); c = tr_advance(c);
+
+    let params = "";
+    let first = 1;
+    while (!tr_at_end(c) && tr_kind(c) != TK_RPAREN()) {
+        if (first == 0) { params = str_concat(params, ", "); c = tr_advance(c); }
+        let pname = tr_lexeme(c); c = tr_advance(c); c = tr_advance(c);
+        let pk = tr_kind(c); let pn = tr_lexeme(c); c = tr_advance(c);
+        params = str_concat(params, str_concat(type_to_c(pk, pn), str_concat(" ", pname)));
+        first = 0;
+    }
+    c = tr_advance(c);
+
+    let ret_c = "void";
+    if (!tr_at_end(c) && tr_kind(c) == TK_ARROW()) {
+        c = tr_advance(c);
+        let rk = tr_kind(c); let rn = tr_lexeme(c);
+        ret_c = type_to_c(rk, rn); c = tr_advance(c);
+    }
+
+    let mangled = str_concat("kr_", fname);
+    tr_emit(c, str_concat(ret_c, str_concat(" ", str_concat(mangled, str_concat("(", str_concat(params, ") {\n"))))));
+
+    c = tr_advance(c);
+    c = tr_indent(c);
+    c = translate_block_body(c);
+    c = tr_dedent(c);
+    tr_emit_line(c, "}");
+    tr_emit(c, "\n");
+    return c;
 }
 
 // ---------------------------------------------------------------------------
-// Parse variable declaration: let pattern [: type] [= expr];
+// Block body
 // ---------------------------------------------------------------------------
 
-pub fn parse_var_decl(p: Parser) -> Parser {
-    let current: Parser = p;
-    // Skip 'let' keyword
-    current = parser_advance(current);
-    // Parse pattern (identifier for now)
-    current = parser_advance(current);
-    // May have : type
-    // May have = initializer
-    // Expect ;
-    current = parser_advance(current);
-    current = parser_add_node(current);
-    return current;
+fn translate_block_body(tr: Translator) -> Translator {
+    let c: Translator = tr;
+    while (!tr_at_end(c) && tr_kind(c) != TK_RBRACE()) {
+        c = translate_statement(c);
+    }
+    if (!tr_at_end(c)) { c = tr_advance(c); }
+    return c;
 }
 
 // ---------------------------------------------------------------------------
-// Parse function declaration: [pub] [async] [unsafe] fn name(...) [-> type] { ... }
+// Statement
 // ---------------------------------------------------------------------------
 
-pub fn parse_fn_decl(p: Parser, is_public: bool) -> Parser {
-    let current: Parser = p;
-    // Skip 'fn' keyword
-    current = parser_advance(current);
-    // Parse function name
-    current = parser_advance(current);
-    // Parse parameter list ( ... )
-    current = parser_advance(current); // (
-    // Parse parameters until )
-    current = parse_param_list(current);
-    current = parser_advance(current); // )
-    // Optional -> return_type
-    // Parse body { ... }
-    current = parse_block(current);
-    current = parser_add_node(current);
-    return current;
+fn translate_statement(tr: Translator) -> Translator {
+    let k = tr_kind(tr);
+    if (k == TK_KW_LET() || k == TK_KW_CONST()) { return translate_var_decl(tr); }
+    if (k == TK_KW_RETURN()) { return translate_return(tr); }
+    if (k == TK_KW_IF()) { return translate_if(tr); }
+    if (k == TK_KW_WHILE()) { return translate_while(tr); }
+    if (k == TK_KW_FOR()) { return translate_for(tr); }
+    if (k == TK_KW_BREAK()) {
+        tr_emit_line(tr, "break;");
+        let c: Translator = tr_advance(tr);
+        if (!tr_at_end(c) && tr_kind(c) == TK_SEMICOLON()) { c = tr_advance(c); }
+        return c;
+    }
+    if (k == TK_KW_CONTINUE()) {
+        tr_emit_line(tr, "continue;");
+        let c: Translator = tr_advance(tr);
+        if (!tr_at_end(c) && tr_kind(c) == TK_SEMICOLON()) { c = tr_advance(c); }
+        return c;
+    }
+    return translate_expr_stmt(tr);
 }
 
 // ---------------------------------------------------------------------------
-// Parse parameter list
+// Variable declaration
 // ---------------------------------------------------------------------------
 
-pub fn parse_param_list(p: Parser) -> Parser {
-    // Parse comma-separated parameters until we hit )
-    let current: Parser = p;
-    // Simplified: advance through tokens until )
-    return current;
+fn translate_var_decl(tr: Translator) -> Translator {
+    let c: Translator = tr_advance(tr);
+    let vname = tr_lexeme(c); c = tr_advance(c);
+
+    let c_type = "int64_t";
+    if (!tr_at_end(c) && tr_kind(c) == TK_COLON()) {
+        c = tr_advance(c);
+        let tk = tr_kind(c); let tn = tr_lexeme(c);
+        c_type = type_to_c(tk, tn); c = tr_advance(c);
+    }
+
+    if (!tr_at_end(c) && tr_kind(c) == TK_OP_ASSIGN()) {
+        c = tr_advance(c);
+        tr_emit_indent(c);
+        tr_emit(c, str_concat(c_type, str_concat(" ", str_concat(vname, " = "))));
+        c = translate_expr(c);
+        tr_emit(c, ";\n");
+    } else {
+        tr_emit_line(c, str_concat(c_type, str_concat(" ", str_concat(vname, ";"))));
+    }
+
+    if (!tr_at_end(c) && tr_kind(c) == TK_SEMICOLON()) { c = tr_advance(c); }
+    return c;
 }
 
 // ---------------------------------------------------------------------------
-// Parse block: { statement* }
+// Return statement
 // ---------------------------------------------------------------------------
 
-pub fn parse_block(p: Parser) -> Parser {
-    let current: Parser = p;
-    // Expect {
-    current = parser_advance(current);
-    // Parse statements until }
-    // Expect }
-    current = parser_advance(current);
-    return current;
+fn translate_return(tr: Translator) -> Translator {
+    let c: Translator = tr_advance(tr);
+    if (!tr_at_end(c) && tr_kind(c) != TK_SEMICOLON()) {
+        tr_emit_indent(c);
+        tr_emit(c, "return ");
+        c = translate_expr(c);
+        tr_emit(c, ";\n");
+    } else {
+        tr_emit_line(c, "return;");
+    }
+    if (!tr_at_end(c) && tr_kind(c) == TK_SEMICOLON()) { c = tr_advance(c); }
+    return c;
 }
 
 // ---------------------------------------------------------------------------
-// Parse struct declaration: [pub] struct Name [<T>] { fields }
+// If statement
 // ---------------------------------------------------------------------------
 
-pub fn parse_struct_decl(p: Parser, is_public: bool) -> Parser {
-    let current: Parser = p;
-    // Skip 'struct' keyword
-    current = parser_advance(current);
-    // Parse struct name
-    current = parser_advance(current);
-    // Optional generic params
-    // Parse body { fields }
-    current = parser_advance(current); // {
-    current = parse_field_list(current);
-    current = parser_advance(current); // }
-    current = parser_add_node(current);
-    return current;
+fn translate_if(tr: Translator) -> Translator {
+    let c: Translator = tr_advance(tr);
+    tr_emit_indent(c);
+    tr_emit(c, "if (");
+
+    let had_paren = 0;
+    if (!tr_at_end(c) && tr_kind(c) == TK_LPAREN()) { c = tr_advance(c); had_paren = 1; }
+    c = translate_expr(c);
+    if (had_paren == 1 && !tr_at_end(c) && tr_kind(c) == TK_RPAREN()) { c = tr_advance(c); }
+    tr_emit(c, ") {\n");
+
+    c = tr_advance(c);
+    c = tr_indent(c);
+    c = translate_block_body(c);
+    c = tr_dedent(c);
+    tr_emit_line(c, "}");
+
+    if (!tr_at_end(c) && tr_kind(c) == TK_KW_ELSE()) {
+        c = tr_advance(c);
+        if (!tr_at_end(c) && tr_kind(c) == TK_KW_IF()) {
+            tr_emit_indent(c);
+            tr_emit(c, "else ");
+            c = translate_if(c);
+            return c;
+        }
+        tr_emit_line(c, "else {");
+        c = tr_advance(c);
+        c = tr_indent(c);
+        c = translate_block_body(c);
+        c = tr_dedent(c);
+        tr_emit_line(c, "}");
+    }
+    return c;
 }
 
 // ---------------------------------------------------------------------------
-// Parse field list
+// While loop
 // ---------------------------------------------------------------------------
 
-pub fn parse_field_list(p: Parser) -> Parser {
-    let current: Parser = p;
-    // Parse comma/semicolon-separated fields until }
-    return current;
+fn translate_while(tr: Translator) -> Translator {
+    let c: Translator = tr_advance(tr);
+    tr_emit_indent(c);
+    tr_emit(c, "while (");
+
+    let had_paren = 0;
+    if (!tr_at_end(c) && tr_kind(c) == TK_LPAREN()) { c = tr_advance(c); had_paren = 1; }
+    c = translate_expr(c);
+    if (had_paren == 1 && !tr_at_end(c) && tr_kind(c) == TK_RPAREN()) { c = tr_advance(c); }
+    tr_emit(c, ") {\n");
+
+    c = tr_advance(c);
+    c = tr_indent(c);
+    c = translate_block_body(c);
+    c = tr_dedent(c);
+    tr_emit_line(c, "}");
+    return c;
 }
 
 // ---------------------------------------------------------------------------
-// Parse enum declaration: [pub] enum Name { variants }
+// For loop
 // ---------------------------------------------------------------------------
 
-pub fn parse_enum_decl(p: Parser, is_public: bool) -> Parser {
-    let current: Parser = p;
-    current = parser_advance(current); // enum
-    current = parser_advance(current); // name
-    current = parser_advance(current); // {
-    // Parse variants
-    current = parser_advance(current); // }
-    current = parser_add_node(current);
-    return current;
+fn translate_for(tr: Translator) -> Translator {
+    let c: Translator = tr_advance(tr);
+    c = tr_advance(c);
+    tr_emit_indent(c);
+    tr_emit(c, "for (");
+
+    if (tr_kind(c) == TK_KW_LET()) {
+        c = tr_advance(c);
+        let vname = tr_lexeme(c); c = tr_advance(c);
+        let c_type = "int64_t";
+        if (!tr_at_end(c) && tr_kind(c) == TK_COLON()) {
+            c = tr_advance(c);
+            let tk = tr_kind(c); let tn = tr_lexeme(c);
+            c_type = type_to_c(tk, tn); c = tr_advance(c);
+        }
+        c = tr_advance(c);
+        tr_emit(c, str_concat(c_type, str_concat(" ", str_concat(vname, " = "))));
+        c = translate_expr(c);
+    } else { c = translate_expr(c); }
+    c = tr_advance(c);
+    tr_emit(c, "; ");
+
+    c = translate_expr(c);
+    c = tr_advance(c);
+    tr_emit(c, "; ");
+
+    c = translate_expr(c);
+    c = tr_advance(c);
+    tr_emit(c, ") {\n");
+
+    c = tr_advance(c);
+    c = tr_indent(c);
+    c = translate_block_body(c);
+    c = tr_dedent(c);
+    tr_emit_line(c, "}");
+    return c;
 }
 
 // ---------------------------------------------------------------------------
-// Parse trait declaration: [pub] trait Name [: SuperTrait] { methods }
+// Expression statement
 // ---------------------------------------------------------------------------
 
-pub fn parse_trait_decl(p: Parser, is_public: bool) -> Parser {
-    let current: Parser = p;
-    current = parser_advance(current); // trait
-    current = parser_advance(current); // name
-    current = parser_advance(current); // {
-    // Parse trait methods
-    current = parser_advance(current); // }
-    current = parser_add_node(current);
-    return current;
-}
+fn translate_expr_stmt(tr: Translator) -> Translator {
+    tr_emit_indent(tr);
+    let c: Translator = translate_expr(tr);
 
-// ---------------------------------------------------------------------------
-// Parse impl block: impl [Trait for] TypeName { methods }
-// ---------------------------------------------------------------------------
+    let k = tr_kind(c);
+    if (k == TK_OP_ASSIGN() || k == TK_OP_PLUS_ASSIGN() || k == TK_OP_MINUS_ASSIGN() || k == TK_OP_STAR_ASSIGN()) {
+        let op_lex = tr_lexeme(c);
+        tr_emit(c, str_concat(" ", str_concat(op_lex, " ")));
+        c = tr_advance(c);
+        c = translate_expr(c);
+    }
 
-pub fn parse_impl_block(p: Parser) -> Parser {
-    let current: Parser = p;
-    current = parser_advance(current); // impl
-    current = parser_advance(current); // type_name or trait_name
-    // Check for 'for' keyword (trait impl)
-    current = parser_advance(current); // {
-    // Parse methods
-    current = parser_advance(current); // }
-    current = parser_add_node(current);
-    return current;
+    tr_emit(c, ";\n");
+    if (!tr_at_end(c) && tr_kind(c) == TK_SEMICOLON()) { c = tr_advance(c); }
+    return c;
 }
 
 // ---------------------------------------------------------------------------
-// Parse if statement: if (condition) { ... } [else { ... }]
+// Expression — precedence climbing
 // ---------------------------------------------------------------------------
 
-pub fn parse_if(p: Parser) -> Parser {
-    let current: Parser = p;
-    current = parser_advance(current); // if
-    current = parser_advance(current); // (
-    // Parse condition expression
-    current = parse_expression(current);
-    current = parser_advance(current); // )
-    current = parse_block(current);
-    // Optional else
-    current = parser_add_node(current);
-    return current;
+fn translate_expr(tr: Translator) -> Translator { return translate_or(tr); }
+
+fn translate_or(tr: Translator) -> Translator {
+    let c: Translator = translate_and(tr);
+    while (!tr_at_end(c) && tr_kind(c) == TK_OP_OR()) {
+        tr_emit(c, " || "); c = tr_advance(c); c = translate_and(c);
+    }
+    return c;
 }
 
-// ---------------------------------------------------------------------------
-// Parse while loop: while (condition) { ... }
-// ---------------------------------------------------------------------------
-
-pub fn parse_while(p: Parser) -> Parser {
-    let current: Parser = p;
-    current = parser_advance(current); // while
-    current = parser_advance(current); // (
-    current = parse_expression(current);
-    current = parser_advance(current); // )
-    current = parse_block(current);
-    current = parser_add_node(current);
-    return current;
+fn translate_and(tr: Translator) -> Translator {
+    let c: Translator = translate_equality(tr);
+    while (!tr_at_end(c) && tr_kind(c) == TK_OP_AND()) {
+        tr_emit(c, " && "); c = tr_advance(c); c = translate_equality(c);
+    }
+    return c;
 }
 
-// ---------------------------------------------------------------------------
-// Parse match: match (expr) { arms }
-// ---------------------------------------------------------------------------
-
-pub fn parse_match(p: Parser) -> Parser {
-    let current: Parser = p;
-    current = parser_advance(current); // match
-    current = parser_advance(current); // (
-    current = parse_expression(current);
-    current = parser_advance(current); // )
-    current = parser_advance(current); // {
-    // Parse match arms
-    current = parser_advance(current); // }
-    current = parser_add_node(current);
-    return current;
+fn translate_equality(tr: Translator) -> Translator {
+    let c: Translator = translate_comparison(tr);
+    while (!tr_at_end(c)) {
+        let k = tr_kind(c);
+        if (k == TK_OP_EQ()) {
+            tr_emit(c, " == "); c = tr_advance(c); c = translate_comparison(c);
+        } else {
+            if (k == TK_OP_NEQ()) {
+                tr_emit(c, " != "); c = tr_advance(c); c = translate_comparison(c);
+            } else { break; }
+        }
+    }
+    return c;
 }
 
-// ---------------------------------------------------------------------------
-// Parse return: return [expr];
-// ---------------------------------------------------------------------------
-
-pub fn parse_return(p: Parser) -> Parser {
-    let current: Parser = p;
-    current = parser_advance(current); // return
-    // Optional expression
-    current = parse_expression(current);
-    current = parser_advance(current); // ;
-    current = parser_add_node(current);
-    return current;
+fn translate_comparison(tr: Translator) -> Translator {
+    let c: Translator = translate_addition(tr);
+    while (!tr_at_end(c)) {
+        let k = tr_kind(c);
+        if (k == TK_OP_LT() || k == TK_OP_LTE() || k == TK_OP_GT() || k == TK_OP_GTE()) {
+            tr_emit(c, str_concat(" ", str_concat(tr_lexeme(c), " ")));
+            c = tr_advance(c); c = translate_addition(c);
+        } else { break; }
+    }
+    return c;
 }
 
-// ---------------------------------------------------------------------------
-// Parse expression (simplified Pratt parser skeleton)
-// ---------------------------------------------------------------------------
-
-pub fn parse_expression(p: Parser) -> Parser {
-    return parse_assignment(p);
+fn translate_addition(tr: Translator) -> Translator {
+    let c: Translator = translate_multiplication(tr);
+    while (!tr_at_end(c)) {
+        let k = tr_kind(c);
+        if (k == TK_OP_PLUS()) {
+            tr_emit(c, " + "); c = tr_advance(c); c = translate_multiplication(c);
+        } else {
+            if (k == TK_OP_MINUS()) {
+                tr_emit(c, " - "); c = tr_advance(c); c = translate_multiplication(c);
+            } else { break; }
+        }
+    }
+    return c;
 }
 
-pub fn parse_assignment(p: Parser) -> Parser {
-    let current: Parser = parse_or(p);
-    // Check for = assignment
-    return current;
+fn translate_multiplication(tr: Translator) -> Translator {
+    let c: Translator = translate_unary(tr);
+    while (!tr_at_end(c)) {
+        let k = tr_kind(c);
+        if (k == TK_OP_STAR() || k == TK_OP_SLASH() || k == TK_OP_PERCENT()) {
+            tr_emit(c, str_concat(" ", str_concat(tr_lexeme(c), " ")));
+            c = tr_advance(c); c = translate_unary(c);
+        } else { break; }
+    }
+    return c;
 }
 
-pub fn parse_or(p: Parser) -> Parser {
-    let current: Parser = parse_and(p);
-    // Check for ||
-    return current;
+fn translate_unary(tr: Translator) -> Translator {
+    let k = tr_kind(tr);
+    if (k == TK_OP_NOT()) { tr_emit(tr, "!"); return translate_unary(tr_advance(tr)); }
+    if (k == TK_OP_MINUS()) { tr_emit(tr, "-"); return translate_unary(tr_advance(tr)); }
+    if (k == TK_OP_BIT_NOT()) { tr_emit(tr, "~"); return translate_unary(tr_advance(tr)); }
+    return translate_postfix(tr);
 }
 
-pub fn parse_and(p: Parser) -> Parser {
-    let current: Parser = parse_equality(p);
-    // Check for &&
-    return current;
-}
-
-pub fn parse_equality(p: Parser) -> Parser {
-    let current: Parser = parse_comparison(p);
-    // Check for == !=
-    return current;
-}
-
-pub fn parse_comparison(p: Parser) -> Parser {
-    let current: Parser = parse_addition(p);
-    // Check for < > <= >=
-    return current;
-}
-
-pub fn parse_addition(p: Parser) -> Parser {
-    let current: Parser = parse_multiplication(p);
-    // Check for + -
-    return current;
-}
-
-pub fn parse_multiplication(p: Parser) -> Parser {
-    let current: Parser = parse_unary(p);
-    // Check for * / %
-    return current;
-}
-
-pub fn parse_unary(p: Parser) -> Parser {
-    // Check for ! - ~ &
-    return parse_postfix(p);
-}
-
-pub fn parse_postfix(p: Parser) -> Parser {
-    let current: Parser = parse_primary(p);
-    // Check for . ( [ :: ? postfix operators
-    return current;
-}
-
-pub fn parse_primary(p: Parser) -> Parser {
-    // Int/float/string/bool literals, identifiers, ( grouped ), [ array ]
-    let current: Parser = parser_advance(p);
-    current = parser_add_node(current);
-    return current;
+fn translate_postfix(tr: Translator) -> Translator {
+    let c: Translator = translate_primary(tr);
+    while (!tr_at_end(c)) {
+        let k = tr_kind(c);
+        if (k == TK_DOT()) {
+            tr_emit(c, "."); c = tr_advance(c);
+            tr_emit(c, tr_lexeme(c)); c = tr_advance(c);
+        } else {
+            if (k == TK_LPAREN()) {
+                c = tr_advance(c);
+                tr_emit(c, "(");
+                let fa = 1;
+                while (!tr_at_end(c) && tr_kind(c) != TK_RPAREN()) {
+                    if (fa == 0) { tr_emit(c, ", "); c = tr_advance(c); }
+                    c = translate_expr(c); fa = 0;
+                }
+                c = tr_advance(c);
+                tr_emit(c, ")");
+            } else {
+                if (k == TK_LBRACKET()) {
+                    tr_emit(c, "["); c = tr_advance(c);
+                    c = translate_expr(c); c = tr_advance(c);
+                    tr_emit(c, "]");
+                } else { break; }
+            }
+        }
+    }
+    return c;
 }
 
 // ---------------------------------------------------------------------------
-// Parse for loop: for (init; cond; incr) { ... } or for (x in iter) { ... }
+// Primary expression
 // ---------------------------------------------------------------------------
 
-pub fn parse_for(p: Parser) -> Parser {
-    let current: Parser = p;
-    current = parser_advance(current); // for
-    current = parser_advance(current); // (
-    // Determine C-style vs for-in
-    current = parse_expression(current);
-    current = parser_advance(current); // )
-    current = parse_block(current);
-    current = parser_add_node(current);
-    return current;
+fn translate_primary(tr: Translator) -> Translator {
+    let k = tr_kind(tr);
+
+    if (k == TK_INT_LIT()) { tr_emit(tr, tr_lexeme(tr)); return tr_advance(tr); }
+    if (k == TK_FLOAT_LIT()) { tr_emit(tr, tr_lexeme(tr)); return tr_advance(tr); }
+    if (k == TK_STRING_LIT()) {
+        tr_emit(tr, str_concat("\"", str_concat(tr_lexeme(tr), "\"")));
+        return tr_advance(tr);
+    }
+    if (k == TK_KW_TRUE()) { tr_emit(tr, "true"); return tr_advance(tr); }
+    if (k == TK_KW_FALSE()) { tr_emit(tr, "false"); return tr_advance(tr); }
+    if (k == TK_KW_NULL()) { tr_emit(tr, "NULL"); return tr_advance(tr); }
+
+    if (k == TK_LPAREN()) {
+        tr_emit(tr, "(");
+        let c: Translator = tr_advance(tr);
+        c = translate_expr(c);
+        if (!tr_at_end(c) && tr_kind(c) == TK_RPAREN()) { c = tr_advance(c); }
+        tr_emit(c, ")");
+        return c;
+    }
+
+    if (k == TK_IDENTIFIER()) {
+        let name = tr_lexeme(tr);
+        let c: Translator = tr_advance(tr);
+
+        // Function call
+        if (!tr_at_end(c) && tr_kind(c) == TK_LPAREN()) {
+            c = tr_advance(c);
+            tr_emit(c, str_concat("kr_", str_concat(name, "(")));
+            let fa = 1;
+            while (!tr_at_end(c) && tr_kind(c) != TK_RPAREN()) {
+                if (fa == 0) { tr_emit(c, ", "); c = tr_advance(c); }
+                c = translate_expr(c); fa = 0;
+            }
+            c = tr_advance(c);
+            tr_emit(c, ")");
+            return c;
+        }
+
+        // Struct literal
+        if (!tr_at_end(c) && tr_kind(c) == TK_LBRACE()) {
+            c = tr_advance(c);
+            tr_emit(c, str_concat("(", str_concat(name, "){")));
+            let ff = 1;
+            while (!tr_at_end(c) && tr_kind(c) != TK_RBRACE()) {
+                if (ff == 0) { tr_emit(c, ", "); c = tr_advance(c); }
+                let field_name = tr_lexeme(c); c = tr_advance(c); c = tr_advance(c);
+                tr_emit(c, str_concat(".", str_concat(field_name, " = ")));
+                c = translate_expr(c); ff = 0;
+            }
+            c = tr_advance(c);
+            tr_emit(c, "}");
+            return c;
+        }
+
+        tr_emit(c, name);
+        return c;
+    }
+
+    if (!tr_at_end(tr)) { tr_emit(tr, tr_lexeme(tr)); return tr_advance(tr); }
+    return tr;
 }
 
 // ---------------------------------------------------------------------------
-// Parse type annotation
+// Join VecString into a single string
 // ---------------------------------------------------------------------------
 
-pub fn parse_type(p: Parser) -> Parser {
-    // Consume type token(s): int, float, bool, str, string, bytes, void,
-    // or CustomType, or generic Type<T>, or [T], or (T, U), or fn(T) -> U
-    let current: Parser = parser_advance(p);
-    return current;
+pub fn join_output(out: VecString) -> string {
+    let result = "";
+    let len = vec_string_len(out);
+    let i = 0;
+    while (i < len) {
+        result = str_concat(result, vec_string_get(out, i));
+        i = i + 1;
+    }
+    return result;
 }
