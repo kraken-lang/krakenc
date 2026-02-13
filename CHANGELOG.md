@@ -74,8 +74,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **C Keyword Sanitization** — `sanitize_c_name()` renames parameters named `int`, `float`, `double`, `char`, `void`, `const`, etc. to `int_val`, `float_val`, etc.
 - **Test Macro Override Pattern** — preamble test functions use `_kr_default_*` with `#define` aliases; `emit_fn_prototype` emits targeted `#undef` when user defines a conflicting function name
 - **Array Literals** — `[1, 2, 3]` → C compound literal `(int64_t[]){1, 2, 3}`
-- **Pointer Operators** — `&x` (address-of) and `*ptr` (dereference) as unary prefix operators
 - **Additional C Runtime Shims** — file I/O (fgets, fwrite, fread, feof, ferror, fflush, fgetc, fputc, fseek, ftell, rewind), memory ops (memcmp, memcpy, memmove, memset), string search (strstr, strchr, strncpy, strcat, strcpy, strncmp, strtok), UTF-8 validation, async block_on stub, sprintf/sscanf/snprintf macros, rand_int/rand_float/rand_bytes, math convenience (math_abs/min/max/sqrt/floor/ceil/round/sin/cos/tan/pow), logging (log_debug/info/warn/error/set_level), bench_start/bench_end, channel/condvar/pool/executor/cancel_token stubs, println, fopen/fclose, mutex_new/free
+- **Generic Syntax Compatibility** — safe turbofish parsing for `name<T>(...)` / `Type<T>{...}` via guarded generic-skip helper that avoids corrupting comparison expressions like `x < 10`
+- **Shim Signature Compatibility** — relaxed/compatible signatures for common bootstrap calls (`strlen` variadic shim, `setenv` returning `int64_t`, channel-new variadic macro shim)
 
 ### Changed
 - **Lexer** (`src/lexer.kr`) — refactored `tokenize()` to use `VecInt`/`VecString` output parameters; added `push_token()` and `advance_n()` helpers
@@ -98,6 +99,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `scan_eq_ahead` stops at `,`, `:`, `<<`, and `>>` boundaries to prevent crossing struct literal and shift expression boundaries
 - `getenv` shim casts `const char*` return to `char*` for consistency with `kr_str` typedef
 - `KrVecString` internal storage changed from `const char**` to `char**` to match `kr_str` typedef
+- Fixed self-hosting regression caused by over-broad generic/prefix parsing interactions; restored clean fixed-point generation
+- Fixed `kr_main` missing-definition linker failures after translator regression by tightening generic-expression handling in primary-expression parsing
 
 ## [0.9.2] - 2026-02-06
 

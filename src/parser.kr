@@ -144,6 +144,11 @@ fn type_to_c(kind: int, name: string) -> string {
     if (kind == TK_KW_BYTES())  { return "uint8_t*"; }
     if (kind == TK_KW_VOID())   { return "void"; }
     if (kind == TK_IDENTIFIER()) {
+        // Generic type params / trait self type (erased in C backend)
+        if (strcmp(name, "T") == 0 || strcmp(name, "U") == 0 || strcmp(name, "V") == 0 || strcmp(name, "K") == 0 || strcmp(name, "R") == 0) {
+            return "int64_t";
+        }
+        if (strcmp(name, "Self") == 0) { return "void*"; }
         // Opaque runtime handles
         if (strcmp(name, "VecInt") == 0)    { return "void*"; }
         if (strcmp(name, "VecString") == 0) { return "void*"; }
@@ -174,6 +179,36 @@ fn skip_generic_params(tr: Translator) -> Translator {
         if (tr_kind(c) == TK_OP_LT()) { depth = depth + 1; }
         if (tr_kind(c) == TK_OP_GT()) { depth = depth - 1; }
         c = tr_advance(c);
+    }
+    return c;
+}
+
+// Only skip `<...>` when it is turbofish/generic syntax attached to an
+// identifier, and the closing `>` is followed by `(` or `{`.
+// This avoids mis-parsing comparisons like `kind < 200`.
+fn maybe_skip_turbofish(tr: Translator) -> Translator {
+    let c: Translator = tr;
+    if (tr_at_end(c) || tr_kind(c) != TK_OP_LT()) { return c; }
+
+    let i = c.pos;
+    let depth = 0;
+    while (i < c.count) {
+        let k = vec_int_get(c.int_data, i * 3);
+        if (k == TK_OP_LT()) { depth = depth + 1; }
+        if (k == TK_OP_GT()) {
+            depth = depth - 1;
+            if (depth == 0) {
+                let j = i + 1;
+                if (j < c.count) {
+                    let k2 = vec_int_get(c.int_data, j * 3);
+                    if (k2 == TK_LPAREN() || k2 == TK_LBRACE()) {
+                        return skip_generic_params(c);
+                    }
+                }
+                return c;
+            }
+        }
+        i = i + 1;
     }
     return c;
 }
@@ -1281,8 +1316,6 @@ fn translate_unary(tr: Translator) -> Translator {
     if (k == TK_OP_NOT()) { tr_emit(tr, "!"); return translate_unary(tr_advance(tr)); }
     if (k == TK_OP_MINUS()) { tr_emit(tr, "-"); return translate_unary(tr_advance(tr)); }
     if (k == TK_OP_BIT_NOT()) { tr_emit(tr, "~"); return translate_unary(tr_advance(tr)); }
-    if (k == TK_OP_BIT_AND()) { tr_emit(tr, "&"); return translate_unary(tr_advance(tr)); }
-    if (k == TK_OP_STAR()) { tr_emit(tr, "*"); return translate_unary(tr_advance(tr)); }
     return translate_postfix(tr);
 }
 
@@ -1359,6 +1392,7 @@ fn translate_primary(tr: Translator) -> Translator {
     if (k == TK_IDENTIFIER()) {
         let name = tr_lexeme(tr);
         let c: Translator = tr_advance(tr);
+        c = maybe_skip_turbofish(c);
 
         // Enum variant: Name::Variant → Name_Variant
         if (!tr_at_end(c) && tr_kind(c) == TK_COLON_COLON()) {
@@ -1373,11 +1407,6 @@ fn translate_primary(tr: Translator) -> Translator {
                 c = tr_advance(c);
             }
             return c;
-        }
-
-        // Turbofish: name<Type>( → skip generic params
-        if (!tr_at_end(c) && tr_kind(c) == TK_OP_LT()) {
-            c = skip_generic_params(c);
         }
 
         // Function call

@@ -18,7 +18,7 @@ typedef char* kr_str;
 typedef ssize_t kr_size;
 
 void kr_puts(kr_str s) { puts(s); }
-int64_t kr_strlen(kr_str s, ...) { return (int64_t)strlen(s); }
+int64_t kr_strlen(kr_str s) { return (int64_t)strlen(s); }
 int64_t kr_abs(int64_t x) { return x < 0 ? -x : x; }
 int kr_strcmp(kr_str a, kr_str b) { return strcmp(a, b); }
 static inline bool _kr_str_eq(kr_str a, kr_str b) { return strcmp(a,b)==0; }
@@ -299,7 +299,7 @@ int64_t kr_memcmp(void* a, void* b, int64_t n) { return (int64_t)memcmp(a,b,(siz
 void* kr_memcpy(void* dst, void* src, int64_t n) { return memcpy(dst,src,(size_t)n); }
 void* kr_memmove(void* dst, void* src, int64_t n) { return memmove(dst,src,(size_t)n); }
 void* kr_memset(void* p, int64_t c, int64_t n) { return memset(p,(int)c,(size_t)n); }
-int64_t kr_setenv(kr_str name, kr_str val, ...) { return (int64_t)setenv(name,val,1); }
+void kr_setenv(kr_str name, kr_str val, ...) { setenv(name,val,1); }
 void kr_unsetenv(kr_str name) { unsetenv(name); }
 kr_str kr_strstr(kr_str haystack, kr_str needle) { char* p=strstr(haystack,needle); return p?p:""; }
 kr_str kr_strchr(kr_str s, int64_t c) { char* p=strchr(s,(int)c); return p?p:""; }
@@ -342,8 +342,8 @@ int64_t kr_bytes_eq(void* a, void* b, int64_t n) { return memcmp(a,b,(size_t)n)=
 void kr_println(kr_str s) { printf("%s\n",s); }
 void* kr_mutex_new() { return malloc(64); }
 void kr_mutex_free(void* m) { free(m); }
-#define kr_channel_new(...) ((void*)0)
-#define kr_channel_create(...) ((void*)0)
+void* kr_channel_new() { return NULL; }
+void* kr_channel_create(int64_t cap) { (void)cap; return NULL; }
 void kr_channel_send(void* ch, int64_t val) { (void)ch; (void)val; }
 int64_t kr_channel_recv(void* ch) { (void)ch; return 0; }
 int64_t kr_channel_try_send(void* ch, int64_t val) { (void)ch; (void)val; return 0; }
@@ -361,68 +361,260 @@ void kr_executor_shutdown(void* e) { free(e); }
 void* kr_cancel_token_new() { return calloc(1,sizeof(int64_t)); }
 void kr_cancel_token_cancel(void* t) { *(int64_t*)t=1; }
 int64_t kr_cancel_token_is_cancelled(void* t) { return *(int64_t*)t; }
-void* kr_atomic_new(int64_t v) { int64_t* p=(int64_t*)malloc(sizeof(int64_t)); *p=v; return p; }
-void kr_atomic_store(void* p, int64_t v) { *(int64_t*)p=v; }
-int64_t kr_atomic_load(void* p) { return *(int64_t*)p; }
-int64_t kr_atomic_add(void* p, int64_t v) { int64_t old=*(int64_t*)p; *(int64_t*)p=old+v; return old; }
-int64_t kr_atomic_sub(void* p, int64_t v) { int64_t old=*(int64_t*)p; *(int64_t*)p=old-v; return old; }
-int64_t kr_atomic_cas(void* p, int64_t expected, int64_t desired) { if(*(int64_t*)p==expected){*(int64_t*)p=desired; return 1;} return 0; }
 
 /* Forward declarations */
-typedef struct Point Point;
-Point kr_make_point(int64_t x, int64_t y);
-int64_t kr_distance_sq(Point p);
-int64_t kr_count_to(int64_t n);
-kr_str kr_check_keyword(kr_str s);
-int64_t kr_main();
+typedef struct Translator Translator;
+typedef struct TranslateResult TranslateResult;
+Translator kr_new_translator(int64_t token_count, kr_str file, void* id, void* lex, void* o);
+bool kr_tr_at_end(Translator tr);
+int64_t kr_tr_kind(Translator tr);
+kr_str kr_tr_lexeme(Translator tr);
+int64_t kr_tr_line(Translator tr);
+int64_t kr_tr_col(Translator tr);
+Translator kr_tr_advance(Translator tr);
+Translator kr_tr_skip(Translator tr, int64_t n);
+Translator kr_tr_indent(Translator tr);
+Translator kr_tr_dedent(Translator tr);
+Translator kr_tr_reset_pos(Translator tr);
+Translator kr_tr_error(Translator tr, kr_str msg);
+void kr_tr_emit(Translator tr, kr_str s);
+void kr_tr_emit_indent(Translator tr);
+void kr_tr_emit_line(Translator tr, kr_str s);
+kr_str kr_type_to_c(int64_t kind, kr_str name);
+kr_str kr_type_to_c_value(int64_t kind);
+kr_str kr_sanitize_c_name(kr_str name);
+TranslateResult kr_translate(void* int_data, void* lexemes, int64_t token_count, kr_str file, Target target, void* out);
+Translator kr_emit_forward_decls(Translator tr);
+Translator kr_emit_fn_prototype(Translator tr);
+Translator kr_emit_impl_prototypes(Translator tr);
+Translator kr_skip_brace_block(Translator tr);
+Translator kr_translate_program(Translator tr);
+Translator kr_translate_top_level(Translator tr);
+Translator kr_translate_impl(Translator tr);
+Translator kr_translate_impl_fn(Translator tr, kr_str type_name);
+Translator kr_translate_type_alias(Translator tr);
+Translator kr_translate_const_decl(Translator tr);
+Translator kr_translate_enum(Translator tr);
+Translator kr_translate_struct(Translator tr);
+Translator kr_translate_fn(Translator tr);
+Translator kr_translate_block_body(Translator tr);
+Translator kr_skip_to_sync(Translator tr);
+Translator kr_translate_statement(Translator tr);
+Translator kr_translate_var_decl(Translator tr);
+Translator kr_translate_return(Translator tr);
+Translator kr_translate_if(Translator tr);
+Translator kr_translate_while(Translator tr);
+Translator kr_translate_for(Translator tr);
+Translator kr_translate_match(Translator tr);
+Translator kr_translate_match_simple(Translator tr);
+Translator kr_translate_for_in(Translator tr, kr_str vname);
+Translator kr_translate_expr_stmt(Translator tr);
+Translator kr_translate_expr(Translator tr);
+Translator kr_translate_or(Translator tr);
+Translator kr_translate_and(Translator tr);
+Translator kr_translate_bit_or(Translator tr);
+Translator kr_translate_bit_xor(Translator tr);
+Translator kr_translate_bit_and(Translator tr);
+int64_t kr_scan_eq_ahead(Translator tr);
+Translator kr_translate_equality(Translator tr);
+Translator kr_translate_comparison(Translator tr);
+Translator kr_translate_shift(Translator tr);
+Translator kr_translate_addition(Translator tr);
+Translator kr_translate_multiplication(Translator tr);
+Translator kr_translate_unary(Translator tr);
+Translator kr_translate_postfix(Translator tr);
+Translator kr_translate_primary(Translator tr);
+kr_str kr_join_output(void* out);
 
-struct Point {
-int64_t x;
-int64_t y;
+struct Translator {
+int64_t pos;
+int64_t count;
+int64_t indent;
+int64_t errors;
+kr_str file;
+void* int_data;
+void* lexemes;
+void* out;
 };
 
-Point kr_make_point(int64_t x, int64_t y) {
-    return (Point){.x = x, .y = y};
+struct TranslateResult {
+int64_t errors;
+bool success;
+};
+
+Translator kr_new_translator(int64_t token_count, kr_str file, void* id, void* lex, void* o) {
+    return (Translator){.pos = 0, .count = token_count, .indent = 0, .errors = 0, .file = file, .int_data = id, .lexemes = lex, .out = o};
 }
 
-int64_t kr_distance_sq(Point p) {
-    return p.x * p.x + p.y * p.y;
+bool kr_tr_at_end(Translator tr) {
+    return tr.pos >= tr.count;
 }
 
-int64_t kr_count_to(int64_t n) {
-    __auto_type sum = 0;
-    __auto_type i = 0;
-    while (i < n) {
-        sum = sum + i;
-        i = i + 1;
+int64_t kr_tr_kind(Translator tr) {
+    if (kr_tr_at_end(tr)) {
+        return kr_TK_EOF();
     }
-    return sum;
+    return kr_vec_int_get(tr.int_data, tr.pos * 3);
 }
 
-kr_str kr_check_keyword(kr_str s) {
-    if (_KR_EQ(s, "fn")) {
-        return "keyword:fn";
+kr_str kr_tr_lexeme(Translator tr) {
+    if (kr_tr_at_end(tr)) {
+        return "";
     }
-    if (_KR_EQ(s, "let")) {
-        return "keyword:let";
-    }
-    if (_KR_EQ(s, "if")) {
-        return "keyword:if";
-    }
-    return kr_str_concat("ident:", s);
+    return kr_vec_string_get(tr.lexemes, tr.pos);
 }
 
-int64_t kr_main() {
-    Point p = kr_make_point(3, 4);
-    kr_puts(kr_str_concat("dist_sq: ", kr_fmt_int(kr_distance_sq(p))));
-    kr_puts(kr_str_concat("sum(10): ", kr_fmt_int(kr_count_to(10))));
-    kr_puts(kr_check_keyword("fn"));
-    kr_puts(kr_check_keyword("let"));
-    kr_puts(kr_check_keyword("hello"));
-    for (int64_t i = 0; i < 3; i = i + 1) {
-        kr_puts(kr_str_concat("i=", kr_fmt_int(i)));
+int64_t kr_tr_line(Translator tr) {
+    if (kr_tr_at_end(tr)) {
+        return 0;
     }
-    return 0;
+    return kr_vec_int_get(tr.int_data, tr.pos * 3 + 1);
+}
+
+int64_t kr_tr_col(Translator tr) {
+    if (kr_tr_at_end(tr)) {
+        return 0;
+    }
+    return kr_vec_int_get(tr.int_data, tr.pos * 3 + 2);
+}
+
+Translator kr_tr_advance(Translator tr) {
+    return (Translator){.pos = tr.pos + 1, .count = tr.count, .indent = tr.indent, .errors = tr.errors, .file = tr.file, .int_data = tr.int_data, .lexemes = tr.lexemes, .out = tr.out};
+}
+
+Translator kr_tr_skip(Translator tr, int64_t n) {
+    return (Translator){.pos = tr.pos + n, .count = tr.count, .indent = tr.indent, .errors = tr.errors, .file = tr.file, .int_data = tr.int_data, .lexemes = tr.lexemes, .out = tr.out};
+}
+
+Translator kr_tr_indent(Translator tr) {
+    return (Translator){.pos = tr.pos, .count = tr.count, .indent = tr.indent + 1, .errors = tr.errors, .file = tr.file, .int_data = tr.int_data, .lexemes = tr.lexemes, .out = tr.out};
+}
+
+Translator kr_tr_dedent(Translator tr) {
+    __auto_type new_i = tr.indent - 1;
+    if (new_i) {
+        );
+        {;
+        kr_tr_emit_line(c, "else {");
+    }
+    else {
+        kr_tr_emit_indent(c);
+        kr_tr_emit(c, "{\n");
+    }
+    c = kr_tr_advance(c);
+    c = kr_tr_indent(c);
+    c = kr_translate_block_body(c);
+    c = kr_tr_dedent(c);
+    kr_tr_emit_line(c, "}");
+    arm_idx = arm_idx + 1;
+}
+
+Translator kr_translate_for_in(Translator tr, kr_str vname) {
+    Translator c = tr;
+    kr_tr_emit_indent(c);
+    kr_tr_emit(c, "for (");
+    __auto_type range_start = kr_tr_lexeme(c);
+    c = kr_tr_advance(c);
+    __auto_type inclusive = 0;
+    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_OP_DOT_DOT_EQ())) {
+        inclusive = 1;
+    }
+    c = kr_tr_advance(c);
+    __auto_type range_end = kr_tr_lexeme(c);
+    c = kr_tr_advance(c);
+    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_RPAREN())) {
+        c = kr_tr_advance(c);
+    }
+    __auto_type cmp = " < ";
+    if (_KR_EQ(inclusive, 1)) {
+        cmp = " <= ";
+    }
+    kr_tr_emit(c, kr_str_concat("int64_t ", kr_str_concat(vname, kr_str_concat(" = ", kr_str_concat(range_start, kr_str_concat("; ", kr_str_concat(vname, kr_str_concat(cmp, kr_str_concat(range_end, kr_str_concat("; ", kr_str_concat(vname, "++")))))))))));
+    kr_tr_emit(c, ") {\n");
+    c = kr_tr_advance(c);
+    c = kr_tr_indent(c);
+    c = kr_translate_block_body(c);
+    c = kr_tr_dedent(c);
+    kr_tr_emit_line(c, "}");
+    return c;
+}
+
+Translator kr_translate_expr_stmt(Translator tr) {
+    kr_tr_emit_indent(tr);
+    Translator c = kr_translate_expr(tr);
+    __auto_type k = kr_tr_kind(c);
+    if (_KR_EQ(k, kr_TK_OP_ASSIGN()) || _KR_EQ(k, kr_TK_OP_PLUS_ASSIGN()) || _KR_EQ(k, kr_TK_OP_MINUS_ASSIGN()) || _KR_EQ(k, kr_TK_OP_STAR_ASSIGN()) || _KR_EQ(k, kr_TK_OP_SLASH_ASSIGN()) || _KR_EQ(k, kr_TK_OP_PERCENT_ASSIGN())) {
+        __auto_type op_lex = kr_tr_lexeme(c);
+        kr_tr_emit(c, kr_str_concat(" ", kr_str_concat(op_lex, " ")));
+        c = kr_tr_advance(c);
+        c = kr_translate_expr(c);
+    }
+    kr_tr_emit(c, ";\n");
+    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_SEMICOLON())) {
+        c = kr_tr_advance(c);
+    }
+    return c;
+}
+
+Translator kr_translate_expr(Translator tr) {
+    return kr_translate_or(tr);
+}
+
+Translator kr_translate_or(Translator tr) {
+    Translator c = kr_translate_and(tr);
+    while (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_OP_OR())) {
+        kr_tr_emit(c, " || ");
+        c = kr_tr_advance(c);
+        c = kr_translate_and(c);
+    }
+    return c;
+}
+
+Translator kr_translate_and(Translator tr) {
+    Translator c = kr_translate_bit_or(tr);
+    while (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_OP_AND())) {
+        kr_tr_emit(c, " && ");
+        c = kr_tr_advance(c);
+        c = kr_translate_bit_or(c);
+    }
+    return c;
+}
+
+Translator kr_translate_bit_or(Translator tr) {
+    Translator c = kr_translate_bit_xor(tr);
+    while (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_OP_BIT_OR())) {
+        kr_tr_emit(c, " | ");
+        c = kr_tr_advance(c);
+        c = kr_translate_bit_xor(c);
+    }
+    return c;
+}
+
+Translator kr_translate_bit_xor(Translator tr) {
+    Translator c = kr_translate_bit_and(tr);
+    while (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_OP_BIT_XOR())) {
+        kr_tr_emit(c, " ^ ");
+        c = kr_tr_advance(c);
+        c = kr_translate_bit_and(c);
+    }
+    return c;
+}
+
+Translator kr_translate_bit_and(Translator tr) {
+    Translator c = kr_translate_equality(tr);
+    while (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_OP_BIT_AND())) {
+        kr_tr_emit(c, " & ");
+        c = kr_tr_advance(c);
+        c = kr_translate_equality(c);
+    }
+    return c;
+}
+
+int64_t kr_scan_eq_ahead(Translator tr) {
+    __auto_type i = tr.pos;
+    __auto_type depth = 0;
+    while (i) {
+    }
 }
 
 

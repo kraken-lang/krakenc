@@ -18,7 +18,7 @@ typedef char* kr_str;
 typedef ssize_t kr_size;
 
 void kr_puts(kr_str s) { puts(s); }
-int64_t kr_strlen(kr_str s) { return (int64_t)strlen(s); }
+int64_t kr_strlen(kr_str s, ...) { return (int64_t)strlen(s); }
 int64_t kr_abs(int64_t x) { return x < 0 ? -x : x; }
 int kr_strcmp(kr_str a, kr_str b) { return strcmp(a, b); }
 static inline bool _kr_str_eq(kr_str a, kr_str b) { return strcmp(a,b)==0; }
@@ -299,7 +299,7 @@ int64_t kr_memcmp(void* a, void* b, int64_t n) { return (int64_t)memcmp(a,b,(siz
 void* kr_memcpy(void* dst, void* src, int64_t n) { return memcpy(dst,src,(size_t)n); }
 void* kr_memmove(void* dst, void* src, int64_t n) { return memmove(dst,src,(size_t)n); }
 void* kr_memset(void* p, int64_t c, int64_t n) { return memset(p,(int)c,(size_t)n); }
-void kr_setenv(kr_str name, kr_str val, ...) { setenv(name,val,1); }
+int64_t kr_setenv(kr_str name, kr_str val, ...) { return (int64_t)setenv(name,val,1); }
 void kr_unsetenv(kr_str name) { unsetenv(name); }
 kr_str kr_strstr(kr_str haystack, kr_str needle) { char* p=strstr(haystack,needle); return p?p:""; }
 kr_str kr_strchr(kr_str s, int64_t c) { char* p=strchr(s,(int)c); return p?p:""; }
@@ -342,8 +342,8 @@ int64_t kr_bytes_eq(void* a, void* b, int64_t n) { return memcmp(a,b,(size_t)n)=
 void kr_println(kr_str s) { printf("%s\n",s); }
 void* kr_mutex_new() { return malloc(64); }
 void kr_mutex_free(void* m) { free(m); }
-void* kr_channel_new() { return NULL; }
-void* kr_channel_create(int64_t cap) { (void)cap; return NULL; }
+#define kr_channel_new(...) ((void*)0)
+#define kr_channel_create(...) ((void*)0)
 void kr_channel_send(void* ch, int64_t val) { (void)ch; (void)val; }
 int64_t kr_channel_recv(void* ch) { (void)ch; return 0; }
 int64_t kr_channel_try_send(void* ch, int64_t val) { (void)ch; (void)val; return 0; }
@@ -361,6 +361,12 @@ void kr_executor_shutdown(void* e) { free(e); }
 void* kr_cancel_token_new() { return calloc(1,sizeof(int64_t)); }
 void kr_cancel_token_cancel(void* t) { *(int64_t*)t=1; }
 int64_t kr_cancel_token_is_cancelled(void* t) { return *(int64_t*)t; }
+void* kr_atomic_new(int64_t v) { int64_t* p=(int64_t*)malloc(sizeof(int64_t)); *p=v; return p; }
+void kr_atomic_store(void* p, int64_t v) { *(int64_t*)p=v; }
+int64_t kr_atomic_load(void* p) { return *(int64_t*)p; }
+int64_t kr_atomic_add(void* p, int64_t v) { int64_t old=*(int64_t*)p; *(int64_t*)p=old+v; return old; }
+int64_t kr_atomic_sub(void* p, int64_t v) { int64_t old=*(int64_t*)p; *(int64_t*)p=old-v; return old; }
+int64_t kr_atomic_cas(void* p, int64_t expected, int64_t desired) { if(*(int64_t*)p==expected){*(int64_t*)p=desired; return 1;} return 0; }
 
 /* Forward declarations */
 typedef struct SourceLocation SourceLocation;
@@ -610,6 +616,7 @@ void kr_tr_emit_line(Translator tr, kr_str s);
 kr_str kr_type_to_c(int64_t kind, kr_str name);
 kr_str kr_type_to_c_value(int64_t kind);
 Translator kr_skip_generic_params(Translator tr);
+Translator kr_maybe_skip_turbofish(Translator tr);
 kr_str kr_sanitize_c_name(kr_str name);
 TranslateResult kr_translate(void* int_data, void* lexemes, int64_t token_count, kr_str file, Target target, void* out);
 Translator kr_emit_forward_decls(Translator tr);
@@ -1434,9 +1441,3702 @@ kr_str kr_token_kind_name(int64_t kind) {
         return "comment";
     }
     if (kind >= 100) {
-        if (kind) {
+        if (kind < 200) {
+            return "keyword";
         }
     }
+    if (kind >= 200) {
+        if (kind < 250) {
+            return "operator";
+        }
+    }
+    if (kind >= 250) {
+        if (kind < 300) {
+            return "delimiter";
+        }
+    }
+    return "unknown";
+}
+
+bool kr_is_keyword(int64_t kind) {
+    return kind >= 100 && kind < 200;
+}
+
+bool kr_is_operator(int64_t kind) {
+    return kind >= 200 && kind < 250;
+}
+
+bool kr_is_delimiter(int64_t kind) {
+    return kind >= 250 && kind < 300;
+}
+
+bool kr_is_type_keyword(int64_t kind) {
+    return kind >= 150 && kind < 180;
+}
+
+Lexer kr_new_lexer(kr_str source) {
+    return (Lexer){.source = source, .pos = 0, .line = 1, .column = 1, .length = kr_strlen(source)};
+}
+
+bool kr_is_alpha(int64_t c) {
+    return (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || _KR_EQ(c, 95);
+}
+
+bool kr_is_digit(int64_t c) {
+    return c >= 48 && c <= 57;
+}
+
+bool kr_is_alnum(int64_t c) {
+    return kr_is_alpha(c) || kr_is_digit(c);
+}
+
+bool kr_is_whitespace(int64_t c) {
+    return _KR_EQ(c, 32) || _KR_EQ(c, 9) || _KR_EQ(c, 13);
+}
+
+bool kr_at_end(Lexer lex) {
+    return lex.pos >= lex.length;
+}
+
+int64_t kr_peek_char(Lexer lex) {
+    if (kr_at_end(lex)) {
+        return 0;
+    }
+    return kr_str_char_at(lex.source, lex.pos);
+}
+
+int64_t kr_peek_next(Lexer lex) {
+    if (lex.pos + 1 >= lex.length) {
+        return 0;
+    }
+    return kr_str_char_at(lex.source, lex.pos + 1);
+}
+
+Lexer kr_advance(Lexer lex) {
+    __auto_type c = kr_peek_char(lex);
+    __auto_type new_pos = lex.pos + 1;
+    __auto_type new_line = lex.line;
+    __auto_type new_col = lex.column + 1;
+    if (_KR_EQ(c, 10)) {
+        new_line = lex.line + 1;
+        new_col = 1;
+    }
+    return (Lexer){.source = lex.source, .pos = new_pos, .line = new_line, .column = new_col, .length = lex.length};
+}
+
+Lexer kr_skip_whitespace(Lexer lex) {
+    Lexer current = lex;
+    while (!kr_at_end(current)) {
+        __auto_type c = kr_peek_char(current);
+        if (kr_is_whitespace(c) || _KR_EQ(c, 10)) {
+            current = kr_advance(current);
+        }
+        else {
+            if (_KR_EQ(c, 47)) {
+                __auto_type next = kr_peek_next(current);
+                if (_KR_EQ(next, 47)) {
+                    current = kr_advance(current);
+                    current = kr_advance(current);
+                    while (!kr_at_end(current) && _KR_NEQ(kr_peek_char(current), 10)) {
+                        current = kr_advance(current);
+                    }
+                }
+                else {
+                    if (_KR_EQ(next, 42)) {
+                        current = kr_advance(current);
+                        current = kr_advance(current);
+                        while (!kr_at_end(current)) {
+                            if (_KR_EQ(kr_peek_char(current), 42) && _KR_EQ(kr_peek_next(current), 47)) {
+                                current = kr_advance(current);
+                                current = kr_advance(current);
+                                break;
+                            }
+                            current = kr_advance(current);
+                        }
+                    }
+                    else {
+                        return current;
+                    }
+                }
+            }
+            else {
+                return current;
+            }
+        }
+    }
+    return current;
+}
+
+Token kr_read_identifier(Lexer lex) {
+    __auto_type start = lex.pos;
+    __auto_type start_col = lex.column;
+    Lexer current = lex;
+    while (!kr_at_end(current) && kr_is_alnum(kr_peek_char(current))) {
+        current = kr_advance(current);
+    }
+    __auto_type text = kr_str_slice(lex.source, start, current.pos);
+    __auto_type kw = kr_lookup_keyword(text);
+    if (_KR_NEQ(kw, 0)) {
+        return kr_new_token(kw, text, lex.line, start_col);
+    }
+    return kr_new_token(kr_TK_IDENTIFIER(), text, lex.line, start_col);
+}
+
+Token kr_read_number(Lexer lex) {
+    __auto_type start = lex.pos;
+    __auto_type start_col = lex.column;
+    Lexer current = lex;
+    __auto_type is_float = 0;
+    while (!kr_at_end(current) && kr_is_digit(kr_peek_char(current))) {
+        current = kr_advance(current);
+    }
+    if (!kr_at_end(current) && _KR_EQ(kr_peek_char(current), 46)) {
+        if (kr_is_digit(kr_peek_next(current))) {
+            is_float = 1;
+            current = kr_advance(current);
+            while (!kr_at_end(current) && kr_is_digit(kr_peek_char(current))) {
+                current = kr_advance(current);
+            }
+        }
+    }
+    __auto_type text = kr_str_slice(lex.source, start, current.pos);
+    if (_KR_EQ(is_float, 1)) {
+        return kr_new_token(kr_TK_FLOAT_LIT(), text, lex.line, start_col);
+    }
+    return kr_new_token(kr_TK_INT_LIT(), text, lex.line, start_col);
+}
+
+Token kr_read_string(Lexer lex) {
+    __auto_type start_col = lex.column;
+    Lexer current = kr_advance(lex);
+    __auto_type start = current.pos;
+    while (!kr_at_end(current) && _KR_NEQ(kr_peek_char(current), 34)) {
+        if (_KR_EQ(kr_peek_char(current), 92)) {
+            current = kr_advance(current);
+        }
+        current = kr_advance(current);
+    }
+    __auto_type text = kr_str_slice(lex.source, start, current.pos);
+    if (!kr_at_end(current)) {
+        current = kr_advance(current);
+    }
+    return kr_new_token(kr_TK_STRING_LIT(), text, lex.line, start_col);
+}
+
+Token kr_read_operator(Lexer lex) {
+    __auto_type c = kr_peek_char(lex);
+    __auto_type next = kr_peek_next(lex);
+    __auto_type col = lex.column;
+    __auto_type ln = lex.line;
+    if (_KR_EQ(c, 61) && _KR_EQ(next, 61)) {
+        return kr_new_token(kr_TK_OP_EQ(), "==", ln, col);
+    }
+    if (_KR_EQ(c, 33) && _KR_EQ(next, 61)) {
+        return kr_new_token(kr_TK_OP_NEQ(), "!=", ln, col);
+    }
+    if (_KR_EQ(c, 60) && _KR_EQ(next, 61)) {
+        return kr_new_token(kr_TK_OP_LTE(), "<=", ln, col);
+    }
+    if (_KR_EQ(c, 62) && _KR_EQ(next, 61)) {
+        return kr_new_token(kr_TK_OP_GTE(), ">=", ln, col);
+    }
+    if (_KR_EQ(c, 38) && _KR_EQ(next, 38)) {
+        return kr_new_token(kr_TK_OP_AND(), "&&", ln, col);
+    }
+    if (_KR_EQ(c, 124) && _KR_EQ(next, 124)) {
+        return kr_new_token(kr_TK_OP_OR(), "||", ln, col);
+    }
+    if (_KR_EQ(c, 60) && _KR_EQ(next, 60)) {
+        return kr_new_token(kr_TK_OP_LSHIFT(), "<<", ln, col);
+    }
+    if (_KR_EQ(c, 62) && _KR_EQ(next, 62)) {
+        return kr_new_token(kr_TK_OP_RSHIFT(), ">>", ln, col);
+    }
+    if (_KR_EQ(c, 43) && _KR_EQ(next, 61)) {
+        return kr_new_token(kr_TK_OP_PLUS_ASSIGN(), "+=", ln, col);
+    }
+    if (_KR_EQ(c, 45) && _KR_EQ(next, 61)) {
+        return kr_new_token(kr_TK_OP_MINUS_ASSIGN(), "-=", ln, col);
+    }
+    if (_KR_EQ(c, 42) && _KR_EQ(next, 61)) {
+        return kr_new_token(kr_TK_OP_STAR_ASSIGN(), "*=", ln, col);
+    }
+    if (_KR_EQ(c, 47) && _KR_EQ(next, 61)) {
+        return kr_new_token(kr_TK_OP_SLASH_ASSIGN(), "/=", ln, col);
+    }
+    if (_KR_EQ(c, 37) && _KR_EQ(next, 61)) {
+        return kr_new_token(kr_TK_OP_PERCENT_ASSIGN(), "%=", ln, col);
+    }
+    if (_KR_EQ(c, 45) && _KR_EQ(next, 62)) {
+        return kr_new_token(kr_TK_ARROW(), "->", ln, col);
+    }
+    if (_KR_EQ(c, 58) && _KR_EQ(next, 58)) {
+        return kr_new_token(kr_TK_COLON_COLON(), "::", ln, col);
+    }
+    if (_KR_EQ(c, 46) && _KR_EQ(next, 46)) {
+        return kr_new_token(kr_TK_OP_DOT_DOT(), "..", ln, col);
+    }
+    if (_KR_EQ(c, 43)) {
+        return kr_new_token(kr_TK_OP_PLUS(), "+", ln, col);
+    }
+    if (_KR_EQ(c, 45)) {
+        return kr_new_token(kr_TK_OP_MINUS(), "-", ln, col);
+    }
+    if (_KR_EQ(c, 42)) {
+        return kr_new_token(kr_TK_OP_STAR(), "*", ln, col);
+    }
+    if (_KR_EQ(c, 47)) {
+        return kr_new_token(kr_TK_OP_SLASH(), "/", ln, col);
+    }
+    if (_KR_EQ(c, 37)) {
+        return kr_new_token(kr_TK_OP_PERCENT(), "%", ln, col);
+    }
+    if (_KR_EQ(c, 60)) {
+        return kr_new_token(kr_TK_OP_LT(), "<", ln, col);
+    }
+    if (_KR_EQ(c, 62)) {
+        return kr_new_token(kr_TK_OP_GT(), ">", ln, col);
+    }
+    if (_KR_EQ(c, 33)) {
+        return kr_new_token(kr_TK_OP_NOT(), "!", ln, col);
+    }
+    if (_KR_EQ(c, 38)) {
+        return kr_new_token(kr_TK_OP_BIT_AND(), "&", ln, col);
+    }
+    if (_KR_EQ(c, 124)) {
+        return kr_new_token(kr_TK_OP_BIT_OR(), "|", ln, col);
+    }
+    if (_KR_EQ(c, 94)) {
+        return kr_new_token(kr_TK_OP_BIT_XOR(), "^", ln, col);
+    }
+    if (_KR_EQ(c, 126)) {
+        return kr_new_token(kr_TK_OP_BIT_NOT(), "~", ln, col);
+    }
+    if (_KR_EQ(c, 61)) {
+        return kr_new_token(kr_TK_OP_ASSIGN(), "=", ln, col);
+    }
+    if (_KR_EQ(c, 40)) {
+        return kr_new_token(kr_TK_LPAREN(), "(", ln, col);
+    }
+    if (_KR_EQ(c, 41)) {
+        return kr_new_token(kr_TK_RPAREN(), ")", ln, col);
+    }
+    if (_KR_EQ(c, 123)) {
+        return kr_new_token(kr_TK_LBRACE(), "{", ln, col);
+    }
+    if (_KR_EQ(c, 125)) {
+        return kr_new_token(kr_TK_RBRACE(), "}", ln, col);
+    }
+    if (_KR_EQ(c, 91)) {
+        return kr_new_token(kr_TK_LBRACKET(), "[", ln, col);
+    }
+    if (_KR_EQ(c, 93)) {
+        return kr_new_token(kr_TK_RBRACKET(), "]", ln, col);
+    }
+    if (_KR_EQ(c, 59)) {
+        return kr_new_token(kr_TK_SEMICOLON(), ";", ln, col);
+    }
+    if (_KR_EQ(c, 44)) {
+        return kr_new_token(kr_TK_COMMA(), ",", ln, col);
+    }
+    if (_KR_EQ(c, 46)) {
+        return kr_new_token(kr_TK_DOT(), ".", ln, col);
+    }
+    if (_KR_EQ(c, 58)) {
+        return kr_new_token(kr_TK_COLON(), ":", ln, col);
+    }
+    if (_KR_EQ(c, 63)) {
+        return kr_new_token(kr_TK_QUESTION(), "?", ln, col);
+    }
+    if (_KR_EQ(c, 35)) {
+        return kr_new_token(kr_TK_HASH(), "#", ln, col);
+    }
+    return kr_new_token(kr_TK_EOF(), "", ln, col);
+}
+
+int64_t kr_token_advance_count(Token tok) {
+    return kr_strlen(tok.lexeme);
+}
+
+void kr_push_token(void* kinds, void* lexemes, void* lines, void* cols, Token tok) {
+    kr_vec_int_push(kinds, tok.kind);
+    kr_vec_string_push(lexemes, tok.lexeme);
+    kr_vec_int_push(lines, tok.line);
+    kr_vec_int_push(cols, tok.column);
+}
+
+Lexer kr_advance_n(Lexer lex, int64_t n) {
+    Lexer current = lex;
+    __auto_type i = 0;
+    while (i < n) {
+        current = kr_advance(current);
+        i = i + 1;
+    }
+    return current;
+}
+
+int64_t kr_tokenize(kr_str source, void* int_data, void* lexemes) {
+    Lexer lex = kr_new_lexer(source);
+    __auto_type count = 0;
+    while (!kr_at_end(lex)) {
+        lex = kr_skip_whitespace(lex);
+        if (kr_at_end(lex)) {
+            break;
+        }
+        __auto_type c = kr_peek_char(lex);
+        if (kr_is_alpha(c)) {
+            Token tok = kr_read_identifier(lex);
+            kr_vec_int_push(int_data, tok.kind);
+            kr_vec_int_push(int_data, tok.line);
+            kr_vec_int_push(int_data, tok.column);
+            kr_vec_string_push(lexemes, tok.lexeme);
+            lex = kr_advance_n(lex, kr_strlen(tok.lexeme));
+            count = count + 1;
+        }
+        else {
+            if (kr_is_digit(c)) {
+                Token tok = kr_read_number(lex);
+                kr_vec_int_push(int_data, tok.kind);
+                kr_vec_int_push(int_data, tok.line);
+                kr_vec_int_push(int_data, tok.column);
+                kr_vec_string_push(lexemes, tok.lexeme);
+                lex = kr_advance_n(lex, kr_strlen(tok.lexeme));
+                count = count + 1;
+            }
+            else {
+                if (_KR_EQ(c, 34)) {
+                    Token tok = kr_read_string(lex);
+                    kr_vec_int_push(int_data, tok.kind);
+                    kr_vec_int_push(int_data, tok.line);
+                    kr_vec_int_push(int_data, tok.column);
+                    kr_vec_string_push(lexemes, tok.lexeme);
+                    lex = kr_advance_n(lex, kr_strlen(tok.lexeme) + 2);
+                    count = count + 1;
+                }
+                else {
+                    Token tok = kr_read_operator(lex);
+                    kr_vec_int_push(int_data, tok.kind);
+                    kr_vec_int_push(int_data, tok.line);
+                    kr_vec_int_push(int_data, tok.column);
+                    kr_vec_string_push(lexemes, tok.lexeme);
+                    __auto_type adv = kr_strlen(tok.lexeme);
+                    if (_KR_EQ(adv, 0)) {
+                        adv = 1;
+                    }
+                    lex = kr_advance_n(lex, adv);
+                    count = count + 1;
+                }
+            }
+        }
+    }
+    kr_vec_int_push(int_data, kr_TK_EOF());
+    kr_vec_int_push(int_data, lex.line);
+    kr_vec_int_push(int_data, lex.column);
+    kr_vec_string_push(lexemes, "");
+    count = count + 1;
+    return count;
+}
+
+int64_t kr_NODE_MODULE() {
+    return 1;
+}
+
+int64_t kr_NODE_IMPORT() {
+    return 2;
+}
+
+int64_t kr_NODE_VAR_DECL() {
+    return 3;
+}
+
+int64_t kr_NODE_CONST_DECL() {
+    return 4;
+}
+
+int64_t kr_NODE_FN_DECL() {
+    return 5;
+}
+
+int64_t kr_NODE_STRUCT_DECL() {
+    return 6;
+}
+
+int64_t kr_NODE_ENUM_DECL() {
+    return 7;
+}
+
+int64_t kr_NODE_TRAIT_DECL() {
+    return 8;
+}
+
+int64_t kr_NODE_IMPL_BLOCK() {
+    return 9;
+}
+
+int64_t kr_NODE_TRAIT_IMPL() {
+    return 10;
+}
+
+int64_t kr_NODE_TYPE_ALIAS() {
+    return 11;
+}
+
+int64_t kr_NODE_RETURN() {
+    return 12;
+}
+
+int64_t kr_NODE_IF() {
+    return 13;
+}
+
+int64_t kr_NODE_WHILE() {
+    return 14;
+}
+
+int64_t kr_NODE_FOR() {
+    return 15;
+}
+
+int64_t kr_NODE_FOR_IN() {
+    return 16;
+}
+
+int64_t kr_NODE_MATCH() {
+    return 17;
+}
+
+int64_t kr_NODE_BREAK() {
+    return 18;
+}
+
+int64_t kr_NODE_CONTINUE() {
+    return 19;
+}
+
+int64_t kr_NODE_DEFER() {
+    return 20;
+}
+
+int64_t kr_NODE_UNSAFE() {
+    return 21;
+}
+
+int64_t kr_NODE_EXPRESSION() {
+    return 22;
+}
+
+int64_t kr_NODE_CLASS_DECL() {
+    return 23;
+}
+
+int64_t kr_NODE_INTERFACE_DECL() {
+    return 24;
+}
+
+int64_t kr_NODE_UNION_DECL() {
+    return 25;
+}
+
+int64_t kr_NODE_MACRO_DECL() {
+    return 26;
+}
+
+int64_t kr_NODE_STATIC_ASSERT() {
+    return 27;
+}
+
+int64_t kr_NODE_ATTRIBUTE() {
+    return 28;
+}
+
+int64_t kr_EXPR_INT_LIT() {
+    return 50;
+}
+
+int64_t kr_EXPR_FLOAT_LIT() {
+    return 51;
+}
+
+int64_t kr_EXPR_STRING_LIT() {
+    return 52;
+}
+
+int64_t kr_EXPR_BOOL_LIT() {
+    return 53;
+}
+
+int64_t kr_EXPR_NULL_LIT() {
+    return 54;
+}
+
+int64_t kr_EXPR_IDENTIFIER() {
+    return 55;
+}
+
+int64_t kr_EXPR_BINARY() {
+    return 56;
+}
+
+int64_t kr_EXPR_UNARY() {
+    return 57;
+}
+
+int64_t kr_EXPR_CALL() {
+    return 58;
+}
+
+int64_t kr_EXPR_ARRAY() {
+    return 59;
+}
+
+int64_t kr_EXPR_INDEX() {
+    return 60;
+}
+
+int64_t kr_EXPR_MEMBER() {
+    return 61;
+}
+
+int64_t kr_EXPR_STRUCT_LIT() {
+    return 62;
+}
+
+int64_t kr_EXPR_ASSIGNMENT() {
+    return 63;
+}
+
+int64_t kr_EXPR_REFERENCE() {
+    return 64;
+}
+
+int64_t kr_EXPR_DEREF() {
+    return 65;
+}
+
+int64_t kr_EXPR_ENUM_VARIANT() {
+    return 66;
+}
+
+int64_t kr_EXPR_TUPLE() {
+    return 67;
+}
+
+int64_t kr_EXPR_RANGE() {
+    return 68;
+}
+
+int64_t kr_EXPR_CLOSURE() {
+    return 69;
+}
+
+int64_t kr_EXPR_AWAIT() {
+    return 70;
+}
+
+int64_t kr_EXPR_SPAWN() {
+    return 71;
+}
+
+int64_t kr_EXPR_TRY() {
+    return 72;
+}
+
+int64_t kr_EXPR_SLICE() {
+    return 73;
+}
+
+int64_t kr_TYPE_INT() {
+    return 100;
+}
+
+int64_t kr_TYPE_FLOAT() {
+    return 101;
+}
+
+int64_t kr_TYPE_BOOL() {
+    return 102;
+}
+
+int64_t kr_TYPE_STRING() {
+    return 103;
+}
+
+int64_t kr_TYPE_STR() {
+    return 104;
+}
+
+int64_t kr_TYPE_BYTES() {
+    return 105;
+}
+
+int64_t kr_TYPE_VOID() {
+    return 106;
+}
+
+int64_t kr_TYPE_CUSTOM() {
+    return 107;
+}
+
+int64_t kr_TYPE_ARRAY() {
+    return 108;
+}
+
+int64_t kr_TYPE_REFERENCE() {
+    return 109;
+}
+
+int64_t kr_TYPE_POINTER() {
+    return 110;
+}
+
+int64_t kr_TYPE_TUPLE() {
+    return 111;
+}
+
+int64_t kr_TYPE_FUNCTION() {
+    return 112;
+}
+
+int64_t kr_TYPE_GENERIC() {
+    return 113;
+}
+
+int64_t kr_PAT_LITERAL() {
+    return 150;
+}
+
+int64_t kr_PAT_IDENTIFIER() {
+    return 151;
+}
+
+int64_t kr_PAT_WILDCARD() {
+    return 152;
+}
+
+int64_t kr_PAT_ENUM_VARIANT() {
+    return 153;
+}
+
+int64_t kr_PAT_TUPLE() {
+    return 154;
+}
+
+int64_t kr_PAT_RANGE() {
+    return 155;
+}
+
+int64_t kr_PAT_OR() {
+    return 156;
+}
+
+int64_t kr_PAT_STRUCT() {
+    return 157;
+}
+
+int64_t kr_FLAG_PUBLIC() {
+    return 1;
+}
+
+int64_t kr_FLAG_MUTABLE() {
+    return 2;
+}
+
+int64_t kr_FLAG_ASYNC() {
+    return 4;
+}
+
+int64_t kr_FLAG_UNSAFE() {
+    return 8;
+}
+
+int64_t kr_FLAG_VARIADIC() {
+    return 16;
+}
+
+int64_t kr_FLAG_REFERENCE() {
+    return 32;
+}
+
+bool kr_has_flag(AstNode node, int64_t flag) {
+    return _KR_NEQ((node.flags & flag), 0);
+}
+
+AstNode kr_new_node(int64_t kind, kr_str name, int64_t line, int64_t column) {
+    return (AstNode){.kind = kind, .name = name, .str_value = "", .int_value = 0, .line = line, .column = column, .flags = 0, .parent_id = -1, .first_child = -1, .next_sibling = -1};
+}
+
+AstArena kr_new_arena() {
+    return (AstArena){.count = 0};
+}
+
+AstArena kr_arena_add(AstArena arena) {
+    return (AstArena){.count = arena.count + 1};
+}
+
+TypeNode kr_new_type(int64_t kind, kr_str name) {
+    return (TypeNode){.kind = kind, .name = name, .is_mutable = false};
+}
+
+TypeNode kr_type_from_keyword(int64_t kw) {
+    if (_KR_EQ(kw, 150)) {
+        return kr_new_type(kr_TYPE_INT(), "int");
+    }
+    if (_KR_EQ(kw, 151)) {
+        return kr_new_type(kr_TYPE_FLOAT(), "float");
+    }
+    if (_KR_EQ(kw, 152)) {
+        return kr_new_type(kr_TYPE_BOOL(), "bool");
+    }
+    if (_KR_EQ(kw, 153)) {
+        return kr_new_type(kr_TYPE_STRING(), "string");
+    }
+    if (_KR_EQ(kw, 154)) {
+        return kr_new_type(kr_TYPE_STR(), "str");
+    }
+    if (_KR_EQ(kw, 155)) {
+        return kr_new_type(kr_TYPE_BYTES(), "bytes");
+    }
+    if (_KR_EQ(kw, 156)) {
+        return kr_new_type(kr_TYPE_VOID(), "void");
+    }
+    return kr_new_type(kr_TYPE_CUSTOM(), "unknown");
+}
+
+Parameter kr_new_param(kr_str name, int64_t type_kind, kr_str type_name) {
+    return (Parameter){.name = name, .type_kind = type_kind, .type_name = type_name, .is_reference = false};
+}
+
+Field kr_new_field(kr_str name, int64_t type_kind, kr_str type_name) {
+    return (Field){.name = name, .type_kind = type_kind, .type_name = type_name, .is_public = false};
+}
+
+MatchArm kr_new_match_arm(int64_t pattern_kind, kr_str pattern_value) {
+    return (MatchArm){.pattern_kind = pattern_kind, .pattern_value = pattern_value, .body_start = 0, .body_count = 0};
+}
+
+kr_str kr_node_kind_name(int64_t kind) {
+    if (_KR_EQ(kind, kr_NODE_MODULE())) {
+        return "module";
+    }
+    if (_KR_EQ(kind, kr_NODE_IMPORT())) {
+        return "import";
+    }
+    if (_KR_EQ(kind, kr_NODE_VAR_DECL())) {
+        return "variable_declaration";
+    }
+    if (_KR_EQ(kind, kr_NODE_CONST_DECL())) {
+        return "constant_declaration";
+    }
+    if (_KR_EQ(kind, kr_NODE_FN_DECL())) {
+        return "function_declaration";
+    }
+    if (_KR_EQ(kind, kr_NODE_STRUCT_DECL())) {
+        return "struct_declaration";
+    }
+    if (_KR_EQ(kind, kr_NODE_ENUM_DECL())) {
+        return "enum_declaration";
+    }
+    if (_KR_EQ(kind, kr_NODE_TRAIT_DECL())) {
+        return "trait_declaration";
+    }
+    if (_KR_EQ(kind, kr_NODE_IMPL_BLOCK())) {
+        return "impl_block";
+    }
+    if (_KR_EQ(kind, kr_NODE_TRAIT_IMPL())) {
+        return "trait_impl";
+    }
+    if (_KR_EQ(kind, kr_NODE_TYPE_ALIAS())) {
+        return "type_alias";
+    }
+    if (_KR_EQ(kind, kr_NODE_RETURN())) {
+        return "return";
+    }
+    if (_KR_EQ(kind, kr_NODE_IF())) {
+        return "if";
+    }
+    if (_KR_EQ(kind, kr_NODE_WHILE())) {
+        return "while";
+    }
+    if (_KR_EQ(kind, kr_NODE_FOR())) {
+        return "for";
+    }
+    if (_KR_EQ(kind, kr_NODE_FOR_IN())) {
+        return "for_in";
+    }
+    if (_KR_EQ(kind, kr_NODE_MATCH())) {
+        return "match";
+    }
+    if (_KR_EQ(kind, kr_NODE_BREAK())) {
+        return "break";
+    }
+    if (_KR_EQ(kind, kr_NODE_CONTINUE())) {
+        return "continue";
+    }
+    if (_KR_EQ(kind, kr_NODE_DEFER())) {
+        return "defer";
+    }
+    if (_KR_EQ(kind, kr_NODE_EXPRESSION())) {
+        return "expression";
+    }
+    if (_KR_EQ(kind, kr_EXPR_INT_LIT())) {
+        return "int_literal";
+    }
+    if (_KR_EQ(kind, kr_EXPR_FLOAT_LIT())) {
+        return "float_literal";
+    }
+    if (_KR_EQ(kind, kr_EXPR_STRING_LIT())) {
+        return "string_literal";
+    }
+    if (_KR_EQ(kind, kr_EXPR_BOOL_LIT())) {
+        return "bool_literal";
+    }
+    if (_KR_EQ(kind, kr_EXPR_IDENTIFIER())) {
+        return "identifier";
+    }
+    if (_KR_EQ(kind, kr_EXPR_BINARY())) {
+        return "binary";
+    }
+    if (_KR_EQ(kind, kr_EXPR_UNARY())) {
+        return "unary";
+    }
+    if (_KR_EQ(kind, kr_EXPR_CALL())) {
+        return "call";
+    }
+    if (_KR_EQ(kind, kr_EXPR_ARRAY())) {
+        return "array";
+    }
+    if (_KR_EQ(kind, kr_EXPR_INDEX())) {
+        return "index";
+    }
+    if (_KR_EQ(kind, kr_EXPR_MEMBER())) {
+        return "member_access";
+    }
+    if (_KR_EQ(kind, kr_EXPR_STRUCT_LIT())) {
+        return "struct_literal";
+    }
+    if (_KR_EQ(kind, kr_EXPR_ASSIGNMENT())) {
+        return "assignment";
+    }
+    return "unknown";
+}
+
+Translator kr_new_translator(int64_t token_count, kr_str file, void* id, void* lex, void* o) {
+    return (Translator){.pos = 0, .count = token_count, .indent = 0, .errors = 0, .file = file, .int_data = id, .lexemes = lex, .out = o};
+}
+
+bool kr_tr_at_end(Translator tr) {
+    return tr.pos >= tr.count;
+}
+
+int64_t kr_tr_kind(Translator tr) {
+    if (kr_tr_at_end(tr)) {
+        return kr_TK_EOF();
+    }
+    return kr_vec_int_get(tr.int_data, tr.pos * 3);
+}
+
+kr_str kr_tr_lexeme(Translator tr) {
+    if (kr_tr_at_end(tr)) {
+        return "";
+    }
+    return kr_vec_string_get(tr.lexemes, tr.pos);
+}
+
+int64_t kr_tr_line(Translator tr) {
+    if (kr_tr_at_end(tr)) {
+        return 0;
+    }
+    return kr_vec_int_get(tr.int_data, tr.pos * 3 + 1);
+}
+
+int64_t kr_tr_col(Translator tr) {
+    if (kr_tr_at_end(tr)) {
+        return 0;
+    }
+    return kr_vec_int_get(tr.int_data, tr.pos * 3 + 2);
+}
+
+Translator kr_tr_advance(Translator tr) {
+    return (Translator){.pos = tr.pos + 1, .count = tr.count, .indent = tr.indent, .errors = tr.errors, .file = tr.file, .int_data = tr.int_data, .lexemes = tr.lexemes, .out = tr.out};
+}
+
+Translator kr_tr_skip(Translator tr, int64_t n) {
+    return (Translator){.pos = tr.pos + n, .count = tr.count, .indent = tr.indent, .errors = tr.errors, .file = tr.file, .int_data = tr.int_data, .lexemes = tr.lexemes, .out = tr.out};
+}
+
+Translator kr_tr_indent(Translator tr) {
+    return (Translator){.pos = tr.pos, .count = tr.count, .indent = tr.indent + 1, .errors = tr.errors, .file = tr.file, .int_data = tr.int_data, .lexemes = tr.lexemes, .out = tr.out};
+}
+
+Translator kr_tr_dedent(Translator tr) {
+    __auto_type new_i = tr.indent - 1;
+    if (new_i < 0) {
+        new_i = 0;
+    }
+    return (Translator){.pos = tr.pos, .count = tr.count, .indent = new_i, .errors = tr.errors, .file = tr.file, .int_data = tr.int_data, .lexemes = tr.lexemes, .out = tr.out};
+}
+
+Translator kr_tr_reset_pos(Translator tr) {
+    return (Translator){.pos = 0, .count = tr.count, .indent = 0, .errors = tr.errors, .file = tr.file, .int_data = tr.int_data, .lexemes = tr.lexemes, .out = tr.out};
+}
+
+Translator kr_tr_error(Translator tr, kr_str msg) {
+    __auto_type ln = kr_tr_line(tr);
+    __auto_type co = kr_tr_col(tr);
+    __auto_type d = kr_new_error(kr_KRA_UNEXPECTED_TOKEN(), msg, tr.file, ln, co);
+    kr_print_diagnostic(d);
+    return (Translator){.pos = tr.pos, .count = tr.count, .indent = tr.indent, .errors = tr.errors + 1, .file = tr.file, .int_data = tr.int_data, .lexemes = tr.lexemes, .out = tr.out};
+}
+
+void kr_tr_emit(Translator tr, kr_str s) {
+    kr_vec_string_push(tr.out, s);
+}
+
+void kr_tr_emit_indent(Translator tr) {
+    __auto_type i = 0;
+    while (i < tr.indent) {
+        kr_vec_string_push(tr.out, "    ");
+        i = i + 1;
+    }
+}
+
+void kr_tr_emit_line(Translator tr, kr_str s) {
+    kr_tr_emit_indent(tr);
+    kr_vec_string_push(tr.out, s);
+    kr_vec_string_push(tr.out, "\n");
+}
+
+kr_str kr_type_to_c(int64_t kind, kr_str name) {
+    if (_KR_EQ(kind, kr_TK_KW_INT())) {
+        return "int64_t";
+    }
+    if (_KR_EQ(kind, kr_TK_KW_FLOAT())) {
+        return "double";
+    }
+    if (_KR_EQ(kind, kr_TK_KW_BOOL())) {
+        return "bool";
+    }
+    if (_KR_EQ(kind, kr_TK_KW_STRING())) {
+        return "kr_str";
+    }
+    if (_KR_EQ(kind, kr_TK_KW_STR())) {
+        return "kr_str";
+    }
+    if (_KR_EQ(kind, kr_TK_KW_BYTES())) {
+        return "uint8_t*";
+    }
+    if (_KR_EQ(kind, kr_TK_KW_VOID())) {
+        return "void";
+    }
+    if (_KR_EQ(kind, kr_TK_IDENTIFIER())) {
+        if (_KR_EQ(kr_strcmp(name, "T"), 0) || _KR_EQ(kr_strcmp(name, "U"), 0) || _KR_EQ(kr_strcmp(name, "V"), 0) || _KR_EQ(kr_strcmp(name, "K"), 0) || _KR_EQ(kr_strcmp(name, "R"), 0)) {
+            return "int64_t";
+        }
+        if (_KR_EQ(kr_strcmp(name, "Self"), 0)) {
+            return "void*";
+        }
+        if (_KR_EQ(kr_strcmp(name, "VecInt"), 0)) {
+            return "void*";
+        }
+        if (_KR_EQ(kr_strcmp(name, "VecString"), 0)) {
+            return "void*";
+        }
+        if (_KR_EQ(kr_strcmp(name, "VecBytes"), 0)) {
+            return "void*";
+        }
+        if (_KR_EQ(kr_strcmp(name, "MapStringInt"), 0)) {
+            return "void*";
+        }
+        if (_KR_EQ(kr_strcmp(name, "MapStringString"), 0)) {
+            return "void*";
+        }
+        return name;
+    }
+    return "void*";
+}
+
+kr_str kr_type_to_c_value(int64_t kind) {
+    if (_KR_EQ(kind, kr_TK_KW_INT())) {
+        return "0";
+    }
+    if (_KR_EQ(kind, kr_TK_KW_FLOAT())) {
+        return "0.0";
+    }
+    if (_KR_EQ(kind, kr_TK_KW_BOOL())) {
+        return "false";
+    }
+    if (_KR_EQ(kind, kr_TK_KW_STRING())) {
+        return "\"\"";
+    }
+    if (_KR_EQ(kind, kr_TK_KW_STR())) {
+        return "\"\"";
+    }
+    return "NULL";
+}
+
+Translator kr_skip_generic_params(Translator tr) {
+    Translator c = tr;
+    if (kr_tr_at_end(c) || _KR_NEQ(kr_tr_kind(c), kr_TK_OP_LT())) {
+        return c;
+    }
+    c = kr_tr_advance(c);
+    __auto_type depth = 1;
+    while (!kr_tr_at_end(c) && depth > 0) {
+        if (_KR_EQ(kr_tr_kind(c), kr_TK_OP_LT())) {
+            depth = depth + 1;
+        }
+        if (_KR_EQ(kr_tr_kind(c), kr_TK_OP_GT())) {
+            depth = depth - 1;
+        }
+        c = kr_tr_advance(c);
+    }
+    return c;
+}
+
+Translator kr_maybe_skip_turbofish(Translator tr) {
+    Translator c = tr;
+    if (kr_tr_at_end(c) || _KR_NEQ(kr_tr_kind(c), kr_TK_OP_LT())) {
+        return c;
+    }
+    __auto_type i = c.pos;
+    __auto_type depth = 0;
+    while (i < c.count) {
+        __auto_type k = kr_vec_int_get(c.int_data, i * 3);
+        if (_KR_EQ(k, kr_TK_OP_LT())) {
+            depth = depth + 1;
+        }
+        if (_KR_EQ(k, kr_TK_OP_GT())) {
+            depth = depth - 1;
+            if (_KR_EQ(depth, 0)) {
+                __auto_type j = i + 1;
+                if (j < c.count) {
+                    __auto_type k2 = kr_vec_int_get(c.int_data, j * 3);
+                    if (_KR_EQ(k2, kr_TK_LPAREN()) || _KR_EQ(k2, kr_TK_LBRACE())) {
+                        return kr_skip_generic_params(c);
+                    }
+                }
+                return c;
+            }
+        }
+        i = i + 1;
+    }
+    return c;
+}
+
+kr_str kr_sanitize_c_name(kr_str name) {
+    if (_KR_EQ(name, "int")) {
+        return "int_val";
+    }
+    if (_KR_EQ(name, "float")) {
+        return "float_val";
+    }
+    if (_KR_EQ(name, "double")) {
+        return "double_val";
+    }
+    if (_KR_EQ(name, "char")) {
+        return "char_val";
+    }
+    if (_KR_EQ(name, "void")) {
+        return "void_val";
+    }
+    if (_KR_EQ(name, "long")) {
+        return "long_val";
+    }
+    if (_KR_EQ(name, "short")) {
+        return "short_val";
+    }
+    if (_KR_EQ(name, "auto")) {
+        return "auto_val";
+    }
+    if (_KR_EQ(name, "register")) {
+        return "register_val";
+    }
+    if (_KR_EQ(name, "extern")) {
+        return "extern_val";
+    }
+    if (_KR_EQ(name, "static")) {
+        return "static_val";
+    }
+    if (_KR_EQ(name, "const")) {
+        return "const_val";
+    }
+    if (_KR_EQ(name, "signed")) {
+        return "signed_val";
+    }
+    if (_KR_EQ(name, "unsigned")) {
+        return "unsigned_val";
+    }
+    return name;
+}
+
+TranslateResult kr_translate(void* int_data, void* lexemes, int64_t token_count, kr_str file, Target target, void* out) {
+    Translator tr = kr_new_translator(token_count, file, int_data, lexemes, out);
+    kr_tr_emit(tr, kr_emit_c_preamble(target));
+    kr_tr_emit(tr, "\n");
+    tr = kr_emit_forward_decls(tr);
+    tr = kr_tr_reset_pos(tr);
+    tr = kr_translate_program(tr);
+    kr_tr_emit(tr, "\nint main(int argc, char* argv[]) {\n");
+    kr_tr_emit(tr, "    kr_main();\n");
+    kr_tr_emit(tr, "    return 0;\n");
+    kr_tr_emit(tr, "}\n");
+    return (TranslateResult){.errors = tr.errors, .success = _KR_EQ(tr.errors, 0)};
+}
+
+Translator kr_emit_forward_decls(Translator tr) {
+    Translator c = tr;
+    kr_tr_emit_line(c, "/* Forward declarations */");
+    while (!kr_tr_at_end(c)) {
+        __auto_type k = kr_tr_kind(c);
+        if (_KR_EQ(k, kr_TK_KW_PUB())) {
+            c = kr_tr_advance(c);
+            __auto_type k2 = kr_tr_kind(c);
+            if (_KR_EQ(k2, kr_TK_KW_STRUCT())) {
+                c = kr_tr_advance(c);
+                __auto_type name = kr_tr_lexeme(c);
+                kr_tr_emit_line(c, kr_str_concat(kr_str_concat("typedef struct ", name), kr_str_concat(" ", kr_str_concat(name, ";"))));
+                c = kr_tr_advance(c);
+                c = kr_skip_generic_params(c);
+            }
+            else {
+                if (_KR_EQ(k2, kr_TK_KW_ENUM())) {
+                    c = kr_tr_advance(c);
+                    __auto_type name = kr_tr_lexeme(c);
+                    kr_tr_emit_line(c, kr_str_concat("typedef int64_t ", kr_str_concat(name, ";")));
+                    c = kr_tr_advance(c);
+                    c = kr_skip_generic_params(c);
+                }
+                else {
+                    c = kr_tr_advance(c);
+                }
+            }
+        }
+        else {
+            if (_KR_EQ(k, kr_TK_KW_STRUCT())) {
+                c = kr_tr_advance(c);
+                __auto_type name = kr_tr_lexeme(c);
+                kr_tr_emit_line(c, kr_str_concat(kr_str_concat("typedef struct ", name), kr_str_concat(" ", kr_str_concat(name, ";"))));
+                c = kr_tr_advance(c);
+                c = kr_skip_generic_params(c);
+            }
+            else {
+                if (_KR_EQ(k, kr_TK_KW_ENUM())) {
+                    c = kr_tr_advance(c);
+                    __auto_type name = kr_tr_lexeme(c);
+                    kr_tr_emit_line(c, kr_str_concat("typedef int64_t ", kr_str_concat(name, ";")));
+                    c = kr_tr_advance(c);
+                    c = kr_skip_generic_params(c);
+                }
+                else {
+                    c = kr_tr_advance(c);
+                }
+            }
+        }
+    }
+    c = kr_tr_reset_pos(c);
+    while (!kr_tr_at_end(c)) {
+        __auto_type k = kr_tr_kind(c);
+        if (_KR_EQ(k, kr_TK_KW_PUB())) {
+            c = kr_tr_advance(c);
+            __auto_type k2 = kr_tr_kind(c);
+            if (_KR_EQ(k2, kr_TK_KW_FN())) {
+                c = kr_emit_fn_prototype(c);
+            }
+            else {
+                if (_KR_EQ(k2, kr_TK_KW_IMPL())) {
+                    c = kr_emit_impl_prototypes(c);
+                }
+                else {
+                    if (_KR_EQ(k2, kr_TK_KW_TRAIT()) || _KR_EQ(k2, kr_TK_KW_STRUCT()) || _KR_EQ(k2, kr_TK_KW_ENUM())) {
+                        c = kr_tr_advance(c);
+                        c = kr_skip_brace_block(kr_tr_advance(c));
+                    }
+                    else {
+                        if (_KR_EQ(k2, kr_TK_KW_TYPE()) || _KR_EQ(k2, kr_TK_KW_CONST())) {
+                            while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_SEMICOLON())) {
+                                c = kr_tr_advance(c);
+                            }
+                            if (!kr_tr_at_end(c)) {
+                                c = kr_tr_advance(c);
+                            }
+                        }
+                        else {
+                            c = kr_tr_advance(c);
+                        }
+                    }
+                }
+            }
+        }
+        else {
+            if (_KR_EQ(k, kr_TK_KW_FN())) {
+                c = kr_emit_fn_prototype(c);
+            }
+            else {
+                if (_KR_EQ(k, kr_TK_KW_IMPL())) {
+                    c = kr_emit_impl_prototypes(c);
+                }
+                else {
+                    if (_KR_EQ(k, kr_TK_KW_TRAIT()) || _KR_EQ(k, kr_TK_KW_STRUCT()) || _KR_EQ(k, kr_TK_KW_ENUM())) {
+                        c = kr_tr_advance(c);
+                        c = kr_skip_brace_block(kr_tr_advance(c));
+                    }
+                    else {
+                        if (_KR_EQ(k, kr_TK_KW_TYPE()) || _KR_EQ(k, kr_TK_KW_CONST())) {
+                            while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_SEMICOLON())) {
+                                c = kr_tr_advance(c);
+                            }
+                            if (!kr_tr_at_end(c)) {
+                                c = kr_tr_advance(c);
+                            }
+                        }
+                        else {
+                            c = kr_tr_advance(c);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    kr_tr_emit(c, "\n");
+    return c;
+}
+
+Translator kr_emit_fn_prototype(Translator tr) {
+    Translator c = kr_tr_advance(tr);
+    __auto_type fname = kr_tr_lexeme(c);
+    __auto_type mangled_check = kr_str_concat("kr_", fname);
+    if (_KR_EQ(fname, "test_section") || _KR_EQ(fname, "test_pass") || _KR_EQ(fname, "test_fail") || _KR_EQ(fname, "test_skip") || _KR_EQ(fname, "assert") || _KR_EQ(fname, "assert_eq") || _KR_EQ(fname, "assert_ne")) {
+        kr_tr_emit_line(c, kr_str_concat("#undef ", mangled_check));
+    }
+    c = kr_tr_advance(c);
+    c = kr_skip_generic_params(c);
+    c = kr_tr_advance(c);
+    __auto_type params = "";
+    __auto_type first = 1;
+    while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RPAREN())) {
+        if (_KR_EQ(first, 0)) {
+            params = kr_str_concat(params, ", ");
+            c = kr_tr_advance(c);
+        }
+        __auto_type pname = kr_tr_lexeme(c);
+        c = kr_tr_advance(c);
+        c = kr_tr_advance(c);
+        __auto_type ptype_kind = kr_tr_kind(c);
+        __auto_type ptype_name = kr_tr_lexeme(c);
+        c = kr_tr_advance(c);
+        c = kr_skip_generic_params(c);
+        params = kr_str_concat(params, kr_str_concat(kr_type_to_c(ptype_kind, ptype_name), kr_str_concat(" ", kr_sanitize_c_name(pname))));
+        first = 0;
+    }
+    c = kr_tr_advance(c);
+    __auto_type ret_c = "void";
+    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_ARROW())) {
+        c = kr_tr_advance(c);
+        __auto_type rk = kr_tr_kind(c);
+        __auto_type rn = kr_tr_lexeme(c);
+        ret_c = kr_type_to_c(rk, rn);
+        c = kr_tr_advance(c);
+        c = kr_skip_generic_params(c);
+    }
+    __auto_type mangled = kr_str_concat("kr_", fname);
+    kr_tr_emit_line(c, kr_str_concat(ret_c, kr_str_concat(" ", kr_str_concat(mangled, kr_str_concat("(", kr_str_concat(params, ");"))))));
+    c = kr_skip_brace_block(c);
+    return c;
+}
+
+Translator kr_emit_impl_prototypes(Translator tr) {
+    Translator c = kr_tr_advance(tr);
+    __auto_type type_name = kr_tr_lexeme(c);
+    c = kr_tr_advance(c);
+    c = kr_tr_advance(c);
+    while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RBRACE())) {
+        if (_KR_EQ(kr_tr_kind(c), kr_TK_KW_PUB())) {
+            c = kr_tr_advance(c);
+        }
+        if (_KR_EQ(kr_tr_kind(c), kr_TK_KW_FN())) {
+            c = kr_tr_advance(c);
+            __auto_type fname = kr_tr_lexeme(c);
+            c = kr_tr_advance(c);
+            c = kr_tr_advance(c);
+            __auto_type params = "";
+            __auto_type first = 1;
+            while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RPAREN())) {
+                if (_KR_EQ(first, 0)) {
+                    params = kr_str_concat(params, ", ");
+                    c = kr_tr_advance(c);
+                }
+                __auto_type pname = kr_tr_lexeme(c);
+                if (_KR_EQ(pname, "self")) {
+                    c = kr_tr_advance(c);
+                    params = kr_str_concat(params, kr_str_concat(type_name, " self"));
+                }
+                else {
+                    c = kr_tr_advance(c);
+                    c = kr_tr_advance(c);
+                    __auto_type pk = kr_tr_kind(c);
+                    __auto_type pn = kr_tr_lexeme(c);
+                    c = kr_tr_advance(c);
+                    params = kr_str_concat(params, kr_str_concat(kr_type_to_c(pk, pn), kr_str_concat(" ", kr_sanitize_c_name(pname))));
+                }
+                first = 0;
+            }
+            c = kr_tr_advance(c);
+            __auto_type ret_c = "void";
+            if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_ARROW())) {
+                c = kr_tr_advance(c);
+                __auto_type rk = kr_tr_kind(c);
+                __auto_type rn = kr_tr_lexeme(c);
+                ret_c = kr_type_to_c(rk, rn);
+                c = kr_tr_advance(c);
+            }
+            __auto_type mangled = kr_str_concat("kr_", kr_str_concat(type_name, kr_str_concat("_", fname)));
+            kr_tr_emit_line(c, kr_str_concat(ret_c, kr_str_concat(" ", kr_str_concat(mangled, kr_str_concat("(", kr_str_concat(params, ");"))))));
+            c = kr_skip_brace_block(c);
+        }
+        else {
+            c = kr_tr_advance(c);
+        }
+    }
+    if (!kr_tr_at_end(c)) {
+        c = kr_tr_advance(c);
+    }
+    return c;
+}
+
+Translator kr_skip_brace_block(Translator tr) {
+    Translator c = tr;
+    if (kr_tr_at_end(c) || _KR_NEQ(kr_tr_kind(c), kr_TK_LBRACE())) {
+        return c;
+    }
+    c = kr_tr_advance(c);
+    __auto_type depth = 1;
+    while (!kr_tr_at_end(c) && depth > 0) {
+        __auto_type k = kr_tr_kind(c);
+        if (_KR_EQ(k, kr_TK_LBRACE())) {
+            depth = depth + 1;
+        }
+        if (_KR_EQ(k, kr_TK_RBRACE())) {
+            depth = depth - 1;
+        }
+        c = kr_tr_advance(c);
+    }
+    return c;
+}
+
+Translator kr_translate_program(Translator tr) {
+    Translator c = tr;
+    while (!kr_tr_at_end(c)) {
+        __auto_type k = kr_tr_kind(c);
+        if (_KR_EQ(k, kr_TK_EOF())) {
+            break;
+        }
+        if (_KR_EQ(k, kr_TK_KW_MODULE()) || _KR_EQ(k, kr_TK_KW_IMPORT())) {
+            c = kr_tr_advance(c);
+            c = kr_tr_advance(c);
+            if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_SEMICOLON())) {
+                c = kr_tr_advance(c);
+            }
+        }
+        else {
+            if (_KR_EQ(k, kr_TK_KW_PUB())) {
+                c = kr_tr_advance(c);
+                __auto_type k2 = kr_tr_kind(c);
+                if (_KR_EQ(k2, kr_TK_KW_STRUCT())) {
+                    c = kr_translate_struct(c);
+                }
+                else {
+                    if (_KR_EQ(k2, kr_TK_KW_ENUM())) {
+                        c = kr_translate_enum(c);
+                    }
+                    else {
+                        if (_KR_EQ(k2, kr_TK_KW_TYPE())) {
+                            c = kr_translate_type_alias(c);
+                        }
+                        else {
+                            if (_KR_EQ(k2, kr_TK_KW_CONST())) {
+                                c = kr_translate_const_decl(c);
+                            }
+                            else {
+                                if (_KR_EQ(k2, kr_TK_KW_TRAIT())) {
+                                    c = kr_tr_advance(c);
+                                    c = kr_skip_brace_block(kr_tr_advance(c));
+                                }
+                                else {
+                                    c = kr_tr_advance(c);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            else {
+                if (_KR_EQ(k, kr_TK_KW_STRUCT())) {
+                    c = kr_translate_struct(c);
+                }
+                else {
+                    if (_KR_EQ(k, kr_TK_KW_ENUM())) {
+                        c = kr_translate_enum(c);
+                    }
+                    else {
+                        if (_KR_EQ(k, kr_TK_KW_TYPE())) {
+                            c = kr_translate_type_alias(c);
+                        }
+                        else {
+                            if (_KR_EQ(k, kr_TK_KW_CONST())) {
+                                c = kr_translate_const_decl(c);
+                            }
+                            else {
+                                if (_KR_EQ(k, kr_TK_KW_TRAIT())) {
+                                    c = kr_tr_advance(c);
+                                    c = kr_skip_brace_block(kr_tr_advance(c));
+                                }
+                                else {
+                                    c = kr_tr_advance(c);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    c = kr_tr_reset_pos(c);
+    while (!kr_tr_at_end(c)) {
+        __auto_type k = kr_tr_kind(c);
+        if (_KR_EQ(k, kr_TK_EOF())) {
+            break;
+        }
+        if (_KR_EQ(k, kr_TK_KW_MODULE()) || _KR_EQ(k, kr_TK_KW_IMPORT())) {
+            c = kr_tr_advance(c);
+            c = kr_tr_advance(c);
+            if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_SEMICOLON())) {
+                c = kr_tr_advance(c);
+            }
+        }
+        else {
+            if (_KR_EQ(k, kr_TK_KW_PUB())) {
+                c = kr_tr_advance(c);
+                __auto_type k2 = kr_tr_kind(c);
+                if (_KR_EQ(k2, kr_TK_KW_FN())) {
+                    c = kr_translate_fn(c);
+                }
+                else {
+                    if (_KR_EQ(k2, kr_TK_KW_STRUCT()) || _KR_EQ(k2, kr_TK_KW_ENUM()) || _KR_EQ(k2, kr_TK_KW_TRAIT())) {
+                        c = kr_skip_brace_block(kr_tr_advance(kr_tr_advance(c)));
+                    }
+                    else {
+                        if (_KR_EQ(k2, kr_TK_KW_IMPL())) {
+                            c = kr_translate_impl(c);
+                        }
+                        else {
+                            if (_KR_EQ(k2, kr_TK_KW_TYPE()) || _KR_EQ(k2, kr_TK_KW_CONST())) {
+                                while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_SEMICOLON())) {
+                                    c = kr_tr_advance(c);
+                                }
+                                if (!kr_tr_at_end(c)) {
+                                    c = kr_tr_advance(c);
+                                }
+                            }
+                            else {
+                                c = kr_tr_advance(c);
+                            }
+                        }
+                    }
+                }
+            }
+            else {
+                if (_KR_EQ(k, kr_TK_KW_FN())) {
+                    c = kr_translate_fn(c);
+                }
+                else {
+                    if (_KR_EQ(k, kr_TK_KW_STRUCT()) || _KR_EQ(k, kr_TK_KW_ENUM()) || _KR_EQ(k, kr_TK_KW_TRAIT())) {
+                        c = kr_skip_brace_block(kr_tr_advance(kr_tr_advance(c)));
+                    }
+                    else {
+                        if (_KR_EQ(k, kr_TK_KW_IMPL())) {
+                            c = kr_translate_impl(c);
+                        }
+                        else {
+                            if (_KR_EQ(k, kr_TK_KW_TYPE()) || _KR_EQ(k, kr_TK_KW_CONST())) {
+                                while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_SEMICOLON())) {
+                                    c = kr_tr_advance(c);
+                                }
+                                if (!kr_tr_at_end(c)) {
+                                    c = kr_tr_advance(c);
+                                }
+                            }
+                            else {
+                                c = kr_tr_advance(c);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return c;
+}
+
+Translator kr_translate_top_level(Translator tr) {
+    __auto_type k = kr_tr_kind(tr);
+    if (_KR_EQ(k, kr_TK_KW_FN())) {
+        return kr_translate_fn(tr);
+    }
+    if (_KR_EQ(k, kr_TK_KW_STRUCT())) {
+        return kr_translate_struct(tr);
+    }
+    return kr_tr_advance(tr);
+}
+
+Translator kr_translate_impl(Translator tr) {
+    Translator c = kr_tr_advance(tr);
+    __auto_type type_name = kr_tr_lexeme(c);
+    c = kr_tr_advance(c);
+    c = kr_tr_advance(c);
+    while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RBRACE())) {
+        if (_KR_EQ(kr_tr_kind(c), kr_TK_KW_PUB())) {
+            c = kr_tr_advance(c);
+        }
+        if (_KR_EQ(kr_tr_kind(c), kr_TK_KW_FN())) {
+            c = kr_translate_impl_fn(c, type_name);
+        }
+        else {
+            c = kr_tr_advance(c);
+        }
+    }
+    if (!kr_tr_at_end(c)) {
+        c = kr_tr_advance(c);
+    }
+    return c;
+}
+
+Translator kr_translate_impl_fn(Translator tr, kr_str type_name) {
+    Translator c = kr_tr_advance(tr);
+    __auto_type fname = kr_tr_lexeme(c);
+    c = kr_tr_advance(c);
+    c = kr_tr_advance(c);
+    __auto_type params = "";
+    __auto_type first = 1;
+    while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RPAREN())) {
+        if (_KR_EQ(first, 0)) {
+            params = kr_str_concat(params, ", ");
+            c = kr_tr_advance(c);
+        }
+        __auto_type pname = kr_tr_lexeme(c);
+        if (_KR_EQ(pname, "self")) {
+            c = kr_tr_advance(c);
+            params = kr_str_concat(params, kr_str_concat(type_name, " self"));
+        }
+        else {
+            c = kr_tr_advance(c);
+            c = kr_tr_advance(c);
+            __auto_type ptype_kind = kr_tr_kind(c);
+            __auto_type ptype_name = kr_tr_lexeme(c);
+            c = kr_tr_advance(c);
+            params = kr_str_concat(params, kr_str_concat(kr_type_to_c(ptype_kind, ptype_name), kr_str_concat(" ", kr_sanitize_c_name(pname))));
+        }
+        first = 0;
+    }
+    c = kr_tr_advance(c);
+    __auto_type ret_c = "void";
+    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_ARROW())) {
+        c = kr_tr_advance(c);
+        __auto_type rk = kr_tr_kind(c);
+        __auto_type rn = kr_tr_lexeme(c);
+        ret_c = kr_type_to_c(rk, rn);
+        c = kr_tr_advance(c);
+    }
+    __auto_type mangled = kr_str_concat("kr_", kr_str_concat(type_name, kr_str_concat("_", fname)));
+    kr_tr_emit(c, kr_str_concat(ret_c, kr_str_concat(" ", kr_str_concat(mangled, kr_str_concat("(", kr_str_concat(params, ") {\n"))))));
+    c = kr_tr_advance(c);
+    c = kr_tr_indent(c);
+    c = kr_translate_block_body(c);
+    c = kr_tr_dedent(c);
+    kr_tr_emit_line(c, "}");
+    kr_tr_emit(c, "\n");
+    return c;
+}
+
+Translator kr_translate_type_alias(Translator tr) {
+    Translator c = kr_tr_advance(tr);
+    __auto_type alias_name = kr_tr_lexeme(c);
+    c = kr_tr_advance(c);
+    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_OP_ASSIGN())) {
+        c = kr_tr_advance(c);
+    }
+    __auto_type tk = kr_tr_kind(c);
+    __auto_type tn = kr_tr_lexeme(c);
+    __auto_type c_type = kr_type_to_c(tk, tn);
+    c = kr_tr_advance(c);
+    kr_tr_emit_line(c, kr_str_concat("typedef ", kr_str_concat(c_type, kr_str_concat(" ", kr_str_concat(alias_name, ";")))));
+    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_SEMICOLON())) {
+        c = kr_tr_advance(c);
+    }
+    return c;
+}
+
+Translator kr_translate_const_decl(Translator tr) {
+    Translator c = kr_tr_advance(tr);
+    __auto_type cname = kr_tr_lexeme(c);
+    c = kr_tr_advance(c);
+    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_COLON())) {
+        c = kr_tr_advance(c);
+        c = kr_tr_advance(c);
+    }
+    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_OP_ASSIGN())) {
+        c = kr_tr_advance(c);
+    }
+    __auto_type val = "";
+    while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_SEMICOLON())) {
+        val = kr_str_concat(val, kr_tr_lexeme(c));
+        c = kr_tr_advance(c);
+    }
+    kr_tr_emit_line(c, kr_str_concat("#define kr_", kr_str_concat(cname, kr_str_concat(" ", val))));
+    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_SEMICOLON())) {
+        c = kr_tr_advance(c);
+    }
+    return c;
+}
+
+Translator kr_translate_enum(Translator tr) {
+    Translator c = kr_tr_advance(tr);
+    __auto_type name = kr_tr_lexeme(c);
+    c = kr_tr_advance(c);
+    c = kr_tr_advance(c);
+    kr_tr_emit_line(c, kr_str_concat("typedef int64_t ", kr_str_concat(name, ";")));
+    __auto_type idx = 0;
+    while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RBRACE())) {
+        __auto_type variant = kr_tr_lexeme(c);
+        c = kr_tr_advance(c);
+        kr_tr_emit_line(c, kr_str_concat("#define ", kr_str_concat(name, kr_str_concat("_", kr_str_concat(variant, kr_str_concat(" ", kr_fmt_int(idx)))))));
+        idx = idx + 1;
+        if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_LPAREN())) {
+            c = kr_tr_advance(c);
+            while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RPAREN())) {
+                c = kr_tr_advance(c);
+            }
+            c = kr_tr_advance(c);
+        }
+        if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_COMMA())) {
+            c = kr_tr_advance(c);
+        }
+    }
+    if (!kr_tr_at_end(c)) {
+        c = kr_tr_advance(c);
+    }
+    kr_tr_emit(c, "\n");
+    return c;
+}
+
+Translator kr_translate_struct(Translator tr) {
+    Translator c = kr_tr_advance(tr);
+    __auto_type name = kr_tr_lexeme(c);
+    c = kr_tr_advance(c);
+    c = kr_skip_generic_params(c);
+    c = kr_tr_advance(c);
+    kr_tr_emit_line(c, kr_str_concat("struct ", kr_str_concat(name, " {")));
+    while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RBRACE())) {
+        __auto_type fname = kr_tr_lexeme(c);
+        c = kr_tr_advance(c);
+        c = kr_tr_advance(c);
+        __auto_type fk = kr_tr_kind(c);
+        __auto_type fn_name = kr_tr_lexeme(c);
+        c = kr_tr_advance(c);
+        c = kr_skip_generic_params(c);
+        kr_tr_emit_line(c, kr_str_concat(kr_type_to_c(fk, fn_name), kr_str_concat(" ", kr_str_concat(fname, ";"))));
+        if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_SEMICOLON())) {
+            c = kr_tr_advance(c);
+        }
+    }
+    c = kr_tr_advance(c);
+    kr_tr_emit_line(c, "};");
+    kr_tr_emit(c, "\n");
+    return c;
+}
+
+Translator kr_translate_fn(Translator tr) {
+    Translator c = kr_tr_advance(tr);
+    __auto_type fname = kr_tr_lexeme(c);
+    c = kr_tr_advance(c);
+    c = kr_skip_generic_params(c);
+    c = kr_tr_advance(c);
+    __auto_type params = "";
+    __auto_type first = 1;
+    while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RPAREN())) {
+        if (_KR_EQ(first, 0)) {
+            params = kr_str_concat(params, ", ");
+            c = kr_tr_advance(c);
+        }
+        __auto_type pname = kr_tr_lexeme(c);
+        c = kr_tr_advance(c);
+        c = kr_tr_advance(c);
+        __auto_type pk = kr_tr_kind(c);
+        __auto_type pn = kr_tr_lexeme(c);
+        c = kr_tr_advance(c);
+        c = kr_skip_generic_params(c);
+        params = kr_str_concat(params, kr_str_concat(kr_type_to_c(pk, pn), kr_str_concat(" ", kr_sanitize_c_name(pname))));
+        first = 0;
+    }
+    c = kr_tr_advance(c);
+    __auto_type ret_c = "void";
+    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_ARROW())) {
+        c = kr_tr_advance(c);
+        __auto_type rk = kr_tr_kind(c);
+        __auto_type rn = kr_tr_lexeme(c);
+        ret_c = kr_type_to_c(rk, rn);
+        c = kr_tr_advance(c);
+        c = kr_skip_generic_params(c);
+    }
+    __auto_type mangled = kr_str_concat("kr_", fname);
+    kr_tr_emit(c, kr_str_concat(ret_c, kr_str_concat(" ", kr_str_concat(mangled, kr_str_concat("(", kr_str_concat(params, ") {\n"))))));
+    c = kr_tr_advance(c);
+    c = kr_tr_indent(c);
+    c = kr_translate_block_body(c);
+    c = kr_tr_dedent(c);
+    kr_tr_emit_line(c, "}");
+    kr_tr_emit(c, "\n");
+    return c;
+}
+
+Translator kr_translate_block_body(Translator tr) {
+    Translator c = tr;
+    while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RBRACE())) {
+        c = kr_translate_statement(c);
+    }
+    if (!kr_tr_at_end(c)) {
+        c = kr_tr_advance(c);
+    }
+    return c;
+}
+
+Translator kr_skip_to_sync(Translator tr) {
+    Translator c = tr;
+    while (!kr_tr_at_end(c)) {
+        __auto_type k = kr_tr_kind(c);
+        if (_KR_EQ(k, kr_TK_SEMICOLON())) {
+            return kr_tr_advance(c);
+        }
+        if (_KR_EQ(k, kr_TK_RBRACE())) {
+            return c;
+        }
+        c = kr_tr_advance(c);
+    }
+    return c;
+}
+
+Translator kr_translate_statement(Translator tr) {
+    __auto_type k = kr_tr_kind(tr);
+    if (_KR_EQ(k, kr_TK_SEMICOLON())) {
+        return kr_tr_advance(tr);
+    }
+    if (_KR_EQ(k, kr_TK_KW_LET()) || _KR_EQ(k, kr_TK_KW_CONST())) {
+        return kr_translate_var_decl(tr);
+    }
+    if (_KR_EQ(k, kr_TK_KW_RETURN())) {
+        return kr_translate_return(tr);
+    }
+    if (_KR_EQ(k, kr_TK_KW_IF())) {
+        return kr_translate_if(tr);
+    }
+    if (_KR_EQ(k, kr_TK_KW_WHILE())) {
+        return kr_translate_while(tr);
+    }
+    if (_KR_EQ(k, kr_TK_KW_FOR())) {
+        return kr_translate_for(tr);
+    }
+    if (_KR_EQ(k, kr_TK_KW_MATCH())) {
+        return kr_translate_match(tr);
+    }
+    if (_KR_EQ(k, kr_TK_KW_BREAK())) {
+        kr_tr_emit_line(tr, "break;");
+        Translator c = kr_tr_advance(tr);
+        if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_SEMICOLON())) {
+            c = kr_tr_advance(c);
+        }
+        return c;
+    }
+    if (_KR_EQ(k, kr_TK_KW_CONTINUE())) {
+        kr_tr_emit_line(tr, "continue;");
+        Translator c = kr_tr_advance(tr);
+        if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_SEMICOLON())) {
+            c = kr_tr_advance(c);
+        }
+        return c;
+    }
+    if (_KR_EQ(k, kr_TK_EOF()) || _KR_EQ(k, kr_TK_RBRACE())) {
+        return tr;
+    }
+    return kr_translate_expr_stmt(tr);
+}
+
+Translator kr_translate_var_decl(Translator tr) {
+    Translator c = kr_tr_advance(tr);
+    __auto_type vname = kr_tr_lexeme(c);
+    c = kr_tr_advance(c);
+    __auto_type has_type = 0;
+    __auto_type c_type = "__auto_type";
+    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_COLON())) {
+        c = kr_tr_advance(c);
+        __auto_type tk = kr_tr_kind(c);
+        __auto_type tn = kr_tr_lexeme(c);
+        c_type = kr_type_to_c(tk, tn);
+        c = kr_tr_advance(c);
+        has_type = 1;
+    }
+    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_OP_ASSIGN())) {
+        c = kr_tr_advance(c);
+        kr_tr_emit_indent(c);
+        kr_tr_emit(c, kr_str_concat(c_type, kr_str_concat(" ", kr_str_concat(vname, " = "))));
+        c = kr_translate_expr(c);
+        kr_tr_emit(c, ";\n");
+    }
+    else {
+        if (_KR_EQ(has_type, 0)) {
+            c_type = "int64_t";
+        }
+        kr_tr_emit_line(c, kr_str_concat(c_type, kr_str_concat(" ", kr_str_concat(vname, ";"))));
+    }
+    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_SEMICOLON())) {
+        c = kr_tr_advance(c);
+    }
+    return c;
+}
+
+Translator kr_translate_return(Translator tr) {
+    Translator c = kr_tr_advance(tr);
+    if (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_SEMICOLON())) {
+        kr_tr_emit_indent(c);
+        kr_tr_emit(c, "return ");
+        c = kr_translate_expr(c);
+        kr_tr_emit(c, ";\n");
+    }
+    else {
+        kr_tr_emit_line(c, "return;");
+    }
+    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_SEMICOLON())) {
+        c = kr_tr_advance(c);
+    }
+    return c;
+}
+
+Translator kr_translate_if(Translator tr) {
+    Translator c = kr_tr_advance(tr);
+    kr_tr_emit_indent(c);
+    kr_tr_emit(c, "if (");
+    __auto_type had_paren = 0;
+    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_LPAREN())) {
+        c = kr_tr_advance(c);
+        had_paren = 1;
+    }
+    c = kr_translate_expr(c);
+    if (_KR_EQ(had_paren, 1) && !kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_RPAREN())) {
+        c = kr_tr_advance(c);
+    }
+    kr_tr_emit(c, ") {\n");
+    c = kr_tr_advance(c);
+    c = kr_tr_indent(c);
+    c = kr_translate_block_body(c);
+    c = kr_tr_dedent(c);
+    kr_tr_emit_line(c, "}");
+    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_KW_ELSE())) {
+        c = kr_tr_advance(c);
+        if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_KW_IF())) {
+            kr_tr_emit_indent(c);
+            kr_tr_emit(c, "else ");
+            c = kr_translate_if(c);
+            return c;
+        }
+        kr_tr_emit_line(c, "else {");
+        c = kr_tr_advance(c);
+        c = kr_tr_indent(c);
+        c = kr_translate_block_body(c);
+        c = kr_tr_dedent(c);
+        kr_tr_emit_line(c, "}");
+    }
+    return c;
+}
+
+Translator kr_translate_while(Translator tr) {
+    Translator c = kr_tr_advance(tr);
+    kr_tr_emit_indent(c);
+    kr_tr_emit(c, "while (");
+    __auto_type had_paren = 0;
+    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_LPAREN())) {
+        c = kr_tr_advance(c);
+        had_paren = 1;
+    }
+    c = kr_translate_expr(c);
+    if (_KR_EQ(had_paren, 1) && !kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_RPAREN())) {
+        c = kr_tr_advance(c);
+    }
+    kr_tr_emit(c, ") {\n");
+    c = kr_tr_advance(c);
+    c = kr_tr_indent(c);
+    c = kr_translate_block_body(c);
+    c = kr_tr_dedent(c);
+    kr_tr_emit_line(c, "}");
+    return c;
+}
+
+Translator kr_translate_for(Translator tr) {
+    Translator c = kr_tr_advance(tr);
+    c = kr_tr_advance(c);
+    if (_KR_EQ(kr_tr_kind(c), kr_TK_KW_LET())) {
+        c = kr_tr_advance(c);
+        __auto_type vname = kr_tr_lexeme(c);
+        c = kr_tr_advance(c);
+        if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_KW_IN())) {
+            c = kr_tr_advance(c);
+            return kr_translate_for_in(c, vname);
+        }
+        kr_tr_emit_indent(c);
+        kr_tr_emit(c, "for (");
+        __auto_type c_type = "int64_t";
+        if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_COLON())) {
+            c = kr_tr_advance(c);
+            __auto_type tk = kr_tr_kind(c);
+            __auto_type tn = kr_tr_lexeme(c);
+            c_type = kr_type_to_c(tk, tn);
+            c = kr_tr_advance(c);
+        }
+        c = kr_tr_advance(c);
+        kr_tr_emit(c, kr_str_concat(c_type, kr_str_concat(" ", kr_str_concat(vname, " = "))));
+        c = kr_translate_expr(c);
+    }
+    else {
+        if (_KR_EQ(kr_tr_kind(c), kr_TK_IDENTIFIER())) {
+            __auto_type vname2 = kr_tr_lexeme(c);
+            Translator c2 = kr_tr_advance(c);
+            if (!kr_tr_at_end(c2) && _KR_EQ(kr_tr_kind(c2), kr_TK_KW_IN())) {
+                c = kr_tr_advance(c2);
+                return kr_translate_for_in(c, vname2);
+            }
+        }
+        kr_tr_emit_indent(c);
+        kr_tr_emit(c, "for (");
+        c = kr_translate_expr(c);
+    }
+    c = kr_tr_advance(c);
+    kr_tr_emit(c, "; ");
+    c = kr_translate_expr(c);
+    c = kr_tr_advance(c);
+    kr_tr_emit(c, "; ");
+    c = kr_translate_expr(c);
+    __auto_type ik = kr_tr_kind(c);
+    if (_KR_EQ(ik, kr_TK_OP_ASSIGN()) || _KR_EQ(ik, kr_TK_OP_PLUS_ASSIGN()) || _KR_EQ(ik, kr_TK_OP_MINUS_ASSIGN()) || _KR_EQ(ik, kr_TK_OP_STAR_ASSIGN()) || _KR_EQ(ik, kr_TK_OP_SLASH_ASSIGN()) || _KR_EQ(ik, kr_TK_OP_PERCENT_ASSIGN())) {
+        __auto_type op_lex = kr_tr_lexeme(c);
+        kr_tr_emit(c, kr_str_concat(" ", kr_str_concat(op_lex, " ")));
+        c = kr_tr_advance(c);
+        c = kr_translate_expr(c);
+    }
+    c = kr_tr_advance(c);
+    kr_tr_emit(c, ") {\n");
+    c = kr_tr_advance(c);
+    c = kr_tr_indent(c);
+    c = kr_translate_block_body(c);
+    c = kr_tr_dedent(c);
+    kr_tr_emit_line(c, "}");
+    return c;
+}
+
+Translator kr_translate_match(Translator tr) {
+    return kr_translate_match_simple(tr);
+}
+
+Translator kr_translate_match_simple(Translator tr) {
+    Translator c = kr_tr_advance(tr);
+    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_LPAREN())) {
+        c = kr_tr_advance(c);
+    }
+    __auto_type subject = kr_tr_lexeme(c);
+    c = kr_tr_advance(c);
+    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_DOT())) {
+        subject = kr_str_concat(subject, ".");
+        c = kr_tr_advance(c);
+        subject = kr_str_concat(subject, kr_tr_lexeme(c));
+        c = kr_tr_advance(c);
+    }
+    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_RPAREN())) {
+        c = kr_tr_advance(c);
+    }
+    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_LBRACE())) {
+        c = kr_tr_advance(c);
+    }
+    __auto_type arm_idx = 0;
+    while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RBRACE())) {
+        __auto_type k = kr_tr_kind(c);
+        if (_KR_EQ(k, kr_TK_IDENTIFIER()) && _KR_EQ(kr_tr_lexeme(c), "_")) {
+            c = kr_tr_advance(c);
+            if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_ARROW())) {
+                c = kr_tr_advance(c);
+            }
+            if (arm_idx > 0) {
+                kr_tr_emit_line(c, "else {");
+            }
+            else {
+                kr_tr_emit_indent(c);
+                kr_tr_emit(c, "{\n");
+            }
+            c = kr_tr_advance(c);
+            c = kr_tr_indent(c);
+            c = kr_translate_block_body(c);
+            c = kr_tr_dedent(c);
+            kr_tr_emit_line(c, "}");
+            arm_idx = arm_idx + 1;
+        }
+        else {
+            kr_tr_emit_indent(c);
+            if (arm_idx > 0) {
+                kr_tr_emit(c, "else ");
+            }
+            kr_tr_emit(c, kr_str_concat("if (", kr_str_concat(subject, " == ")));
+            if (_KR_EQ(k, kr_TK_IDENTIFIER())) {
+                __auto_type pat_name = kr_tr_lexeme(c);
+                c = kr_tr_advance(c);
+                if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_COLON_COLON())) {
+                    c = kr_tr_advance(c);
+                    __auto_type variant = kr_tr_lexeme(c);
+                    c = kr_tr_advance(c);
+                    kr_tr_emit(c, kr_str_concat(pat_name, kr_str_concat("_", variant)));
+                    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_LPAREN())) {
+                        c = kr_tr_advance(c);
+                        while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RPAREN())) {
+                            c = kr_tr_advance(c);
+                        }
+                        c = kr_tr_advance(c);
+                    }
+                }
+                else {
+                    kr_tr_emit(c, pat_name);
+                }
+            }
+            else {
+                if (_KR_EQ(k, kr_TK_STRING_LIT())) {
+                    kr_tr_emit(c, kr_str_concat("\"", kr_str_concat(kr_tr_lexeme(c), "\"")));
+                }
+                else {
+                    kr_tr_emit(c, kr_tr_lexeme(c));
+                }
+                c = kr_tr_advance(c);
+            }
+            kr_tr_emit(c, ") {\n");
+            if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_ARROW())) {
+                c = kr_tr_advance(c);
+            }
+            if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_LBRACE())) {
+                c = kr_tr_advance(c);
+            }
+            c = kr_tr_indent(c);
+            c = kr_translate_block_body(c);
+            c = kr_tr_dedent(c);
+            kr_tr_emit_line(c, "}");
+            arm_idx = arm_idx + 1;
+        }
+    }
+    if (!kr_tr_at_end(c)) {
+        c = kr_tr_advance(c);
+    }
+    return c;
+}
+
+Translator kr_translate_for_in(Translator tr, kr_str vname) {
+    Translator c = tr;
+    kr_tr_emit_indent(c);
+    kr_tr_emit(c, "for (");
+    __auto_type range_start = kr_tr_lexeme(c);
+    c = kr_tr_advance(c);
+    __auto_type inclusive = 0;
+    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_OP_DOT_DOT_EQ())) {
+        inclusive = 1;
+    }
+    c = kr_tr_advance(c);
+    __auto_type range_end = kr_tr_lexeme(c);
+    c = kr_tr_advance(c);
+    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_RPAREN())) {
+        c = kr_tr_advance(c);
+    }
+    __auto_type cmp = " < ";
+    if (_KR_EQ(inclusive, 1)) {
+        cmp = " <= ";
+    }
+    kr_tr_emit(c, kr_str_concat("int64_t ", kr_str_concat(vname, kr_str_concat(" = ", kr_str_concat(range_start, kr_str_concat("; ", kr_str_concat(vname, kr_str_concat(cmp, kr_str_concat(range_end, kr_str_concat("; ", kr_str_concat(vname, "++")))))))))));
+    kr_tr_emit(c, ") {\n");
+    c = kr_tr_advance(c);
+    c = kr_tr_indent(c);
+    c = kr_translate_block_body(c);
+    c = kr_tr_dedent(c);
+    kr_tr_emit_line(c, "}");
+    return c;
+}
+
+Translator kr_translate_expr_stmt(Translator tr) {
+    kr_tr_emit_indent(tr);
+    Translator c = kr_translate_expr(tr);
+    __auto_type k = kr_tr_kind(c);
+    if (_KR_EQ(k, kr_TK_OP_ASSIGN()) || _KR_EQ(k, kr_TK_OP_PLUS_ASSIGN()) || _KR_EQ(k, kr_TK_OP_MINUS_ASSIGN()) || _KR_EQ(k, kr_TK_OP_STAR_ASSIGN()) || _KR_EQ(k, kr_TK_OP_SLASH_ASSIGN()) || _KR_EQ(k, kr_TK_OP_PERCENT_ASSIGN())) {
+        __auto_type op_lex = kr_tr_lexeme(c);
+        kr_tr_emit(c, kr_str_concat(" ", kr_str_concat(op_lex, " ")));
+        c = kr_tr_advance(c);
+        c = kr_translate_expr(c);
+    }
+    kr_tr_emit(c, ";\n");
+    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_SEMICOLON())) {
+        c = kr_tr_advance(c);
+    }
+    return c;
+}
+
+Translator kr_translate_expr(Translator tr) {
+    return kr_translate_or(tr);
+}
+
+Translator kr_translate_or(Translator tr) {
+    Translator c = kr_translate_and(tr);
+    while (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_OP_OR())) {
+        kr_tr_emit(c, " || ");
+        c = kr_tr_advance(c);
+        c = kr_translate_and(c);
+    }
+    return c;
+}
+
+Translator kr_translate_and(Translator tr) {
+    Translator c = kr_translate_bit_or(tr);
+    while (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_OP_AND())) {
+        kr_tr_emit(c, " && ");
+        c = kr_tr_advance(c);
+        c = kr_translate_bit_or(c);
+    }
+    return c;
+}
+
+Translator kr_translate_bit_or(Translator tr) {
+    Translator c = kr_translate_bit_xor(tr);
+    while (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_OP_BIT_OR())) {
+        kr_tr_emit(c, " | ");
+        c = kr_tr_advance(c);
+        c = kr_translate_bit_xor(c);
+    }
+    return c;
+}
+
+Translator kr_translate_bit_xor(Translator tr) {
+    Translator c = kr_translate_bit_and(tr);
+    while (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_OP_BIT_XOR())) {
+        kr_tr_emit(c, " ^ ");
+        c = kr_tr_advance(c);
+        c = kr_translate_bit_and(c);
+    }
+    return c;
+}
+
+Translator kr_translate_bit_and(Translator tr) {
+    Translator c = kr_translate_equality(tr);
+    while (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_OP_BIT_AND())) {
+        kr_tr_emit(c, " & ");
+        c = kr_tr_advance(c);
+        c = kr_translate_equality(c);
+    }
+    return c;
+}
+
+int64_t kr_scan_eq_ahead(Translator tr) {
+    __auto_type i = tr.pos;
+    __auto_type depth = 0;
+    while (i < tr.count) {
+        __auto_type k = kr_vec_int_get(tr.int_data, i * 3);
+        if (_KR_EQ(k, kr_TK_LPAREN())) {
+            depth = depth + 1;
+        }
+        if (_KR_EQ(k, kr_TK_RPAREN())) {
+            depth = depth - 1;
+        }
+        if (depth < 0) {
+            return 0;
+        }
+        if (_KR_EQ(depth, 0) && (_KR_EQ(k, kr_TK_OP_EQ()) || _KR_EQ(k, kr_TK_OP_NEQ()))) {
+            if (_KR_EQ(k, kr_TK_OP_EQ())) {
+                return 1;
+            }
+            return 2;
+        }
+        if (_KR_EQ(depth, 0) && (_KR_EQ(k, kr_TK_SEMICOLON()) || _KR_EQ(k, kr_TK_LBRACE()) || _KR_EQ(k, kr_TK_RBRACE()) || _KR_EQ(k, kr_TK_COMMA()) || _KR_EQ(k, kr_TK_COLON()) || _KR_EQ(k, kr_TK_OP_AND()) || _KR_EQ(k, kr_TK_OP_OR()) || _KR_EQ(k, kr_TK_OP_BIT_AND()) || _KR_EQ(k, kr_TK_OP_BIT_OR()) || _KR_EQ(k, kr_TK_OP_BIT_XOR()) || _KR_EQ(k, kr_TK_OP_LSHIFT()) || _KR_EQ(k, kr_TK_OP_RSHIFT()))) {
+            return 0;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+Translator kr_translate_equality(Translator tr) {
+    __auto_type eq_mode = kr_scan_eq_ahead(tr);
+    if (eq_mode > 0) {
+        if (_KR_EQ(eq_mode, 1)) {
+            kr_tr_emit(tr, "_KR_EQ(");
+        }
+        else {
+            kr_tr_emit(tr, "_KR_NEQ(");
+        }
+        Translator c = kr_translate_comparison(tr);
+        c = kr_tr_advance(c);
+        kr_tr_emit(c, ", ");
+        c = kr_translate_comparison(c);
+        kr_tr_emit(c, ")");
+        return c;
+    }
+    Translator c = kr_translate_comparison(tr);
+    return c;
+}
+
+Translator kr_translate_comparison(Translator tr) {
+    Translator c = kr_translate_shift(tr);
+    while (!kr_tr_at_end(c)) {
+        __auto_type k = kr_tr_kind(c);
+        if (_KR_EQ(k, kr_TK_OP_LT()) || _KR_EQ(k, kr_TK_OP_LTE()) || _KR_EQ(k, kr_TK_OP_GT()) || _KR_EQ(k, kr_TK_OP_GTE())) {
+            kr_tr_emit(c, kr_str_concat(" ", kr_str_concat(kr_tr_lexeme(c), " ")));
+            c = kr_tr_advance(c);
+            c = kr_translate_shift(c);
+        }
+        else {
+            break;
+        }
+    }
+    return c;
+}
+
+Translator kr_translate_shift(Translator tr) {
+    Translator c = kr_translate_addition(tr);
+    while (!kr_tr_at_end(c)) {
+        __auto_type k = kr_tr_kind(c);
+        if (_KR_EQ(k, kr_TK_OP_LSHIFT()) || _KR_EQ(k, kr_TK_OP_RSHIFT())) {
+            kr_tr_emit(c, kr_str_concat(" ", kr_str_concat(kr_tr_lexeme(c), " ")));
+            c = kr_tr_advance(c);
+            c = kr_translate_addition(c);
+        }
+        else {
+            break;
+        }
+    }
+    return c;
+}
+
+Translator kr_translate_addition(Translator tr) {
+    Translator c = kr_translate_multiplication(tr);
+    while (!kr_tr_at_end(c)) {
+        __auto_type k = kr_tr_kind(c);
+        if (_KR_EQ(k, kr_TK_OP_PLUS())) {
+            kr_tr_emit(c, " + ");
+            c = kr_tr_advance(c);
+            c = kr_translate_multiplication(c);
+        }
+        else {
+            if (_KR_EQ(k, kr_TK_OP_MINUS())) {
+                kr_tr_emit(c, " - ");
+                c = kr_tr_advance(c);
+                c = kr_translate_multiplication(c);
+            }
+            else {
+                break;
+            }
+        }
+    }
+    return c;
+}
+
+Translator kr_translate_multiplication(Translator tr) {
+    Translator c = kr_translate_unary(tr);
+    while (!kr_tr_at_end(c)) {
+        __auto_type k = kr_tr_kind(c);
+        if (_KR_EQ(k, kr_TK_OP_STAR()) || _KR_EQ(k, kr_TK_OP_SLASH()) || _KR_EQ(k, kr_TK_OP_PERCENT())) {
+            kr_tr_emit(c, kr_str_concat(" ", kr_str_concat(kr_tr_lexeme(c), " ")));
+            c = kr_tr_advance(c);
+            c = kr_translate_unary(c);
+        }
+        else {
+            break;
+        }
+    }
+    return c;
+}
+
+Translator kr_translate_unary(Translator tr) {
+    __auto_type k = kr_tr_kind(tr);
+    if (_KR_EQ(k, kr_TK_OP_NOT())) {
+        kr_tr_emit(tr, "!");
+        return kr_translate_unary(kr_tr_advance(tr));
+    }
+    if (_KR_EQ(k, kr_TK_OP_MINUS())) {
+        kr_tr_emit(tr, "-");
+        return kr_translate_unary(kr_tr_advance(tr));
+    }
+    if (_KR_EQ(k, kr_TK_OP_BIT_NOT())) {
+        kr_tr_emit(tr, "~");
+        return kr_translate_unary(kr_tr_advance(tr));
+    }
+    return kr_translate_postfix(tr);
+}
+
+Translator kr_translate_postfix(Translator tr) {
+    Translator c = kr_translate_primary(tr);
+    while (!kr_tr_at_end(c)) {
+        __auto_type k = kr_tr_kind(c);
+        if (_KR_EQ(k, kr_TK_DOT())) {
+            kr_tr_emit(c, ".");
+            c = kr_tr_advance(c);
+            kr_tr_emit(c, kr_tr_lexeme(c));
+            c = kr_tr_advance(c);
+        }
+        else {
+            if (_KR_EQ(k, kr_TK_LPAREN())) {
+                c = kr_tr_advance(c);
+                kr_tr_emit(c, "(");
+                __auto_type fa = 1;
+                while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RPAREN())) {
+                    if (_KR_EQ(fa, 0)) {
+                        kr_tr_emit(c, ", ");
+                        c = kr_tr_advance(c);
+                    }
+                    c = kr_translate_expr(c);
+                    fa = 0;
+                }
+                c = kr_tr_advance(c);
+                kr_tr_emit(c, ")");
+            }
+            else {
+                if (_KR_EQ(k, kr_TK_LBRACKET())) {
+                    kr_tr_emit(c, "[");
+                    c = kr_tr_advance(c);
+                    c = kr_translate_expr(c);
+                    c = kr_tr_advance(c);
+                    kr_tr_emit(c, "]");
+                }
+                else {
+                    break;
+                }
+            }
+        }
+    }
+    return c;
+}
+
+Translator kr_translate_primary(Translator tr) {
+    __auto_type k = kr_tr_kind(tr);
+    if (_KR_EQ(k, kr_TK_INT_LIT())) {
+        kr_tr_emit(tr, kr_tr_lexeme(tr));
+        return kr_tr_advance(tr);
+    }
+    if (_KR_EQ(k, kr_TK_FLOAT_LIT())) {
+        kr_tr_emit(tr, kr_tr_lexeme(tr));
+        return kr_tr_advance(tr);
+    }
+    if (_KR_EQ(k, kr_TK_STRING_LIT())) {
+        kr_tr_emit(tr, kr_str_concat("\"", kr_str_concat(kr_tr_lexeme(tr), "\"")));
+        return kr_tr_advance(tr);
+    }
+    if (_KR_EQ(k, kr_TK_KW_TRUE())) {
+        kr_tr_emit(tr, "true");
+        return kr_tr_advance(tr);
+    }
+    if (_KR_EQ(k, kr_TK_KW_FALSE())) {
+        kr_tr_emit(tr, "false");
+        return kr_tr_advance(tr);
+    }
+    if (_KR_EQ(k, kr_TK_KW_NULL())) {
+        kr_tr_emit(tr, "NULL");
+        return kr_tr_advance(tr);
+    }
+    if (_KR_EQ(k, kr_TK_LPAREN())) {
+        kr_tr_emit(tr, "(");
+        Translator c = kr_tr_advance(tr);
+        c = kr_translate_expr(c);
+        if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_RPAREN())) {
+            c = kr_tr_advance(c);
+        }
+        kr_tr_emit(c, ")");
+        return c;
+    }
+    if (_KR_EQ(k, kr_TK_LBRACKET())) {
+        Translator c = kr_tr_advance(tr);
+        kr_tr_emit(c, "(int64_t[]){");
+        __auto_type af = 1;
+        while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RBRACKET())) {
+            if (_KR_EQ(af, 0)) {
+                kr_tr_emit(c, ", ");
+                c = kr_tr_advance(c);
+            }
+            c = kr_translate_expr(c);
+            af = 0;
+        }
+        if (!kr_tr_at_end(c)) {
+            c = kr_tr_advance(c);
+        }
+        kr_tr_emit(c, "}");
+        return c;
+    }
+    if (_KR_EQ(k, kr_TK_IDENTIFIER())) {
+        __auto_type name = kr_tr_lexeme(tr);
+        Translator c = kr_tr_advance(tr);
+        c = kr_maybe_skip_turbofish(c);
+        if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_COLON_COLON())) {
+            c = kr_tr_advance(c);
+            __auto_type variant = kr_tr_lexeme(c);
+            c = kr_tr_advance(c);
+            kr_tr_emit(c, kr_str_concat(name, kr_str_concat("_", variant)));
+            if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_LPAREN())) {
+                c = kr_tr_advance(c);
+                while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RPAREN())) {
+                    c = kr_tr_advance(c);
+                }
+                c = kr_tr_advance(c);
+            }
+            return c;
+        }
+        if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_LPAREN())) {
+            c = kr_tr_advance(c);
+            kr_tr_emit(c, kr_str_concat("kr_", kr_str_concat(name, "(")));
+            __auto_type fa = 1;
+            while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RPAREN())) {
+                if (_KR_EQ(fa, 0)) {
+                    kr_tr_emit(c, ", ");
+                    c = kr_tr_advance(c);
+                }
+                c = kr_translate_expr(c);
+                fa = 0;
+            }
+            c = kr_tr_advance(c);
+            kr_tr_emit(c, ")");
+            return c;
+        }
+        if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_LBRACE())) {
+            c = kr_tr_advance(c);
+            kr_tr_emit(c, kr_str_concat("(", kr_str_concat(name, "){")));
+            __auto_type ff = 1;
+            while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RBRACE())) {
+                if (_KR_EQ(ff, 0)) {
+                    c = kr_tr_advance(c);
+                    if (_KR_EQ(kr_tr_kind(c), kr_TK_RBRACE())) {
+                        break;
+                    }
+                    kr_tr_emit(c, ", ");
+                }
+                __auto_type field_name = kr_tr_lexeme(c);
+                c = kr_tr_advance(c);
+                c = kr_tr_advance(c);
+                kr_tr_emit(c, kr_str_concat(".", kr_str_concat(field_name, " = ")));
+                c = kr_translate_expr(c);
+                ff = 0;
+            }
+            c = kr_tr_advance(c);
+            kr_tr_emit(c, "}");
+            return c;
+        }
+        kr_tr_emit(c, name);
+        return c;
+    }
+    if (!kr_tr_at_end(tr)) {
+        kr_tr_emit(tr, kr_tr_lexeme(tr));
+        return kr_tr_advance(tr);
+    }
+    return tr;
+}
+
+kr_str kr_join_output(void* out) {
+    __auto_type result = "";
+    __auto_type len = kr_vec_string_len(out);
+    __auto_type i = 0;
+    while (i < len) {
+        result = kr_str_concat(result, kr_vec_string_get(out, i));
+        i = i + 1;
+    }
+    return result;
+}
+
+kr_str kr_emit_binary_op(int64_t op) {
+    if (_KR_EQ(op, 200)) {
+        return "+";
+    }
+    if (_KR_EQ(op, 201)) {
+        return "-";
+    }
+    if (_KR_EQ(op, 202)) {
+        return "*";
+    }
+    if (_KR_EQ(op, 203)) {
+        return "/";
+    }
+    if (_KR_EQ(op, 204)) {
+        return "%";
+    }
+    if (_KR_EQ(op, 205)) {
+        return "==";
+    }
+    if (_KR_EQ(op, 206)) {
+        return "!=";
+    }
+    if (_KR_EQ(op, 207)) {
+        return "<";
+    }
+    if (_KR_EQ(op, 208)) {
+        return "<=";
+    }
+    if (_KR_EQ(op, 209)) {
+        return ">";
+    }
+    if (_KR_EQ(op, 210)) {
+        return ">=";
+    }
+    if (_KR_EQ(op, 211)) {
+        return "&&";
+    }
+    if (_KR_EQ(op, 212)) {
+        return "||";
+    }
+    if (_KR_EQ(op, 214)) {
+        return "&";
+    }
+    if (_KR_EQ(op, 215)) {
+        return "|";
+    }
+    if (_KR_EQ(op, 216)) {
+        return "^";
+    }
+    if (_KR_EQ(op, 218)) {
+        return "<<";
+    }
+    if (_KR_EQ(op, 219)) {
+        return ">>";
+    }
+    return "?";
+}
+
+kr_str kr_emit_unary_op(int64_t op) {
+    if (_KR_EQ(op, 201)) {
+        return "-";
+    }
+    if (_KR_EQ(op, 213)) {
+        return "!";
+    }
+    if (_KR_EQ(op, 217)) {
+        return "~";
+    }
+    return "?";
+}
+
+kr_str kr_make_indent(int64_t level) {
+    __auto_type result = "";
+    __auto_type i = 0;
+    while (i < level) {
+        result = kr_str_concat(result, "    ");
+        i = i + 1;
+    }
+    return result;
+}
+
+kr_str kr_mangle_name(kr_str mod_name, kr_str name) {
+    if (_KR_EQ(mod_name, "")) {
+        return kr_str_concat("kr_", name);
+    }
+    return kr_str_concat(kr_str_concat(kr_str_concat("kr_", mod_name), "_"), name);
+}
+
+kr_str kr_mangle_struct(kr_str name) {
+    return kr_str_concat("KrStruct_", name);
+}
+
+kr_str kr_mangle_enum(kr_str name) {
+    return kr_str_concat("KrEnum_", name);
+}
+
+int64_t kr_SEV_ERROR() {
+    return 0;
+}
+
+int64_t kr_SEV_WARNING() {
+    return 1;
+}
+
+int64_t kr_SEV_INFO() {
+    return 2;
+}
+
+int64_t kr_SEV_HINT() {
+    return 3;
+}
+
+Diagnostic kr_new_error(kr_str code, kr_str message, kr_str file, int64_t line, int64_t column) {
+    return (Diagnostic){.severity = kr_SEV_ERROR(), .code = code, .message = message, .file = file, .line = line, .column = column, .hint = ""};
+}
+
+Diagnostic kr_new_warning(kr_str code, kr_str message, kr_str file, int64_t line, int64_t column) {
+    return (Diagnostic){.severity = kr_SEV_WARNING(), .code = code, .message = message, .file = file, .line = line, .column = column, .hint = ""};
+}
+
+Diagnostic kr_with_hint(Diagnostic d, kr_str hint) {
+    return (Diagnostic){.severity = d.severity, .code = d.code, .message = d.message, .file = d.file, .line = d.line, .column = d.column, .hint = hint};
+}
+
+kr_str kr_KRA_UNEXPECTED_CHAR() {
+    return "KRA0001";
+}
+
+kr_str kr_KRA_UNTERMINATED_STR() {
+    return "KRA0002";
+}
+
+kr_str kr_KRA_EXPECTED_TOKEN() {
+    return "KRA0003";
+}
+
+kr_str kr_KRA_UNEXPECTED_TOKEN() {
+    return "KRA0004";
+}
+
+kr_str kr_KRA_TYPE_MISMATCH() {
+    return "KRA0005";
+}
+
+kr_str kr_KRA_UNDEFINED_VAR() {
+    return "KRA0006";
+}
+
+kr_str kr_KRA_DUPLICATE_DECL() {
+    return "KRA0007";
+}
+
+kr_str kr_KRA_MISSING_RETURN() {
+    return "KRA0008";
+}
+
+kr_str kr_KRA_INVALID_ASSIGN() {
+    return "KRA0009";
+}
+
+kr_str kr_KRA_UNKNOWN_TYPE() {
+    return "KRA0010";
+}
+
+kr_str kr_KRA_ARG_COUNT() {
+    return "KRA0011";
+}
+
+kr_str kr_KRA_UNREACHABLE() {
+    return "KRA0012";
+}
+
+kr_str kr_KRA_CODEGEN_FAIL() {
+    return "KRA0013";
+}
+
+kr_str kr_KRA_IO_ERROR() {
+    return "KRA0014";
+}
+
+kr_str kr_severity_label(int64_t severity) {
+    if (_KR_EQ(severity, kr_SEV_ERROR())) {
+        return "error";
+    }
+    if (_KR_EQ(severity, kr_SEV_WARNING())) {
+        return "warning";
+    }
+    if (_KR_EQ(severity, kr_SEV_INFO())) {
+        return "info";
+    }
+    if (_KR_EQ(severity, kr_SEV_HINT())) {
+        return "hint";
+    }
+    return "unknown";
+}
+
+kr_str kr_format_diagnostic(Diagnostic d) {
+    __auto_type header = kr_severity_label(d.severity);
+    __auto_type result = kr_str_concat(kr_str_concat(kr_str_concat(kr_str_concat(header, "["), d.code), "]: "), d.message);
+    return result;
+}
+
+void kr_print_diagnostic(Diagnostic d) {
+    __auto_type msg = kr_format_diagnostic(d);
+    kr_puts(msg);
+}
+
+int64_t kr_OS_UNKNOWN() {
+    return 0;
+}
+
+int64_t kr_OS_LINUX() {
+    return 1;
+}
+
+int64_t kr_OS_MACOS() {
+    return 2;
+}
+
+int64_t kr_OS_WINDOWS() {
+    return 3;
+}
+
+int64_t kr_OS_FREEBSD() {
+    return 4;
+}
+
+int64_t kr_OS_WASI() {
+    return 5;
+}
+
+kr_str kr_os_name(int64_t os) {
+    if (_KR_EQ(os, kr_OS_LINUX())) {
+        return "linux";
+    }
+    if (_KR_EQ(os, kr_OS_MACOS())) {
+        return "darwin";
+    }
+    if (_KR_EQ(os, kr_OS_WINDOWS())) {
+        return "windows";
+    }
+    if (_KR_EQ(os, kr_OS_FREEBSD())) {
+        return "freebsd";
+    }
+    if (_KR_EQ(os, kr_OS_WASI())) {
+        return "wasi";
+    }
+    return "unknown";
+}
+
+kr_str kr_os_display_name(int64_t os) {
+    if (_KR_EQ(os, kr_OS_LINUX())) {
+        return "Linux";
+    }
+    if (_KR_EQ(os, kr_OS_MACOS())) {
+        return "macOS";
+    }
+    if (_KR_EQ(os, kr_OS_WINDOWS())) {
+        return "Windows";
+    }
+    if (_KR_EQ(os, kr_OS_FREEBSD())) {
+        return "FreeBSD";
+    }
+    if (_KR_EQ(os, kr_OS_WASI())) {
+        return "WebAssembly (WASI)";
+    }
+    return "Unknown OS";
+}
+
+bool kr_os_is_posix(int64_t os) {
+    return _KR_EQ(os, kr_OS_LINUX()) || _KR_EQ(os, kr_OS_MACOS()) || _KR_EQ(os, kr_OS_FREEBSD());
+}
+
+bool kr_os_is_windows(int64_t os) {
+    return _KR_EQ(os, kr_OS_WINDOWS());
+}
+
+int64_t kr_ARCH_UNKNOWN() {
+    return 0;
+}
+
+int64_t kr_ARCH_X86_64() {
+    return 1;
+}
+
+int64_t kr_ARCH_AARCH64() {
+    return 2;
+}
+
+int64_t kr_ARCH_ARM() {
+    return 3;
+}
+
+int64_t kr_ARCH_RISCV64() {
+    return 4;
+}
+
+int64_t kr_ARCH_WASM32() {
+    return 5;
+}
+
+kr_str kr_arch_name(int64_t arch) {
+    if (_KR_EQ(arch, kr_ARCH_X86_64())) {
+        return "x86_64";
+    }
+    if (_KR_EQ(arch, kr_ARCH_AARCH64())) {
+        return "aarch64";
+    }
+    if (_KR_EQ(arch, kr_ARCH_ARM())) {
+        return "arm";
+    }
+    if (_KR_EQ(arch, kr_ARCH_RISCV64())) {
+        return "riscv64";
+    }
+    if (_KR_EQ(arch, kr_ARCH_WASM32())) {
+        return "wasm32";
+    }
+    return "unknown";
+}
+
+int64_t kr_arch_pointer_width(int64_t arch) {
+    if (_KR_EQ(arch, kr_ARCH_WASM32())) {
+        return 4;
+    }
+    if (_KR_EQ(arch, kr_ARCH_ARM())) {
+        return 4;
+    }
+    return 8;
+}
+
+bool kr_arch_is_64bit(int64_t arch) {
+    return _KR_EQ(arch, kr_ARCH_X86_64()) || _KR_EQ(arch, kr_ARCH_AARCH64()) || _KR_EQ(arch, kr_ARCH_RISCV64());
+}
+
+int64_t kr_ABI_UNKNOWN() {
+    return 0;
+}
+
+int64_t kr_ABI_GNU() {
+    return 1;
+}
+
+int64_t kr_ABI_MSVC() {
+    return 2;
+}
+
+int64_t kr_ABI_MUSL() {
+    return 3;
+}
+
+int64_t kr_ABI_NONE() {
+    return 4;
+}
+
+kr_str kr_abi_name(int64_t abi) {
+    if (_KR_EQ(abi, kr_ABI_GNU())) {
+        return "gnu";
+    }
+    if (_KR_EQ(abi, kr_ABI_MSVC())) {
+        return "msvc";
+    }
+    if (_KR_EQ(abi, kr_ABI_MUSL())) {
+        return "musl";
+    }
+    if (_KR_EQ(abi, kr_ABI_NONE())) {
+        return "";
+    }
+    return "unknown";
+}
+
+Target kr_parse_target(kr_str triple) {
+    if (_KR_EQ(triple, "x86_64-apple-darwin")) {
+        return kr_new_target(kr_OS_MACOS(), kr_ARCH_X86_64(), kr_ABI_NONE(), "apple", triple);
+    }
+    if (_KR_EQ(triple, "aarch64-apple-darwin")) {
+        return kr_new_target(kr_OS_MACOS(), kr_ARCH_AARCH64(), kr_ABI_NONE(), "apple", triple);
+    }
+    if (_KR_EQ(triple, "x86_64-unknown-linux-gnu")) {
+        return kr_new_target(kr_OS_LINUX(), kr_ARCH_X86_64(), kr_ABI_GNU(), "unknown", triple);
+    }
+    if (_KR_EQ(triple, "aarch64-unknown-linux-gnu")) {
+        return kr_new_target(kr_OS_LINUX(), kr_ARCH_AARCH64(), kr_ABI_GNU(), "unknown", triple);
+    }
+    if (_KR_EQ(triple, "x86_64-unknown-linux-musl")) {
+        return kr_new_target(kr_OS_LINUX(), kr_ARCH_X86_64(), kr_ABI_MUSL(), "unknown", triple);
+    }
+    if (_KR_EQ(triple, "aarch64-unknown-linux-musl")) {
+        return kr_new_target(kr_OS_LINUX(), kr_ARCH_AARCH64(), kr_ABI_MUSL(), "unknown", triple);
+    }
+    if (_KR_EQ(triple, "x86_64-pc-windows-msvc")) {
+        return kr_new_target(kr_OS_WINDOWS(), kr_ARCH_X86_64(), kr_ABI_MSVC(), "pc", triple);
+    }
+    if (_KR_EQ(triple, "x86_64-pc-windows-gnu")) {
+        return kr_new_target(kr_OS_WINDOWS(), kr_ARCH_X86_64(), kr_ABI_GNU(), "pc", triple);
+    }
+    if (_KR_EQ(triple, "aarch64-pc-windows-msvc")) {
+        return kr_new_target(kr_OS_WINDOWS(), kr_ARCH_AARCH64(), kr_ABI_MSVC(), "pc", triple);
+    }
+    if (_KR_EQ(triple, "x86_64-unknown-freebsd")) {
+        return kr_new_target(kr_OS_FREEBSD(), kr_ARCH_X86_64(), kr_ABI_NONE(), "unknown", triple);
+    }
+    if (_KR_EQ(triple, "aarch64-unknown-freebsd")) {
+        return kr_new_target(kr_OS_FREEBSD(), kr_ARCH_AARCH64(), kr_ABI_NONE(), "unknown", triple);
+    }
+    if (_KR_EQ(triple, "wasm32-unknown-wasi")) {
+        return kr_new_target(kr_OS_WASI(), kr_ARCH_WASM32(), kr_ABI_NONE(), "unknown", triple);
+    }
+    if (_KR_EQ(triple, "linux")) {
+        return kr_parse_target("x86_64-unknown-linux-gnu");
+    }
+    if (_KR_EQ(triple, "macos")) {
+        return kr_parse_target("x86_64-apple-darwin");
+    }
+    if (_KR_EQ(triple, "darwin")) {
+        return kr_parse_target("x86_64-apple-darwin");
+    }
+    if (_KR_EQ(triple, "windows")) {
+        return kr_parse_target("x86_64-pc-windows-msvc");
+    }
+    if (_KR_EQ(triple, "win32")) {
+        return kr_parse_target("x86_64-pc-windows-msvc");
+    }
+    if (_KR_EQ(triple, "freebsd")) {
+        return kr_parse_target("x86_64-unknown-freebsd");
+    }
+    if (_KR_EQ(triple, "wasm")) {
+        return kr_parse_target("wasm32-unknown-wasi");
+    }
+    if (_KR_EQ(triple, "wasi")) {
+        return kr_parse_target("wasm32-unknown-wasi");
+    }
+    return kr_new_target(kr_OS_UNKNOWN(), kr_ARCH_UNKNOWN(), kr_ABI_UNKNOWN(), "unknown", triple);
+}
+
+Target kr_new_target(int64_t os, int64_t arch, int64_t abi, kr_str vendor, kr_str triple) {
+    return (Target){.os = os, .arch = arch, .abi = abi, .vendor = vendor, .triple = triple};
+}
+
+Target kr_detect_host_target() {
+    return kr_parse_target("x86_64-apple-darwin");
+}
+
+bool kr_target_is_valid(Target t) {
+    return _KR_NEQ(t.os, kr_OS_UNKNOWN()) && _KR_NEQ(t.arch, kr_ARCH_UNKNOWN());
+}
+
+kr_str kr_format_target(Target t) {
+    return t.triple;
+}
+
+kr_str kr_format_target_display(Target t) {
+    __auto_type os_str = kr_os_display_name(t.os);
+    __auto_type arch_str = kr_arch_name(t.arch);
+    return kr_str_concat(kr_str_concat(os_str, " ("), kr_str_concat(arch_str, ")"));
+}
+
+kr_str kr_default_cc(Target t) {
+    if (_KR_EQ(t.os, kr_OS_WINDOWS()) && _KR_EQ(t.abi, kr_ABI_MSVC())) {
+        return "cl.exe";
+    }
+    if (_KR_EQ(t.os, kr_OS_WINDOWS()) && _KR_EQ(t.abi, kr_ABI_GNU())) {
+        return "x86_64-w64-mingw32-gcc";
+    }
+    if (_KR_EQ(t.os, kr_OS_MACOS())) {
+        return "cc";
+    }
+    if (_KR_EQ(t.os, kr_OS_FREEBSD())) {
+        return "cc";
+    }
+    if (_KR_EQ(t.os, kr_OS_WASI())) {
+        return "clang";
+    }
+    return "cc";
+}
+
+kr_str kr_cc_cross_flags(Target t) {
+    if (_KR_EQ(t.os, kr_OS_WASI())) {
+        return "--target=wasm32-unknown-wasi --sysroot=/opt/wasi-sdk/share/wasi-sysroot";
+    }
+    return "";
+}
+
+kr_str kr_c_includes_posix() {
+    return kr_str_concat(kr_str_concat(kr_str_concat(kr_str_concat(kr_str_concat("#include <stdio.h>\n", "#include <stdlib.h>\n"), "#include <string.h>\n"), "#include <stdint.h>\n"), "#include <stdbool.h>\n"), kr_str_concat(kr_str_concat("#include <unistd.h>\n", "#include <math.h>\n"), kr_str_concat("#include <time.h>\n", "#include <ctype.h>\n")));
+}
+
+kr_str kr_c_includes_windows() {
+    return kr_str_concat(kr_str_concat(kr_str_concat(kr_str_concat(kr_str_concat(kr_str_concat("#include <stdio.h>\n", "#include <stdlib.h>\n"), "#include <string.h>\n"), "#include <stdint.h>\n"), "#include <stdbool.h>\n"), "#define WIN32_LEAN_AND_MEAN\n"), "#include <windows.h>\n");
+}
+
+kr_str kr_c_includes_wasi() {
+    return kr_str_concat(kr_str_concat(kr_str_concat(kr_str_concat("#include <stdio.h>\n", "#include <stdlib.h>\n"), "#include <string.h>\n"), "#include <stdint.h>\n"), "#include <stdbool.h>\n");
+}
+
+kr_str kr_c_includes_for_target(Target t) {
+    if (kr_os_is_windows(t.os)) {
+        return kr_c_includes_windows();
+    }
+    if (_KR_EQ(t.os, kr_OS_WASI())) {
+        return kr_c_includes_wasi();
+    }
+    return kr_c_includes_posix();
+}
+
+kr_str kr_c_typedefs_common() {
+    return kr_str_concat(kr_str_concat(kr_str_concat("typedef int64_t kr_int;\n", "typedef double kr_float;\n"), "typedef bool kr_bool;\n"), "typedef char* kr_str;\n");
+}
+
+kr_str kr_c_size_type(Target t) {
+    if (kr_os_is_windows(t.os)) {
+        return "typedef long long kr_size;\n";
+    }
+    return "typedef ssize_t kr_size;\n";
+}
+
+kr_str kr_c_runtime_shims_posix() {
+    __auto_type s = "";
+    s = kr_str_concat(s, "void kr_puts(kr_str s) { puts(s); }\n");
+    s = kr_str_concat(s, "int64_t kr_strlen(kr_str s, ...) { return (int64_t)strlen(s); }\n");
+    s = kr_str_concat(s, "int64_t kr_abs(int64_t x) { return x < 0 ? -x : x; }\n");
+    s = kr_str_concat(s, "int kr_strcmp(kr_str a, kr_str b) { return strcmp(a, b); }\n");
+    s = kr_str_concat(s, "static inline bool _kr_str_eq(kr_str a, kr_str b) { return strcmp(a,b)==0; }\n");
+    s = kr_str_concat(s, "static inline bool _kr_str_neq(kr_str a, kr_str b) { return strcmp(a,b)!=0; }\n");
+    s = kr_str_concat(s, "static inline int _kr_cmp_eq(void* a, void* b) { return strcmp((char*)a,(char*)b)==0; }\n");
+    s = kr_str_concat(s, "static inline int _kr_cmp_neq(void* a, void* b) { return strcmp((char*)a,(char*)b)!=0; }\n");
+    s = kr_str_concat(s, "static inline int _kr_int_eq(int64_t a, int64_t b) { return a==b; }\n");
+    s = kr_str_concat(s, "static inline int _kr_int_neq(int64_t a, int64_t b) { return a!=b; }\n");
+    s = kr_str_concat(s, "#define _KR_EQ(a, b) __builtin_choose_expr(__builtin_types_compatible_p(__typeof__(a), char*), _kr_cmp_eq((void*)(a),(void*)(b)), _kr_int_eq((int64_t)(intptr_t)(a),(int64_t)(intptr_t)(b)))\n");
+    s = kr_str_concat(s, "#define _KR_NEQ(a, b) __builtin_choose_expr(__builtin_types_compatible_p(__typeof__(a), char*), _kr_cmp_neq((void*)(a),(void*)(b)), _kr_int_neq((int64_t)(intptr_t)(a),(int64_t)(intptr_t)(b)))\n");
+    s = kr_str_concat(s, "#pragma clang diagnostic ignored \"-Wint-to-void-pointer-cast\"\n");
+    s = kr_str_concat(s, "kr_str kr_str_concat(kr_str a, kr_str b) {\n");
+    s = kr_str_concat(s, "  size_t la = strlen(a), lb = strlen(b);\n");
+    s = kr_str_concat(s, "  char* r = (char*)malloc(la + lb + 1);\n");
+    s = kr_str_concat(s, "  memcpy(r, a, la); memcpy(r + la, b, lb); r[la+lb] = 0; return r;\n}\n");
+    s = kr_str_concat(s, "int64_t kr_str_char_at(kr_str s, int64_t i) { return (int64_t)(unsigned char)s[i]; }\n");
+    s = kr_str_concat(s, "kr_str kr_str_slice(kr_str s, int64_t start, int64_t end) {\n");
+    s = kr_str_concat(s, "  int64_t len = end - start; char* r = (char*)malloc(len + 1);\n");
+    s = kr_str_concat(s, "  memcpy(r, s + start, len); r[len] = 0; return r;\n}\n");
+    s = kr_str_concat(s, "bool kr_str_ends_with(kr_str s, kr_str suffix) {\n");
+    s = kr_str_concat(s, "  size_t ls = strlen(s), lx = strlen(suffix);\n");
+    s = kr_str_concat(s, "  return lx <= ls && strcmp(s + ls - lx, suffix) == 0;\n}\n");
+    s = kr_str_concat(s, "kr_str kr_fmt_int(int64_t v) {\n");
+    s = kr_str_concat(s, "  char* r = (char*)malloc(32); snprintf(r, 32, \"%lld\", (long long)v); return r;\n}\n");
+    s = kr_str_concat(s, "kr_str kr_getenv(kr_str name) {\n");
+    s = kr_str_concat(s, "  char* v = (char*)getenv(name); return v ? v : (char*)\"\";\n}\n");
+    s = kr_str_concat(s, "int64_t kr_system(kr_str cmd) { return (int64_t)system(cmd); }\n");
+    s = kr_str_concat(s, "void kr_exit(int64_t code) { exit((int)code); }\n");
+    s = kr_str_concat(s, "void* kr_fopen(kr_str path, kr_str mode) { return (void*)fopen(path, mode); }\n");
+    s = kr_str_concat(s, "int64_t kr_fclose(void* f) { return (int64_t)fclose((FILE*)f); }\n");
+    s = kr_str_concat(s, "void kr_fputs(kr_str s, void* f) { fputs(s, (FILE*)f); }\n");
+    s = kr_str_concat(s, "kr_str kr_file_read_string(kr_str path) {\n");
+    s = kr_str_concat(s, "  FILE* f = fopen(path, \"rb\"); if(!f) return \"\";\n");
+    s = kr_str_concat(s, "  fseek(f, 0, SEEK_END); long sz = ftell(f); fseek(f, 0, SEEK_SET);\n");
+    s = kr_str_concat(s, "  char* buf = (char*)malloc(sz + 1); fread(buf, 1, sz, f); buf[sz] = 0;\n");
+    s = kr_str_concat(s, "  fclose(f); return buf;\n}\n");
+    s = kr_str_concat(s, "typedef struct { int64_t* data; int64_t len; int64_t cap; } KrVecInt;\n");
+    s = kr_str_concat(s, "void* kr_vec_int_new() {\n");
+    s = kr_str_concat(s, "  KrVecInt* v = (KrVecInt*)malloc(sizeof(KrVecInt));\n");
+    s = kr_str_concat(s, "  v->data = (int64_t*)malloc(16 * sizeof(int64_t)); v->len = 0; v->cap = 16; return v;\n}\n");
+    s = kr_str_concat(s, "void kr_vec_int_push(void* vp, int64_t val) {\n");
+    s = kr_str_concat(s, "  KrVecInt* v = (KrVecInt*)vp;\n");
+    s = kr_str_concat(s, "  if(v->len >= v->cap) { v->cap *= 2; v->data = (int64_t*)realloc(v->data, v->cap * sizeof(int64_t)); }\n");
+    s = kr_str_concat(s, "  v->data[v->len++] = val;\n}\n");
+    s = kr_str_concat(s, "int64_t kr_vec_int_get(void* vp, int64_t i) { return ((KrVecInt*)vp)->data[i]; }\n");
+    s = kr_str_concat(s, "void kr_vec_int_set(void* vp, int64_t i, int64_t val) { ((KrVecInt*)vp)->data[i] = val; }\n");
+    s = kr_str_concat(s, "int64_t kr_vec_int_len(void* vp) { return ((KrVecInt*)vp)->len; }\n");
+    s = kr_str_concat(s, "void kr_vec_int_free(void* vp) { KrVecInt* v = (KrVecInt*)vp; free(v->data); free(v); }\n");
+    s = kr_str_concat(s, "typedef struct { char** data; int64_t len; int64_t cap; } KrVecString;\n");
+    s = kr_str_concat(s, "void* kr_vec_string_new() {\n");
+    s = kr_str_concat(s, "  KrVecString* v = (KrVecString*)malloc(sizeof(KrVecString));\n");
+    s = kr_str_concat(s, "  v->data = (char**)malloc(16 * sizeof(char*)); v->len = 0; v->cap = 16; return v;\n}\n");
+    s = kr_str_concat(s, "void kr_vec_string_push(void* vp, kr_str val) {\n");
+    s = kr_str_concat(s, "  KrVecString* v = (KrVecString*)vp;\n");
+    s = kr_str_concat(s, "  if(v->len >= v->cap) { v->cap *= 2; v->data = (char**)realloc(v->data, v->cap * sizeof(char*)); }\n");
+    s = kr_str_concat(s, "  v->data[v->len++] = val;\n}\n");
+    s = kr_str_concat(s, "kr_str kr_vec_string_get(void* vp, int64_t i) { return ((KrVecString*)vp)->data[i]; }\n");
+    s = kr_str_concat(s, "void kr_vec_string_set(void* vp, int64_t i, kr_str val) { ((KrVecString*)vp)->data[i] = val; }\n");
+    s = kr_str_concat(s, "int64_t kr_vec_string_len(void* vp) { return ((KrVecString*)vp)->len; }\n");
+    s = kr_str_concat(s, "void kr_vec_string_free(void* vp) { KrVecString* v = (KrVecString*)vp; free(v->data); free(v); }\n");
+    s = kr_str_concat(s, "int64_t kr_vec_int_pop(void* vp) { KrVecInt* v = (KrVecInt*)vp; return v->data[--v->len]; }\n");
+    s = kr_str_concat(s, "void kr_vec_int_clear(void* vp) { ((KrVecInt*)vp)->len = 0; }\n");
+    s = kr_str_concat(s, "int64_t kr_vec_int_capacity(void* vp) { return ((KrVecInt*)vp)->cap; }\n");
+    s = kr_str_concat(s, "void kr_vec_int_reserve(void* vp, int64_t n) {\n");
+    s = kr_str_concat(s, "  KrVecInt* v = (KrVecInt*)vp; if(n>v->cap){v->cap=n;v->data=(int64_t*)realloc(v->data,n*sizeof(int64_t));}\n}\n");
+    s = kr_str_concat(s, "void* kr_vec_int_with_capacity(int64_t n) {\n");
+    s = kr_str_concat(s, "  KrVecInt* v=(KrVecInt*)malloc(sizeof(KrVecInt));v->data=(int64_t*)malloc(n*sizeof(int64_t));v->len=0;v->cap=n;return v;\n}\n");
+    s = kr_str_concat(s, "void kr_vec_int_insert(void* vp, int64_t i, int64_t val) {\n");
+    s = kr_str_concat(s, "  KrVecInt* v=(KrVecInt*)vp; kr_vec_int_push(vp,0); memmove(&v->data[i+1],&v->data[i],(v->len-i-1)*sizeof(int64_t)); v->data[i]=val;\n}\n");
+    s = kr_str_concat(s, "int64_t kr_vec_int_remove(void* vp, int64_t i) {\n");
+    s = kr_str_concat(s, "  KrVecInt* v=(KrVecInt*)vp; int64_t val=v->data[i]; memmove(&v->data[i],&v->data[i+1],(v->len-i-1)*sizeof(int64_t)); v->len--; return val;\n}\n");
+    s = kr_str_concat(s, "int64_t kr_vec_int_swap_remove(void* vp, int64_t i) { KrVecInt* v=(KrVecInt*)vp; int64_t val=v->data[i]; v->data[i]=v->data[--v->len]; return val; }\n");
+    s = kr_str_concat(s, "void kr_vec_int_shrink_to_fit(void* vp) { KrVecInt* v=(KrVecInt*)vp; if(v->len<v->cap){v->cap=v->len?v->len:1;v->data=(int64_t*)realloc(v->data,v->cap*sizeof(int64_t));} }\n");
+    s = kr_str_concat(s, "kr_str kr_vec_string_pop(void* vp) { KrVecString* v = (KrVecString*)vp; return v->data[--v->len]; }\n");
+    s = kr_str_concat(s, "void kr_vec_string_clear(void* vp) { ((KrVecString*)vp)->len = 0; }\n");
+    s = kr_str_concat(s, "int64_t kr_vec_string_capacity(void* vp) { return ((KrVecString*)vp)->cap; }\n");
+    s = kr_str_concat(s, "void kr_vec_string_reserve(void* vp, int64_t n) {\n");
+    s = kr_str_concat(s, "  KrVecString* v = (KrVecString*)vp; if(n>v->cap){v->cap=n;v->data=(char**)realloc(v->data,n*sizeof(char*));}\n}\n");
+    s = kr_str_concat(s, "void* kr_vec_string_with_capacity(int64_t n) {\n");
+    s = kr_str_concat(s, "  KrVecString* v=(KrVecString*)malloc(sizeof(KrVecString));v->data=(char**)malloc(n*sizeof(char*));v->len=0;v->cap=n;return v;\n}\n");
+    s = kr_str_concat(s, "void kr_vec_string_shrink_to_fit(void* vp) { KrVecString* v=(KrVecString*)vp; if(v->len<v->cap){v->cap=v->len?v->len:1;v->data=(char**)realloc(v->data,v->cap*sizeof(char*));} }\n");
+    s = kr_str_concat(s, "kr_str kr_vec_string_swap_remove(void* vp, int64_t i) { KrVecString* v=(KrVecString*)vp; kr_str val=v->data[i]; v->data[i]=v->data[--v->len]; return val; }\n");
+    s = kr_str_concat(s, "typedef struct { void** data; int64_t len; int64_t cap; } KrVecBytes;\n");
+    s = kr_str_concat(s, "void* kr_vec_bytes_new() { KrVecBytes* v=(KrVecBytes*)malloc(sizeof(KrVecBytes)); v->data=(void**)malloc(16*sizeof(void*)); v->len=0; v->cap=16; return v; }\n");
+    s = kr_str_concat(s, "void kr_vec_bytes_push(void* vp, void* val) { KrVecBytes* v=(KrVecBytes*)vp; if(v->len>=v->cap){v->cap*=2;v->data=(void**)realloc(v->data,v->cap*sizeof(void*));} v->data[v->len++]=val; }\n");
+    s = kr_str_concat(s, "void* kr_vec_bytes_get(void* vp, int64_t i) { return ((KrVecBytes*)vp)->data[i]; }\n");
+    s = kr_str_concat(s, "void kr_vec_bytes_set(void* vp, int64_t i, void* val) { ((KrVecBytes*)vp)->data[i]=val; }\n");
+    s = kr_str_concat(s, "int64_t kr_vec_bytes_len(void* vp) { return ((KrVecBytes*)vp)->len; }\n");
+    s = kr_str_concat(s, "void kr_vec_bytes_free(void* vp) { KrVecBytes* v=(KrVecBytes*)vp; free(v->data); free(v); }\n");
+    s = kr_str_concat(s, "void* kr_vec_bytes_pop(void* vp) { KrVecBytes* v=(KrVecBytes*)vp; return v->data[--v->len]; }\n");
+    s = kr_str_concat(s, "void kr_vec_bytes_clear(void* vp) { ((KrVecBytes*)vp)->len=0; }\n");
+    s = kr_str_concat(s, "int64_t kr_vec_bytes_capacity(void* vp) { return ((KrVecBytes*)vp)->cap; }\n");
+    s = kr_str_concat(s, "void kr_vec_bytes_reserve(void* vp, int64_t n) { KrVecBytes* v=(KrVecBytes*)vp; if(n>v->cap){v->cap=n;v->data=(void**)realloc(v->data,n*sizeof(void*));} }\n");
+    s = kr_str_concat(s, "void* kr_vec_bytes_with_capacity(int64_t n) { KrVecBytes* v=(KrVecBytes*)malloc(sizeof(KrVecBytes)); v->data=(void**)malloc(n*sizeof(void*)); v->len=0; v->cap=n; return v; }\n");
+    s = kr_str_concat(s, "void kr_vec_bytes_shrink_to_fit(void* vp) { KrVecBytes* v=(KrVecBytes*)vp; if(v->len<v->cap){v->cap=v->len?v->len:1;v->data=(void**)realloc(v->data,v->cap*sizeof(void*));} }\n");
+    s = kr_str_concat(s, "void* kr_vec_bytes_swap_remove(void* vp, int64_t i) { KrVecBytes* v=(KrVecBytes*)vp; void* val=v->data[i]; v->data[i]=v->data[--v->len]; return val; }\n");
+    s = kr_str_concat(s, "typedef struct { char** keys; int64_t* vals; int64_t cap; int64_t len; } KrMapSI;\n");
+    s = kr_str_concat(s, "static uint64_t _kr_hash_str(const char* s) { uint64_t h=5381; while(*s) h=h*33+(*s++); return h; }\n");
+    s = kr_str_concat(s, "void* kr_map_string_int_new() {\n");
+    s = kr_str_concat(s, "  KrMapSI* m=(KrMapSI*)malloc(sizeof(KrMapSI)); m->cap=64; m->len=0;\n");
+    s = kr_str_concat(s, "  m->keys=(char**)calloc(64,sizeof(char*)); m->vals=(int64_t*)calloc(64,sizeof(int64_t)); return m;\n}\n");
+    s = kr_str_concat(s, "void kr_map_string_int_set(void* mp, kr_str key, int64_t val) {\n");
+    s = kr_str_concat(s, "  KrMapSI* m=(KrMapSI*)mp; uint64_t h=_kr_hash_str(key)%m->cap;\n");
+    s = kr_str_concat(s, "  while(m->keys[h]){if(strcmp(m->keys[h],key)==0){m->vals[h]=val;return;} h=(h+1)%m->cap;}\n");
+    s = kr_str_concat(s, "  m->keys[h]=strdup(key); m->vals[h]=val; m->len++;\n}\n");
+    s = kr_str_concat(s, "int64_t kr_map_string_int_get(void* mp, kr_str key) {\n");
+    s = kr_str_concat(s, "  KrMapSI* m=(KrMapSI*)mp; uint64_t h=_kr_hash_str(key)%m->cap;\n");
+    s = kr_str_concat(s, "  while(m->keys[h]){if(strcmp(m->keys[h],key)==0) return m->vals[h]; h=(h+1)%m->cap;} return 0;\n}\n");
+    s = kr_str_concat(s, "int64_t kr_map_string_int_has(void* mp, kr_str key) {\n");
+    s = kr_str_concat(s, "  KrMapSI* m=(KrMapSI*)mp; uint64_t h=_kr_hash_str(key)%m->cap;\n");
+    s = kr_str_concat(s, "  while(m->keys[h]){if(strcmp(m->keys[h],key)==0) return 1; h=(h+1)%m->cap;} return 0;\n}\n");
+    s = kr_str_concat(s, "int64_t kr_map_string_int_len(void* mp) { return ((KrMapSI*)mp)->len; }\n");
+    s = kr_str_concat(s, "void kr_map_string_int_delete(void* mp, kr_str key) {\n");
+    s = kr_str_concat(s, "  KrMapSI* m=(KrMapSI*)mp; uint64_t h=_kr_hash_str(key)%m->cap;\n");
+    s = kr_str_concat(s, "  while(m->keys[h]){if(strcmp(m->keys[h],key)==0){free(m->keys[h]);m->keys[h]=NULL;m->len--;return;} h=(h+1)%m->cap;}\n}\n");
+    s = kr_str_concat(s, "void kr_map_string_int_clear(void* mp) { KrMapSI* m=(KrMapSI*)mp; for(int64_t i=0;i<m->cap;i++){if(m->keys[i])free(m->keys[i]);m->keys[i]=NULL;} m->len=0; }\n");
+    s = kr_str_concat(s, "void kr_map_string_int_free(void* mp) { KrMapSI* m=(KrMapSI*)mp; for(int64_t i=0;i<m->cap;i++)if(m->keys[i])free(m->keys[i]); free(m->keys);free(m->vals);free(m); }\n");
+    s = kr_str_concat(s, "void* kr_map_string_int_keys(void* mp) { KrMapSI* m=(KrMapSI*)mp; void* v=kr_vec_string_new(); for(int64_t i=0;i<m->cap;i++)if(m->keys[i])kr_vec_string_push(v,m->keys[i]); return v; }\n");
+    s = kr_str_concat(s, "void* kr_map_string_int_values(void* mp) { KrMapSI* m=(KrMapSI*)mp; void* v=kr_vec_int_new(); for(int64_t i=0;i<m->cap;i++)if(m->keys[i])kr_vec_int_push(v,m->vals[i]); return v; }\n");
+    s = kr_str_concat(s, "typedef struct { char** keys; char** vals; int64_t cap; int64_t len; } KrMapSS;\n");
+    s = kr_str_concat(s, "void* kr_map_string_string_new() {\n");
+    s = kr_str_concat(s, "  KrMapSS* m=(KrMapSS*)malloc(sizeof(KrMapSS)); m->cap=64; m->len=0;\n");
+    s = kr_str_concat(s, "  m->keys=(char**)calloc(64,sizeof(char*)); m->vals=(char**)calloc(64,sizeof(char*)); return m;\n}\n");
+    s = kr_str_concat(s, "void kr_map_string_string_set(void* mp, kr_str key, kr_str val) {\n");
+    s = kr_str_concat(s, "  KrMapSS* m=(KrMapSS*)mp; uint64_t h=_kr_hash_str(key)%m->cap;\n");
+    s = kr_str_concat(s, "  while(m->keys[h]){if(strcmp(m->keys[h],key)==0){free(m->vals[h]);m->vals[h]=strdup(val);return;} h=(h+1)%m->cap;}\n");
+    s = kr_str_concat(s, "  m->keys[h]=strdup(key); m->vals[h]=strdup(val); m->len++;\n}\n");
+    s = kr_str_concat(s, "kr_str kr_map_string_string_get(void* mp, kr_str key) {\n");
+    s = kr_str_concat(s, "  KrMapSS* m=(KrMapSS*)mp; uint64_t h=_kr_hash_str(key)%m->cap;\n");
+    s = kr_str_concat(s, "  while(m->keys[h]){if(strcmp(m->keys[h],key)==0) return m->vals[h]; h=(h+1)%m->cap;} return \"\";\n}\n");
+    s = kr_str_concat(s, "int64_t kr_map_string_string_has(void* mp, kr_str key) {\n");
+    s = kr_str_concat(s, "  KrMapSS* m=(KrMapSS*)mp; uint64_t h=_kr_hash_str(key)%m->cap;\n");
+    s = kr_str_concat(s, "  while(m->keys[h]){if(strcmp(m->keys[h],key)==0) return 1; h=(h+1)%m->cap;} return 0;\n}\n");
+    s = kr_str_concat(s, "int64_t kr_map_string_string_len(void* mp) { return ((KrMapSS*)mp)->len; }\n");
+    s = kr_str_concat(s, "void kr_map_string_string_delete(void* mp, kr_str key) {\n");
+    s = kr_str_concat(s, "  KrMapSS* m=(KrMapSS*)mp; uint64_t h=_kr_hash_str(key)%m->cap;\n");
+    s = kr_str_concat(s, "  while(m->keys[h]){if(strcmp(m->keys[h],key)==0){free(m->keys[h]);free(m->vals[h]);m->keys[h]=NULL;m->vals[h]=NULL;m->len--;return;} h=(h+1)%m->cap;}\n}\n");
+    s = kr_str_concat(s, "void kr_map_string_string_clear(void* mp) { KrMapSS* m=(KrMapSS*)mp; for(int64_t i=0;i<m->cap;i++){if(m->keys[i]){free(m->keys[i]);free(m->vals[i]);m->keys[i]=NULL;m->vals[i]=NULL;}} m->len=0; }\n");
+    s = kr_str_concat(s, "void kr_map_string_string_free(void* mp) { KrMapSS* m=(KrMapSS*)mp; for(int64_t i=0;i<m->cap;i++){if(m->keys[i]){free(m->keys[i]);free(m->vals[i]);}} free(m->keys);free(m->vals);free(m); }\n");
+    s = kr_str_concat(s, "void* kr_map_string_string_keys(void* mp) { KrMapSS* m=(KrMapSS*)mp; void* v=kr_vec_string_new(); for(int64_t i=0;i<m->cap;i++)if(m->keys[i])kr_vec_string_push(v,m->keys[i]); return v; }\n");
+    s = kr_str_concat(s, "void* kr_map_string_string_values(void* mp) { KrMapSS* m=(KrMapSS*)mp; void* v=kr_vec_string_new(); for(int64_t i=0;i<m->cap;i++)if(m->keys[i])kr_vec_string_push(v,m->vals[i]); return v; }\n");
+    s = kr_str_concat(s, "kr_str kr_fmt_float(double v, ...) { char* r=(char*)malloc(64); snprintf(r,64,\"%g\",v); return r; }\n");
+    s = kr_str_concat(s, "kr_str kr_fmt_bool(int64_t v) { return v ? \"true\" : \"false\"; }\n");
+    s = kr_str_concat(s, "kr_str kr_fmt_hex(int64_t v) { char* r=(char*)malloc(32); snprintf(r,32,\"0x%llx\",(unsigned long long)v); return r; }\n");
+    s = kr_str_concat(s, "#define kr_printf(...) printf(__VA_ARGS__)\n");
+    s = kr_str_concat(s, "void kr_putchar(int64_t c) { putchar((int)c); }\n");
+    s = kr_str_concat(s, "int64_t kr_getchar() { return (int64_t)getchar(); }\n");
+    s = kr_str_concat(s, "void* kr_malloc(int64_t sz) { return malloc((size_t)sz); }\n");
+    s = kr_str_concat(s, "void kr_free(void* p) { free(p); }\n");
+    s = kr_str_concat(s, "void* kr_realloc(void* p, int64_t sz) { return realloc(p,(size_t)sz); }\n");
+    s = kr_str_concat(s, "int64_t kr_str_eq(kr_str a, kr_str b) { return strcmp(a,b)==0; }\n");
+    s = kr_str_concat(s, "int64_t kr_str_ne(kr_str a, kr_str b) { return strcmp(a,b)!=0; }\n");
+    s = kr_str_concat(s, "int64_t kr_str_len(kr_str s) { return (int64_t)strlen(s); }\n");
+    s = kr_str_concat(s, "int64_t kr_str_contains(kr_str s, kr_str sub) { return strstr(s,sub)!=NULL; }\n");
+    s = kr_str_concat(s, "int64_t kr_str_starts_with(kr_str s, kr_str pfx) { return strncmp(s,pfx,strlen(pfx))==0; }\n");
+    s = kr_str_concat(s, "int64_t kr_str_index_of(kr_str s, kr_str sub) { char* p=strstr(s,sub); return p?(int64_t)(p-s):-1; }\n");
+    s = kr_str_concat(s, "kr_str kr_str_replace(kr_str s, kr_str old, kr_str rep) {\n");
+    s = kr_str_concat(s, "  size_t ol=strlen(old),rl=strlen(rep),sl=strlen(s); char* r=(char*)malloc(sl*2+1); char* w=r;\n");
+    s = kr_str_concat(s, "  while(*s){char* p=strstr(s,old);if(!p){strcpy(w,s);break;}memcpy(w,s,p-s);w+=p-s;memcpy(w,rep,rl);w+=rl;s=p+ol;}*w=0;return r;\n}\n");
+    s = kr_str_concat(s, "kr_str kr_str_to_lower(kr_str s) { size_t n=strlen(s); char* r=(char*)malloc(n+1); for(size_t i=0;i<=n;i++)r[i]=tolower((unsigned char)s[i]); return r; }\n");
+    s = kr_str_concat(s, "kr_str kr_str_to_upper(kr_str s) { size_t n=strlen(s); char* r=(char*)malloc(n+1); for(size_t i=0;i<=n;i++)r[i]=toupper((unsigned char)s[i]); return r; }\n");
+    s = kr_str_concat(s, "kr_str kr_str_trim(kr_str s) { while(*s==' '||*s=='\\t'||*s=='\\n'||*s=='\\r')s++; size_t n=strlen(s); while(n>0&&(s[n-1]==' '||s[n-1]=='\\t'||s[n-1]=='\\n'||s[n-1]=='\\r'))n--; char* r=(char*)malloc(n+1); memcpy(r,s,n); r[n]=0; return r; }\n");
+    s = kr_str_concat(s, "kr_str kr_strdup(kr_str s) { return strdup(s); }\n");
+    s = kr_str_concat(s, "kr_str kr_from_cstr(void* p) { return p ? (kr_str)p : \"\"; }\n");
+    s = kr_str_concat(s, "void* kr_cstr(kr_str s) { return (void*)s; }\n");
+    s = kr_str_concat(s, "int64_t kr_str_char_count(kr_str s) { return (int64_t)strlen(s); }\n");
+    s = kr_str_concat(s, "kr_str kr_str_from_char_code(int64_t c) { char* r=(char*)malloc(2); r[0]=(char)c; r[1]=0; return r; }\n");
+    s = kr_str_concat(s, "kr_str kr_str_join(void* vp, kr_str sep) {\n");
+    s = kr_str_concat(s, "  KrVecString* v=(KrVecString*)vp; if(!v->len) return \"\"; size_t total=0,sl=strlen(sep);\n");
+    s = kr_str_concat(s, "  for(int64_t i=0;i<v->len;i++) total+=strlen(v->data[i]); total+=(v->len-1)*sl;\n");
+    s = kr_str_concat(s, "  char* r=(char*)malloc(total+1); char* w=r;\n");
+    s = kr_str_concat(s, "  for(int64_t i=0;i<v->len;i++){if(i>0){memcpy(w,sep,sl);w+=sl;}size_t n=strlen(v->data[i]);memcpy(w,v->data[i],n);w+=n;} *w=0; return r;\n}\n");
+    s = kr_str_concat(s, "void* kr_str_split(kr_str s, kr_str sep) {\n");
+    s = kr_str_concat(s, "  void* v=kr_vec_string_new(); size_t sl=strlen(sep);\n");
+    s = kr_str_concat(s, "  while(*s){char* p=strstr(s,sep);if(!p){kr_vec_string_push(v,strdup(s));break;}\n");
+    s = kr_str_concat(s, "  char* chunk=(char*)malloc(p-s+1);memcpy(chunk,s,p-s);chunk[p-s]=0;kr_vec_string_push(v,chunk);s=p+sl;} return v;\n}\n");
+    s = kr_str_concat(s, "int64_t kr_rand() { return (int64_t)rand(); }\n");
+    s = kr_str_concat(s, "void kr_srand(int64_t seed) { srand((unsigned)seed); }\n");
+    s = kr_str_concat(s, "double kr_sqrt(double x) { return sqrt(x); }\n");
+    s = kr_str_concat(s, "double kr_pow(double x, double y) { return pow(x,y); }\n");
+    s = kr_str_concat(s, "double kr_floor(double x) { return floor(x); }\n");
+    s = kr_str_concat(s, "double kr_ceil(double x) { return ceil(x); }\n");
+    s = kr_str_concat(s, "double kr_round(double x) { return round(x); }\n");
+    s = kr_str_concat(s, "double kr_sin(double x) { return sin(x); }\n");
+    s = kr_str_concat(s, "double kr_cos(double x) { return cos(x); }\n");
+    s = kr_str_concat(s, "double kr_tan(double x) { return tan(x); }\n");
+    s = kr_str_concat(s, "double kr_log(double x) { return log(x); }\n");
+    s = kr_str_concat(s, "double kr_log10(double x) { return log10(x); }\n");
+    s = kr_str_concat(s, "double kr_exp(double x) { return exp(x); }\n");
+    s = kr_str_concat(s, "double kr_fabs(double x) { return fabs(x); }\n");
+    s = kr_str_concat(s, "double kr_fmod(double x, double y) { return fmod(x,y); }\n");
+    s = kr_str_concat(s, "double kr_atan2(double y, double x) { return atan2(y,x); }\n");
+    s = kr_str_concat(s, "double kr_asin(double x) { return asin(x); }\n");
+    s = kr_str_concat(s, "double kr_acos(double x) { return acos(x); }\n");
+    s = kr_str_concat(s, "double kr_atan(double x) { return atan(x); }\n");
+    s = kr_str_concat(s, "double kr_sinh(double x) { return sinh(x); }\n");
+    s = kr_str_concat(s, "double kr_cosh(double x) { return cosh(x); }\n");
+    s = kr_str_concat(s, "double kr_tanh(double x) { return tanh(x); }\n");
+    s = kr_str_concat(s, "static int _kr_test_count=0, _kr_test_pass=0, _kr_test_fail=0;\n");
+    s = kr_str_concat(s, "static inline void _kr_default_test_section(kr_str name) { printf(\"--- %s ---\\n\", name); }\n");
+    s = kr_str_concat(s, "static inline void _kr_default_test_pass(kr_str msg) { _kr_test_count++; _kr_test_pass++; printf(\"  PASS: %s\\n\", msg); }\n");
+    s = kr_str_concat(s, "static inline void _kr_default_test_fail(kr_str msg) { _kr_test_count++; _kr_test_fail++; printf(\"  FAIL: %s\\n\", msg); }\n");
+    s = kr_str_concat(s, "static inline void _kr_default_test_skip(kr_str msg) { printf(\"  SKIP: %s\\n\", msg); }\n");
+    s = kr_str_concat(s, "static inline void _kr_default_assert(int64_t cond) { if(!cond){printf(\"ASSERTION FAILED\\n\");exit(1);} }\n");
+    s = kr_str_concat(s, "static inline void _kr_default_assert_eq(int64_t a, int64_t b) {\n");
+    s = kr_str_concat(s, "  _kr_test_count++; if(a==b){_kr_test_pass++;}else{_kr_test_fail++;printf(\"  ASSERT_EQ FAILED: %lld != %lld\\n\",(long long)a,(long long)b);}\n}\n");
+    s = kr_str_concat(s, "static inline void _kr_default_assert_ne(int64_t a, int64_t b) {\n");
+    s = kr_str_concat(s, "  _kr_test_count++; if(a!=b){_kr_test_pass++;}else{_kr_test_fail++;printf(\"  ASSERT_NE FAILED: %lld == %lld\\n\",(long long)a,(long long)b);}\n}\n");
+    s = kr_str_concat(s, "#define kr_test_section _kr_default_test_section\n");
+    s = kr_str_concat(s, "#define kr_test_pass _kr_default_test_pass\n");
+    s = kr_str_concat(s, "#define kr_test_fail _kr_default_test_fail\n");
+    s = kr_str_concat(s, "#define kr_test_skip _kr_default_test_skip\n");
+    s = kr_str_concat(s, "#define kr_assert _kr_default_assert\n");
+    s = kr_str_concat(s, "#define kr_assert_eq _kr_default_assert_eq\n");
+    s = kr_str_concat(s, "#define kr_assert_ne _kr_default_assert_ne\n");
+    s = kr_str_concat(s, "void* kr_mutex_create() { return malloc(64); }\n");
+    s = kr_str_concat(s, "void kr_mutex_destroy(void* m) { free(m); }\n");
+    s = kr_str_concat(s, "void kr_mutex_lock(void* m) { (void)m; }\n");
+    s = kr_str_concat(s, "void kr_mutex_unlock(void* m) { (void)m; }\n");
+    s = kr_str_concat(s, "void* kr_thread_spawn(void* fn) { (void)fn; return NULL; }\n");
+    s = kr_str_concat(s, "void kr_thread_join(void* h) { (void)h; }\n");
+    s = kr_str_concat(s, "void kr_sleep_ms(int64_t ms) { usleep((unsigned)(ms*1000)); }\n");
+    s = kr_str_concat(s, "int64_t kr_time() { return (int64_t)time(NULL); }\n");
+    s = kr_str_concat(s, "int64_t kr_isalpha(int64_t c) { return isalpha((int)c); }\n");
+    s = kr_str_concat(s, "int64_t kr_isdigit(int64_t c) { return isdigit((int)c); }\n");
+    s = kr_str_concat(s, "int64_t kr_isalnum(int64_t c) { return isalnum((int)c); }\n");
+    s = kr_str_concat(s, "int64_t kr_isupper(int64_t c) { return isupper((int)c); }\n");
+    s = kr_str_concat(s, "int64_t kr_islower(int64_t c) { return islower((int)c); }\n");
+    s = kr_str_concat(s, "int64_t kr_isspace(int64_t c) { return isspace((int)c); }\n");
+    s = kr_str_concat(s, "int64_t kr_tolower(int64_t c) { return (int64_t)tolower((int)c); }\n");
+    s = kr_str_concat(s, "int64_t kr_toupper(int64_t c) { return (int64_t)toupper((int)c); }\n");
+    s = kr_str_concat(s, "int64_t kr_atoi(kr_str s) { return (int64_t)atoi(s); }\n");
+    s = kr_str_concat(s, "double kr_atof(kr_str s) { return atof(s); }\n");
+    s = kr_str_concat(s, "void kr_abort() { abort(); }\n");
+    s = kr_str_concat(s, "kr_str kr_fgets(kr_str buf, int64_t n, void* f) { return fgets(buf,(int)n,(FILE*)f); }\n");
+    s = kr_str_concat(s, "int64_t kr_fwrite(void* ptr, int64_t size, int64_t count, void* f) { return (int64_t)fwrite(ptr,(size_t)size,(size_t)count,(FILE*)f); }\n");
+    s = kr_str_concat(s, "int64_t kr_fread(void* ptr, int64_t size, int64_t count, void* f) { return (int64_t)fread(ptr,(size_t)size,(size_t)count,(FILE*)f); }\n");
+    s = kr_str_concat(s, "int64_t kr_feof(void* f) { return (int64_t)feof((FILE*)f); }\n");
+    s = kr_str_concat(s, "int64_t kr_ferror(void* f) { return (int64_t)ferror((FILE*)f); }\n");
+    s = kr_str_concat(s, "int64_t kr_fflush(void* f) { return (int64_t)fflush((FILE*)f); }\n");
+    s = kr_str_concat(s, "int64_t kr_fgetc(void* f) { return (int64_t)fgetc((FILE*)f); }\n");
+    s = kr_str_concat(s, "int64_t kr_fputc(int64_t c, void* f) { return (int64_t)fputc((int)c,(FILE*)f); }\n");
+    s = kr_str_concat(s, "int64_t kr_fseek(void* f, int64_t off, int64_t w) { return (int64_t)fseek((FILE*)f,(long)off,(int)w); }\n");
+    s = kr_str_concat(s, "int64_t kr_ftell(void* f) { return (int64_t)ftell((FILE*)f); }\n");
+    s = kr_str_concat(s, "void kr_rewind(void* f) { rewind((FILE*)f); }\n");
+    s = kr_str_concat(s, "int64_t kr_memcmp(void* a, void* b, int64_t n) { return (int64_t)memcmp(a,b,(size_t)n); }\n");
+    s = kr_str_concat(s, "void* kr_memcpy(void* dst, void* src, int64_t n) { return memcpy(dst,src,(size_t)n); }\n");
+    s = kr_str_concat(s, "void* kr_memmove(void* dst, void* src, int64_t n) { return memmove(dst,src,(size_t)n); }\n");
+    s = kr_str_concat(s, "void* kr_memset(void* p, int64_t c, int64_t n) { return memset(p,(int)c,(size_t)n); }\n");
+    s = kr_str_concat(s, "int64_t kr_setenv(kr_str name, kr_str val, ...) { return (int64_t)setenv(name,val,1); }\n");
+    s = kr_str_concat(s, "void kr_unsetenv(kr_str name) { unsetenv(name); }\n");
+    s = kr_str_concat(s, "kr_str kr_strstr(kr_str haystack, kr_str needle) { char* p=strstr(haystack,needle); return p?p:\"\"; }\n");
+    s = kr_str_concat(s, "kr_str kr_strchr(kr_str s, int64_t c) { char* p=strchr(s,(int)c); return p?p:\"\"; }\n");
+    s = kr_str_concat(s, "kr_str kr_strncpy(kr_str dst, kr_str src, int64_t n) { return strncpy(dst,src,(size_t)n); }\n");
+    s = kr_str_concat(s, "kr_str kr_strcat(kr_str dst, kr_str src) { return strcat(dst,src); }\n");
+    s = kr_str_concat(s, "kr_str kr_strcpy(kr_str dst, kr_str src) { return strcpy(dst,src); }\n");
+    s = kr_str_concat(s, "int64_t kr_strncmp(kr_str a, kr_str b, int64_t n) { return (int64_t)strncmp(a,b,(size_t)n); }\n");
+    s = kr_str_concat(s, "kr_str kr_strtok(kr_str s, kr_str d) { return strtok(s,d); }\n");
+    s = kr_str_concat(s, "int64_t kr_str_is_valid_utf8(kr_str s) { while(*s){unsigned char c=*s;if(c<0x80)s++;else if((c&0xE0)==0xC0){if((s[1]&0xC0)!=0x80)return 0;s+=2;}else if((c&0xF0)==0xE0){if((s[1]&0xC0)!=0x80||(s[2]&0xC0)!=0x80)return 0;s+=3;}else if((c&0xF8)==0xF0){if((s[1]&0xC0)!=0x80||(s[2]&0xC0)!=0x80||(s[3]&0xC0)!=0x80)return 0;s+=4;}else return 0;} return 1; }\n");
+    s = kr_str_concat(s, "int64_t kr_str_char_at_utf8(kr_str s, int64_t idx) { return (int64_t)(unsigned char)s[idx]; }\n");
+    s = kr_str_concat(s, "int64_t kr_block_on(void* future) { (void)future; return 0; }\n");
+    s = kr_str_concat(s, "#define kr_sprintf(...) sprintf(__VA_ARGS__)\n");
+    s = kr_str_concat(s, "#define kr_sscanf(...) sscanf(__VA_ARGS__)\n");
+    s = kr_str_concat(s, "#define kr_snprintf(...) snprintf(__VA_ARGS__)\n");
+    s = kr_str_concat(s, "int64_t kr_rand_int(int64_t lo, int64_t hi) { return lo + (rand() % (hi - lo + 1)); }\n");
+    s = kr_str_concat(s, "double kr_rand_float() { return (double)rand() / (double)RAND_MAX; }\n");
+    s = kr_str_concat(s, "void kr_rand_seed(int64_t seed) { srand((unsigned)seed); }\n");
+    s = kr_str_concat(s, "int64_t kr_math_abs(int64_t x) { return x<0?-x:x; }\n");
+    s = kr_str_concat(s, "int64_t kr_math_min(int64_t a, int64_t b) { return a<b?a:b; }\n");
+    s = kr_str_concat(s, "int64_t kr_math_max(int64_t a, int64_t b) { return a>b?a:b; }\n");
+    s = kr_str_concat(s, "double kr_math_sqrt(double x) { return sqrt(x); }\n");
+    s = kr_str_concat(s, "double kr_math_floor(double x) { return floor(x); }\n");
+    s = kr_str_concat(s, "double kr_math_ceil(double x) { return ceil(x); }\n");
+    s = kr_str_concat(s, "double kr_math_round(double x) { return round(x); }\n");
+    s = kr_str_concat(s, "double kr_math_sin(double x) { return sin(x); }\n");
+    s = kr_str_concat(s, "double kr_math_cos(double x) { return cos(x); }\n");
+    s = kr_str_concat(s, "double kr_math_tan(double x) { return tan(x); }\n");
+    s = kr_str_concat(s, "double kr_math_pow(double x, double y) { return pow(x,y); }\n");
+    s = kr_str_concat(s, "void kr_log_debug(kr_str msg) { fprintf(stderr,\"[DEBUG] %s\\n\",msg); }\n");
+    s = kr_str_concat(s, "void kr_log_info(kr_str msg) { fprintf(stderr,\"[INFO] %s\\n\",msg); }\n");
+    s = kr_str_concat(s, "void kr_log_warn(kr_str msg) { fprintf(stderr,\"[WARN] %s\\n\",msg); }\n");
+    s = kr_str_concat(s, "void kr_log_error(kr_str msg) { fprintf(stderr,\"[ERROR] %s\\n\",msg); }\n");
+    s = kr_str_concat(s, "void kr_log_set_level(int64_t lvl) { (void)lvl; }\n");
+    s = kr_str_concat(s, "int64_t kr_bench_start() { return (int64_t)clock(); }\n");
+    s = kr_str_concat(s, "int64_t kr_bench_end(int64_t start, ...) { return (int64_t)clock() - start; }\n");
+    s = kr_str_concat(s, "int64_t kr_remove(kr_str path) { return (int64_t)remove(path); }\n");
+    s = kr_str_concat(s, "int64_t kr_rename(kr_str old, kr_str new_path) { return (int64_t)rename(old,new_path); }\n");
+    s = kr_str_concat(s, "void* kr_rand_bytes(int64_t n) { void* buf=malloc((size_t)n); for(int64_t i=0;i<n;i++)((char*)buf)[i]=(char)rand(); return buf; }\n");
+    s = kr_str_concat(s, "int64_t kr_bytes_eq(void* a, void* b, int64_t n) { return memcmp(a,b,(size_t)n)==0; }\n");
+    s = kr_str_concat(s, "void kr_println(kr_str s) { printf(\"%s\\n\",s); }\n");
+    s = kr_str_concat(s, "void* kr_mutex_new() { return malloc(64); }\n");
+    s = kr_str_concat(s, "void kr_mutex_free(void* m) { free(m); }\n");
+    s = kr_str_concat(s, "#define kr_channel_new(...) ((void*)0)\n");
+    s = kr_str_concat(s, "#define kr_channel_create(...) ((void*)0)\n");
+    s = kr_str_concat(s, "void kr_channel_send(void* ch, int64_t val) { (void)ch; (void)val; }\n");
+    s = kr_str_concat(s, "int64_t kr_channel_recv(void* ch) { (void)ch; return 0; }\n");
+    s = kr_str_concat(s, "int64_t kr_channel_try_send(void* ch, int64_t val) { (void)ch; (void)val; return 0; }\n");
+    s = kr_str_concat(s, "int64_t kr_channel_try_recv(void* ch) { (void)ch; return 0; }\n");
+    s = kr_str_concat(s, "void kr_channel_close(void* ch) { (void)ch; }\n");
+    s = kr_str_concat(s, "void* kr_condvar_create() { return malloc(64); }\n");
+    s = kr_str_concat(s, "void kr_condvar_destroy(void* cv) { free(cv); }\n");
+    s = kr_str_concat(s, "void kr_condvar_signal(void* cv) { (void)cv; }\n");
+    s = kr_str_concat(s, "void kr_condvar_broadcast(void* cv) { (void)cv; }\n");
+    s = kr_str_concat(s, "void* kr_pool_new(int64_t n) { (void)n; return malloc(8); }\n");
+    s = kr_str_concat(s, "void kr_pool_shutdown(void* p) { free(p); }\n");
+    s = kr_str_concat(s, "void* kr_executor_new() { return malloc(8); }\n");
+    s = kr_str_concat(s, "void kr_executor_run(void* e) { (void)e; }\n");
+    s = kr_str_concat(s, "void kr_executor_shutdown(void* e) { free(e); }\n");
+    s = kr_str_concat(s, "void* kr_cancel_token_new() { return calloc(1,sizeof(int64_t)); }\n");
+    s = kr_str_concat(s, "void kr_cancel_token_cancel(void* t) { *(int64_t*)t=1; }\n");
+    s = kr_str_concat(s, "int64_t kr_cancel_token_is_cancelled(void* t) { return *(int64_t*)t; }\n");
+    s = kr_str_concat(s, "void* kr_atomic_new(int64_t v) { int64_t* p=(int64_t*)malloc(sizeof(int64_t)); *p=v; return p; }\n");
+    s = kr_str_concat(s, "void kr_atomic_store(void* p, int64_t v) { *(int64_t*)p=v; }\n");
+    s = kr_str_concat(s, "int64_t kr_atomic_load(void* p) { return *(int64_t*)p; }\n");
+    s = kr_str_concat(s, "int64_t kr_atomic_add(void* p, int64_t v) { int64_t old=*(int64_t*)p; *(int64_t*)p=old+v; return old; }\n");
+    s = kr_str_concat(s, "int64_t kr_atomic_sub(void* p, int64_t v) { int64_t old=*(int64_t*)p; *(int64_t*)p=old-v; return old; }\n");
+    s = kr_str_concat(s, "int64_t kr_atomic_cas(void* p, int64_t expected, int64_t desired) { if(*(int64_t*)p==expected){*(int64_t*)p=desired; return 1;} return 0; }\n");
+    return s;
+}
+
+kr_str kr_c_runtime_shims_windows() {
+    __auto_type s = kr_c_runtime_shims_posix();
+    s = kr_str_concat(s, "#define kr_snprintf _snprintf\n");
+    s = kr_str_concat(s, "#define kr_strdup _strdup\n");
+    return s;
+}
+
+kr_str kr_c_runtime_shims_wasi() {
+    return kr_c_runtime_shims_posix();
+}
+
+kr_str kr_c_runtime_shims_for_target(Target t) {
+    if (kr_os_is_windows(t.os)) {
+        return kr_c_runtime_shims_windows();
+    }
+    if (_KR_EQ(t.os, kr_OS_WASI())) {
+        return kr_c_runtime_shims_wasi();
+    }
+    return kr_c_runtime_shims_posix();
+}
+
+kr_str kr_c_main_signature(Target t) {
+    if (kr_os_is_windows(t.os) && _KR_EQ(t.abi, kr_ABI_MSVC())) {
+        return "int main(int argc, char* argv[])";
+    }
+    return "int main(int argc, char* argv[])";
+}
+
+kr_str kr_linker_flags(Target t) {
+    if (_KR_EQ(t.os, kr_OS_LINUX()) && _KR_EQ(t.abi, kr_ABI_GNU())) {
+        return "-lm -lpthread";
+    }
+    if (_KR_EQ(t.os, kr_OS_LINUX()) && _KR_EQ(t.abi, kr_ABI_MUSL())) {
+        return "-static -lm";
+    }
+    if (_KR_EQ(t.os, kr_OS_MACOS())) {
+        return "-lm";
+    }
+    if (_KR_EQ(t.os, kr_OS_FREEBSD())) {
+        return "-lm -lpthread";
+    }
+    if (_KR_EQ(t.os, kr_OS_WINDOWS()) && _KR_EQ(t.abi, kr_ABI_MSVC())) {
+        return "/link /DEFAULTLIB:msvcrt.lib";
+    }
+    if (_KR_EQ(t.os, kr_OS_WINDOWS()) && _KR_EQ(t.abi, kr_ABI_GNU())) {
+        return "-lm";
+    }
+    if (_KR_EQ(t.os, kr_OS_WASI())) {
+        return "";
+    }
+    return "";
+}
+
+kr_str kr_object_ext(Target t) {
+    if (kr_os_is_windows(t.os)) {
+        return ".obj";
+    }
+    return ".o";
+}
+
+kr_str kr_exe_ext(Target t) {
+    if (kr_os_is_windows(t.os)) {
+        return ".exe";
+    }
+    if (_KR_EQ(t.os, kr_OS_WASI())) {
+        return ".wasm";
+    }
+    return "";
+}
+
+kr_str kr_emit_c_preamble(Target t) {
+    __auto_type includes = kr_c_includes_for_target(t);
+    __auto_type typedefs = kr_c_typedefs_common();
+    __auto_type size_t = kr_c_size_type(t);
+    __auto_type shims = kr_c_runtime_shims_for_target(t);
+    return kr_str_concat(kr_str_concat(kr_str_concat(kr_str_concat(kr_str_concat("// Generated by krakenc — Kraken Self-Hosted Compiler\n", kr_str_concat("// Target: ", kr_str_concat(t.triple, "\n"))), kr_str_concat("\n", includes)), kr_str_concat("\n", typedefs)), size_t), kr_str_concat("\n", shims));
+}
+
+void kr_print_supported_targets() {
+    kr_puts("Supported targets:");
+    kr_puts("  x86_64-apple-darwin         macOS (Intel)");
+    kr_puts("  aarch64-apple-darwin        macOS (Apple Silicon)");
+    kr_puts("  x86_64-unknown-linux-gnu    Linux x86_64 (glibc)");
+    kr_puts("  aarch64-unknown-linux-gnu   Linux ARM64 (glibc)");
+    kr_puts("  x86_64-unknown-linux-musl   Linux x86_64 (musl, static)");
+    kr_puts("  aarch64-unknown-linux-musl  Linux ARM64 (musl, static)");
+    kr_puts("  x86_64-pc-windows-msvc      Windows x64 (MSVC)");
+    kr_puts("  x86_64-pc-windows-gnu       Windows x64 (MinGW)");
+    kr_puts("  aarch64-pc-windows-msvc     Windows ARM64 (MSVC)");
+    kr_puts("  x86_64-unknown-freebsd      FreeBSD x86_64");
+    kr_puts("  aarch64-unknown-freebsd     FreeBSD ARM64");
+    kr_puts("  wasm32-unknown-wasi         WebAssembly (WASI)");
+    kr_puts("");
+    kr_puts("Shorthand aliases:");
+    kr_puts("  linux, macos, darwin, windows, win32, freebsd, wasm, wasi");
+}
+
+kr_str kr_COMPILER_VERSION() {
+    return "0.9.3";
+}
+
+kr_str kr_COMPILER_NAME() {
+    return "krakenc";
+}
+
+int64_t kr_MODE_COMPILE() {
+    return 0;
+}
+
+int64_t kr_MODE_EMIT_C() {
+    return 1;
+}
+
+int64_t kr_MODE_TOKENS() {
+    return 3;
+}
+
+int64_t kr_MODE_VERSION() {
+    return 5;
+}
+
+int64_t kr_MODE_HELP() {
+    return 6;
+}
+
+int64_t kr_MODE_TARGETS() {
+    return 7;
+}
+
+void kr_print_banner() {
+    kr_puts("  _  __          _              ");
+    kr_puts(" | |/ /_ __ __ _| | _____ _ __  ");
+    kr_puts(" | ' /| '__/ _` | |/ / _ \\ '_ \\ ");
+    kr_puts(" | . \\| | | (_| |   <  __/ | | |");
+    kr_puts(" |_|\\_\\_|  \\__,_|_|\\_\\___|_| |_|");
+    kr_puts("");
+    kr_puts(kr_str_concat(" Kraken Language Compiler v", kr_COMPILER_VERSION()));
+    kr_puts("");
+}
+
+void kr_print_version() {
+    kr_puts(kr_str_concat(kr_str_concat(kr_COMPILER_NAME(), " "), kr_COMPILER_VERSION()));
+}
+
+void kr_print_help() {
+    kr_print_banner();
+    kr_puts("Usage: krakenc [options] <source.kr>");
+    kr_puts("");
+    kr_puts("Options:");
+    kr_puts("  --emit-c              Emit C source only (no cc invocation)");
+    kr_puts("  --tokens              Dump token stream");
+    kr_puts("  --target <triple>     Cross-compile for target platform");
+    kr_puts("  --targets             List all supported target platforms");
+    kr_puts("  --version             Print compiler version");
+    kr_puts("  --help                Print this help message");
+    kr_puts("");
+    kr_puts("Target shortcuts: linux, macos, windows, freebsd, wasm");
+    kr_puts("");
+}
+
+kr_str kr_dir_of(kr_str path) {
+    __auto_type len = kr_strlen(path);
+    __auto_type i = len - 1;
+    while (i >= 0) {
+        if (_KR_EQ(kr_str_char_at(path, i), 47)) {
+            return kr_str_slice(path, 0, i + 1);
+        }
+        i = i - 1;
+    }
+    return "";
+}
+
+kr_str kr_resolve_imports(kr_str source, kr_str source_dir) {
+    __auto_type result = "";
+    __auto_type len = kr_strlen(source);
+    __auto_type i = 0;
+    while (i < len) {
+        if (_KR_EQ(i, 0) || _KR_EQ(kr_str_char_at(source, i - 1), 10)) {
+            __auto_type j = i;
+            while (j < len && (_KR_EQ(kr_str_char_at(source, j), 32) || _KR_EQ(kr_str_char_at(source, j), 9))) {
+                j = j + 1;
+            }
+            if (j + 7 <= len && _KR_EQ(kr_str_slice(source, j, j + 7), "import ")) {
+                __auto_type k = j + 7;
+                while (k < len && _KR_NEQ(kr_str_char_at(source, k), 59) && _KR_NEQ(kr_str_char_at(source, k), 10)) {
+                    k = k + 1;
+                }
+                __auto_type mod_name = kr_str_slice(source, j + 7, k);
+                __auto_type mod_path = kr_str_concat(source_dir, kr_str_concat(mod_name, ".kr"));
+                __auto_type mod_source = kr_file_read_string(mod_path);
+                if (_KR_NEQ(mod_source, "")) {
+                    result = kr_str_concat(result, kr_str_concat(mod_source, "\n"));
+                }
+            }
+        }
+        i = i + 1;
+    }
+    result = kr_str_concat(result, source);
+    return result;
+}
+
+kr_str kr_derive_c_path(kr_str input) {
+    if (kr_str_ends_with(input, ".kr")) {
+        __auto_type base = kr_str_slice(input, 0, kr_strlen(input) - 3);
+        return kr_str_concat(base, ".c");
+    }
+    return kr_str_concat(input, ".c");
+}
+
+kr_str kr_derive_exe_path(kr_str input, Target target) {
+    if (kr_str_ends_with(input, ".kr")) {
+        __auto_type base = kr_str_slice(input, 0, kr_strlen(input) - 3);
+        return kr_str_concat(base, kr_exe_ext(target));
+    }
+    return kr_str_concat(input, kr_exe_ext(target));
+}
+
+void kr_dump_tokens(void* int_data, void* lexemes, int64_t count) {
+    __auto_type i = 0;
+    while (i < count) {
+        __auto_type k = kr_vec_int_get(int_data, i * 3);
+        __auto_type lex = kr_vec_string_get(lexemes, i);
+        __auto_type ln = kr_vec_int_get(int_data, i * 3 + 1);
+        __auto_type co = kr_vec_int_get(int_data, i * 3 + 2);
+        kr_puts(kr_str_concat(kr_str_concat(kr_fmt_int(ln), kr_str_concat(":", kr_str_concat(kr_fmt_int(co), "  "))), kr_str_concat(kr_str_concat(kr_token_kind_name(k), "  "), lex)));
+        i = i + 1;
+    }
+}
+
+int64_t kr_main() {
+    Target target = kr_detect_host_target();
+    __auto_type mode = kr_MODE_COMPILE();
+    __auto_type source_file = "";
+    __auto_type has_input = false;
+    __auto_type env_source = kr_getenv("KRAKENC_INPUT");
+    __auto_type env_mode = kr_getenv("KRAKENC_MODE");
+    __auto_type env_target = kr_getenv("KRAKENC_TARGET");
+    if (_KR_NEQ(env_source, "")) {
+        source_file = env_source;
+        has_input = true;
+    }
+    if (_KR_EQ(env_mode, "emit-c")) {
+        mode = kr_MODE_EMIT_C();
+    }
+    if (_KR_EQ(env_mode, "tokens")) {
+        mode = kr_MODE_TOKENS();
+    }
+    if (_KR_EQ(env_mode, "version")) {
+        mode = kr_MODE_VERSION();
+    }
+    if (_KR_EQ(env_mode, "help")) {
+        mode = kr_MODE_HELP();
+    }
+    if (_KR_EQ(env_mode, "targets")) {
+        mode = kr_MODE_TARGETS();
+    }
+    if (_KR_NEQ(env_target, "")) {
+        target = kr_parse_target(env_target);
+    }
+    if (_KR_EQ(mode, kr_MODE_VERSION())) {
+        kr_print_version();
+        return 0;
+    }
+    if (_KR_EQ(mode, kr_MODE_HELP())) {
+        kr_print_help();
+        return 0;
+    }
+    if (_KR_EQ(mode, kr_MODE_TARGETS())) {
+        kr_print_supported_targets();
+        return 0;
+    }
+    kr_print_banner();
+    kr_puts(kr_str_concat("  Host:     ", kr_format_target(kr_detect_host_target())));
+    kr_puts(kr_str_concat("  Target:   ", kr_format_target(target)));
+    kr_puts(kr_str_concat("  CC:       ", kr_default_cc(target)));
+    __auto_type lflags = kr_linker_flags(target);
+    if (_KR_NEQ(lflags, "")) {
+        kr_puts(kr_str_concat("  Linker:   ", lflags));
+    }
+    kr_puts("");
+    __auto_type source = "";
+    if (has_input) {
+        kr_puts(kr_str_concat("  Input:    ", source_file));
+        source = kr_file_read_string(source_file);
+        if (_KR_EQ(source, "")) {
+            kr_puts(kr_str_concat("error: could not read file: ", source_file));
+            return 1;
+        }
+        __auto_type src_dir = kr_dir_of(source_file);
+        source = kr_resolve_imports(source, src_dir);
+    }
+    else {
+        source_file = "test.kr";
+        source = "fn main() -> int { return 0; }";
+        kr_puts("  Input:    <built-in test>");
+    }
+    void* int_data = kr_vec_int_new();
+    void* tok_lexemes = kr_vec_string_new();
+    __auto_type token_count = kr_tokenize(source, int_data, tok_lexemes);
+    kr_puts(kr_str_concat("  Tokens:   ", kr_fmt_int(token_count)));
+    if (_KR_EQ(mode, kr_MODE_TOKENS())) {
+        kr_dump_tokens(int_data, tok_lexemes, token_count);
+        kr_vec_int_free(int_data);
+        kr_vec_string_free(tok_lexemes);
+        return 0;
+    }
+    void* out = kr_vec_string_new();
+    TranslateResult result = kr_translate(int_data, tok_lexemes, token_count, source_file, target, out);
+    if (!result.success) {
+        kr_puts(kr_str_concat("  Errors:   ", kr_fmt_int(result.errors)));
+        kr_puts("Compilation failed.");
+        kr_vec_string_free(out);
+        kr_vec_int_free(int_data);
+        kr_vec_string_free(tok_lexemes);
+        return 1;
+    }
+    kr_str c_source = kr_join_output(out);
+    kr_vec_string_free(out);
+    __auto_type c_path = kr_derive_c_path(source_file);
+    __auto_type exe_path = kr_derive_exe_path(source_file, target);
+    uint8_t* c_file = kr_fopen(c_path, "w");
+    kr_fputs(c_source, c_file);
+    kr_fclose(c_file);
+    kr_puts(kr_str_concat("  C output: ", c_path));
+    if (_KR_EQ(mode, kr_MODE_EMIT_C())) {
+        kr_puts("C source emitted successfully.");
+        kr_vec_int_free(int_data);
+        kr_vec_string_free(tok_lexemes);
+        return 0;
+    }
+    __auto_type cc = kr_default_cc(target);
+    __auto_type cc_cmd = kr_str_concat(cc, kr_str_concat(" -o ", kr_str_concat(exe_path, kr_str_concat(" ", c_path))));
+    __auto_type cc_lflags = kr_linker_flags(target);
+    if (_KR_NEQ(cc_lflags, "")) {
+        cc_cmd = kr_str_concat(cc_cmd, kr_str_concat(" ", cc_lflags));
+    }
+    kr_puts(kr_str_concat("  CC cmd:   ", cc_cmd));
+    __auto_type cc_result = kr_system(cc_cmd);
+    if (_KR_NEQ(cc_result, 0)) {
+        kr_puts("error: C compilation failed.");
+        return 1;
+    }
+    kr_puts(kr_str_concat("  Output:   ", exe_path));
+    kr_puts("Build complete.");
+    kr_vec_int_free(int_data);
+    kr_vec_string_free(tok_lexemes);
+    return 0;
 }
 
 
