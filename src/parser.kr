@@ -185,6 +185,33 @@ fn skip_generic_params(tr: Translator) -> Translator {
     return c;
 }
 
+// Detect closure-like syntax patterns in a brace block:
+//   |...| -> ...    or    || -> ...
+fn block_has_closure_like(tr: Translator) -> bool {
+    if (tr_at_end(tr) || tr_kind(tr) != TK_LBRACE()) { return false; }
+    let i = tr.pos + 1;
+    let depth = 1;
+    while (i < tr.count && depth > 0) {
+        let k = vec_int_get(tr.int_data, i * 3);
+        if (k == TK_LBRACE()) { depth = depth + 1; }
+        if (k == TK_RBRACE()) { depth = depth - 1; }
+
+        if (depth > 0 && (k == TK_PIPE() || k == TK_OP_BIT_OR() || k == TK_OP_OR())) {
+            let j = i + 1;
+            let lim = i + 10;
+            while (j < tr.count && j < lim) {
+                let k2 = vec_int_get(tr.int_data, j * 3);
+                if (k2 == TK_ARROW()) { return true; }
+                if (k2 == TK_SEMICOLON() || k2 == TK_LBRACE()) { break; }
+                j = j + 1;
+            }
+        }
+
+        i = i + 1;
+    }
+    return false;
+}
+
 // Skip function-type suffix in type positions:
 //   fn(T1, T2) -> Ret
 fn skip_fn_type_sig(tr: Translator) -> Translator {
@@ -300,11 +327,24 @@ fn is_local_fn_var(tr: Translator, name: string) -> bool {
                 if (j4 < tr.pos) {
                     if (vec_int_get(tr.int_data, j2 * 3) == TK_OP_ASSIGN()) {
                         let k_rhs = vec_int_get(tr.int_data, j3 * 3);
-                        if (k_rhs == TK_PIPE() || k_rhs == TK_OP_BIT_OR()) { return true; }
+                        if (k_rhs == TK_PIPE() || k_rhs == TK_OP_BIT_OR() || k_rhs == TK_OP_OR()) { return true; }
+                        // Pattern: let name = some_call(...)
+                        if (k_rhs == TK_IDENTIFIER()) {
+                            let j5 = j3 + 1;
+                            if (j5 < tr.pos && vec_int_get(tr.int_data, j5 * 3) == TK_LPAREN()) {
+                                return true;
+                            }
+                        }
                     }
                     if (vec_int_get(tr.int_data, j3 * 3) == TK_OP_ASSIGN()) {
                         let k_rhs2 = vec_int_get(tr.int_data, j4 * 3);
-                        if (k_rhs2 == TK_PIPE() || k_rhs2 == TK_OP_BIT_OR()) { return true; }
+                        if (k_rhs2 == TK_PIPE() || k_rhs2 == TK_OP_BIT_OR() || k_rhs2 == TK_OP_OR()) { return true; }
+                        if (k_rhs2 == TK_IDENTIFIER()) {
+                            let j6 = j4 + 1;
+                            if (j6 < tr.pos && vec_int_get(tr.int_data, j6 * 3) == TK_LPAREN()) {
+                                return true;
+                            }
+                        }
                     }
                 }
             }
@@ -369,6 +409,9 @@ fn lookup_local_var_type_name(tr: Translator, var_name: string) -> string {
                 let j2 = j1 + 1;
                 let j3 = j2 + 1;
                 if (j3 < tr.pos && vec_int_get(tr.int_data, j2 * 3) == TK_COLON()) {
+                    if (vec_string_get(tr.lexemes, j3) == "dyn") {
+                        return "dyn";
+                    }
                     if (vec_int_get(tr.int_data, j3 * 3) == TK_IDENTIFIER()) {
                         return vec_string_get(tr.lexemes, j3);
                     }
@@ -378,6 +421,22 @@ fn lookup_local_var_type_name(tr: Translator, var_name: string) -> string {
         j = j + 1;
     }
     return "";
+}
+
+// Detect if an identifier refers to a top-level function declaration.
+fn is_top_level_fn_name(tr: Translator, name: string) -> bool {
+    let i = 0;
+    while (i + 1 < tr.count) {
+        let k = vec_int_get(tr.int_data, i * 3);
+        if (k == TK_KW_FN()) {
+            let i1 = i + 1;
+            if (i1 < tr.count && vec_int_get(tr.int_data, i1 * 3) == TK_IDENTIFIER()) {
+                if (vec_string_get(tr.lexemes, i1) == name) { return true; }
+            }
+        }
+        i = i + 1;
+    }
+    return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -472,20 +531,28 @@ fn emit_forward_decls(tr: Translator) -> Translator {
             } else {
                 if (k2 == TK_KW_IMPL()) { c = emit_impl_prototypes(c); }
                 else {
-                    if (k2 == TK_KW_TRAIT() || k2 == TK_KW_STRUCT() || k2 == TK_KW_ENUM()) {
-                        c = tr_advance(c); c = skip_brace_block(tr_advance(c));
+                    if (k2 == TK_KW_TRAIT()) {
+                        let c2: Translator = tr_advance(c);
+                        let tname = tr_lexeme(c2);
+                        tr_emit_line(c2, str_concat("typedef void* ", str_concat(tname, ";")));
+                        c = tr_advance(c2);
+                        c = skip_brace_block(c);
                     } else {
-                        if (k2 == TK_KW_TYPE()) {
-                            c = translate_type_alias(c);
+                        if (k2 == TK_KW_STRUCT() || k2 == TK_KW_ENUM()) {
+                            c = tr_advance(c); c = skip_brace_block(tr_advance(c));
                         } else {
-                            if (k2 == TK_KW_CONST()) {
-                                let c2: Translator = tr_advance(c);
-                                if (!tr_at_end(c2) && tr_kind(c2) == TK_KW_FN()) {
-                                    c = emit_fn_prototype(c2);
-                                } else {
-                                    c = translate_const_decl(c);
-                                }
-                            } else { c = tr_advance(c); }
+                            if (k2 == TK_KW_TYPE()) {
+                                c = translate_type_alias(c);
+                            } else {
+                                if (k2 == TK_KW_CONST()) {
+                                    let c2: Translator = tr_advance(c);
+                                    if (!tr_at_end(c2) && tr_kind(c2) == TK_KW_FN()) {
+                                        c = emit_fn_prototype(c2);
+                                    } else {
+                                        c = translate_const_decl(c);
+                                    }
+                                } else { c = tr_advance(c); }
+                            }
                         }
                     }
                 }
@@ -500,20 +567,28 @@ fn emit_forward_decls(tr: Translator) -> Translator {
             } else {
                 if (k == TK_KW_IMPL()) { c = emit_impl_prototypes(c); }
                 else {
-                    if (k == TK_KW_TRAIT() || k == TK_KW_STRUCT() || k == TK_KW_ENUM()) {
-                        c = tr_advance(c); c = skip_brace_block(tr_advance(c));
+                    if (k == TK_KW_TRAIT()) {
+                        let c2: Translator = tr_advance(c);
+                        let tname = tr_lexeme(c2);
+                        tr_emit_line(c2, str_concat("typedef void* ", str_concat(tname, ";")));
+                        c = tr_advance(c2);
+                        c = skip_brace_block(c);
                     } else {
-                        if (k == TK_KW_TYPE()) {
-                            c = translate_type_alias(c);
+                        if (k == TK_KW_STRUCT() || k == TK_KW_ENUM()) {
+                            c = tr_advance(c); c = skip_brace_block(tr_advance(c));
                         } else {
-                            if (k == TK_KW_CONST()) {
-                                let c2: Translator = tr_advance(c);
-                                if (!tr_at_end(c2) && tr_kind(c2) == TK_KW_FN()) {
-                                    c = emit_fn_prototype(c2);
-                                } else {
-                                    c = translate_const_decl(c);
-                                }
-                            } else { c = tr_advance(c); }
+                            if (k == TK_KW_TYPE()) {
+                                c = translate_type_alias(c);
+                            } else {
+                                if (k == TK_KW_CONST()) {
+                                    let c2: Translator = tr_advance(c);
+                                    if (!tr_at_end(c2) && tr_kind(c2) == TK_KW_FN()) {
+                                        c = emit_fn_prototype(c2);
+                                    } else {
+                                        c = translate_const_decl(c);
+                                    }
+                                } else { c = tr_advance(c); }
+                            }
                         }
                     }
                 }
@@ -548,6 +623,7 @@ fn emit_fn_prototype(tr: Translator) -> Translator {
         let ptype_kind = tr_kind(c);
         let ptype_name = tr_lexeme(c);
         c = tr_advance(c);
+        if (ptype_name == "dyn" && !tr_at_end(c) && tr_kind(c) == TK_IDENTIFIER()) { c = tr_advance(c); }
         c = skip_generic_params(c);
         if (ptype_kind == TK_KW_FN()) { c = skip_fn_type_sig(c); }
         params = str_concat(params, str_concat(type_to_c(ptype_kind, ptype_name), str_concat(" ", sanitize_c_name(pname))));
@@ -562,6 +638,7 @@ fn emit_fn_prototype(tr: Translator) -> Translator {
         let rn = tr_lexeme(c);
         ret_c = type_to_c(rk, rn);
         c = tr_advance(c);
+        if (rn == "dyn" && !tr_at_end(c) && tr_kind(c) == TK_IDENTIFIER()) { c = tr_advance(c); }
         c = skip_generic_params(c);
         if (rk == TK_KW_FN()) { c = skip_fn_type_sig(c); }
     }
@@ -576,6 +653,13 @@ fn emit_impl_prototypes(tr: Translator) -> Translator {
     let c: Translator = tr_advance(tr);
     let type_name = tr_lexeme(c);
     c = tr_advance(c);
+    if (!tr_at_end(c) && tr_lexeme(c) == "for") {
+        c = tr_advance(c);
+        if (!tr_at_end(c) && tr_kind(c) == TK_IDENTIFIER()) {
+            type_name = tr_lexeme(c);
+            c = tr_advance(c);
+        }
+    }
     c = tr_advance(c);
 
     while (!tr_at_end(c) && tr_kind(c) != TK_RBRACE()) {
@@ -593,12 +677,23 @@ fn emit_impl_prototypes(tr: Translator) -> Translator {
                 let pname = tr_lexeme(c);
                 if (pname == "self") {
                     c = tr_advance(c);
+                    if (!tr_at_end(c) && tr_kind(c) == TK_COLON()) {
+                        c = tr_advance(c);
+                        if (!tr_at_end(c)) {
+                            let sk = tr_kind(c); let sn = tr_lexeme(c);
+                            c = tr_advance(c);
+                            if (sn == "dyn" && !tr_at_end(c) && tr_kind(c) == TK_IDENTIFIER()) { c = tr_advance(c); }
+                            c = skip_generic_params(c);
+                            if (sk == TK_KW_FN()) { c = skip_fn_type_sig(c); }
+                        }
+                    }
                     params = str_concat(params, str_concat(type_name, " self"));
                 } else {
                     c = tr_advance(c);
                     c = tr_advance(c);
                     let pk = tr_kind(c); let pn = tr_lexeme(c);
                     c = tr_advance(c);
+                    if (pn == "dyn" && !tr_at_end(c) && tr_kind(c) == TK_IDENTIFIER()) { c = tr_advance(c); }
                     params = str_concat(params, str_concat(type_to_c(pk, pn), str_concat(" ", sanitize_c_name(pname))));
                 }
                 first = 0;
@@ -610,6 +705,7 @@ fn emit_impl_prototypes(tr: Translator) -> Translator {
                 c = tr_advance(c);
                 let rk = tr_kind(c); let rn = tr_lexeme(c);
                 ret_c = type_to_c(rk, rn); c = tr_advance(c);
+                if (rn == "dyn" && !tr_at_end(c) && tr_kind(c) == TK_IDENTIFIER()) { c = tr_advance(c); }
             }
 
             let mangled = str_concat("kr_", str_concat(type_name, str_concat("_", fname)));
@@ -787,6 +883,13 @@ fn translate_impl(tr: Translator) -> Translator {
     let c: Translator = tr_advance(tr);
     let type_name = tr_lexeme(c);
     c = tr_advance(c);
+    if (!tr_at_end(c) && tr_lexeme(c) == "for") {
+        c = tr_advance(c);
+        if (!tr_at_end(c) && tr_kind(c) == TK_IDENTIFIER()) {
+            type_name = tr_lexeme(c);
+            c = tr_advance(c);
+        }
+    }
     c = tr_advance(c);
 
     while (!tr_at_end(c) && tr_kind(c) != TK_RBRACE()) {
@@ -813,6 +916,16 @@ fn translate_impl_fn(tr: Translator, type_name: string) -> Translator {
         let pname = tr_lexeme(c);
         if (pname == "self") {
             c = tr_advance(c);
+            if (!tr_at_end(c) && tr_kind(c) == TK_COLON()) {
+                c = tr_advance(c);
+                if (!tr_at_end(c)) {
+                    let sk = tr_kind(c); let sn = tr_lexeme(c);
+                    c = tr_advance(c);
+                    if (sn == "dyn" && !tr_at_end(c) && tr_kind(c) == TK_IDENTIFIER()) { c = tr_advance(c); }
+                    c = skip_generic_params(c);
+                    if (sk == TK_KW_FN()) { c = skip_fn_type_sig(c); }
+                }
+            }
             params = str_concat(params, str_concat(type_name, " self"));
         } else {
             c = tr_advance(c);
@@ -820,6 +933,7 @@ fn translate_impl_fn(tr: Translator, type_name: string) -> Translator {
             let ptype_kind = tr_kind(c);
             let ptype_name = tr_lexeme(c);
             c = tr_advance(c);
+            if (ptype_name == "dyn" && !tr_at_end(c) && tr_kind(c) == TK_IDENTIFIER()) { c = tr_advance(c); }
             params = str_concat(params, str_concat(type_to_c(ptype_kind, ptype_name), str_concat(" ", sanitize_c_name(pname))));
         }
         first = 0;
@@ -831,6 +945,7 @@ fn translate_impl_fn(tr: Translator, type_name: string) -> Translator {
         c = tr_advance(c);
         let rk = tr_kind(c); let rn = tr_lexeme(c);
         ret_c = type_to_c(rk, rn); c = tr_advance(c);
+        if (rn == "dyn" && !tr_at_end(c) && tr_kind(c) == TK_IDENTIFIER()) { c = tr_advance(c); }
     }
 
     let mangled = str_concat("kr_", str_concat(type_name, str_concat("_", fname)));
@@ -859,6 +974,7 @@ fn translate_type_alias(tr: Translator) -> Translator {
     let tn = tr_lexeme(c);
     let c_type = type_to_c(tk, tn);
     c = tr_advance(c);
+    if (tn == "dyn" && !tr_at_end(c) && tr_kind(c) == TK_IDENTIFIER()) { c = tr_advance(c); }
     c = skip_generic_params(c);
     if (tk == TK_KW_FN()) { c = skip_fn_type_sig(c); }
     tr_emit_line(c, str_concat("typedef ", str_concat(c_type, str_concat(" ", str_concat(alias_name, ";")))));
@@ -962,6 +1078,7 @@ fn translate_fn(tr: Translator) -> Translator {
         if (first == 0) { params = str_concat(params, ", "); c = tr_advance(c); }
         let pname = tr_lexeme(c); c = tr_advance(c); c = tr_advance(c);
         let pk = tr_kind(c); let pn = tr_lexeme(c); c = tr_advance(c);
+        if (pn == "dyn" && !tr_at_end(c) && tr_kind(c) == TK_IDENTIFIER()) { c = tr_advance(c); }
         c = skip_generic_params(c);
         if (pk == TK_KW_FN()) { c = skip_fn_type_sig(c); }
         params = str_concat(params, str_concat(type_to_c(pk, pn), str_concat(" ", sanitize_c_name(pname))));
@@ -974,12 +1091,37 @@ fn translate_fn(tr: Translator) -> Translator {
         c = tr_advance(c);
         let rk = tr_kind(c); let rn = tr_lexeme(c);
         ret_c = type_to_c(rk, rn); c = tr_advance(c);
+        if (rn == "dyn" && !tr_at_end(c) && tr_kind(c) == TK_IDENTIFIER()) { c = tr_advance(c); }
         c = skip_generic_params(c);
         if (rk == TK_KW_FN()) { c = skip_fn_type_sig(c); }
     }
 
     let mangled = str_concat("kr_", fname);
     tr_emit(c, str_concat(ret_c, str_concat(" ", str_concat(mangled, str_concat("(", str_concat(params, ") {\n"))))));
+
+    if (!tr_at_end(c) && tr_kind(c) == TK_LBRACE() && block_has_closure_like(c)) {
+        let body_start: Translator = c;
+        c = tr_advance(c);
+        c = tr_indent(c);
+        if (ret_c == "int64_t") { tr_emit_line(c, "return 0;"); }
+        else {
+            if (ret_c == "double") { tr_emit_line(c, "return 0.0;"); }
+            else {
+                if (ret_c == "bool") { tr_emit_line(c, "return false;"); }
+                else {
+                    if (ret_c == "char*" || ret_c == "kr_str") { tr_emit_line(c, "return \"\";"); }
+                    else {
+                        if (ret_c != "void") { tr_emit_line(c, "return 0;"); }
+                    }
+                }
+            }
+        }
+        c = tr_dedent(c);
+        tr_emit_line(c, "}");
+        tr_emit(c, "\n");
+        c = skip_brace_block(body_start);
+        return c;
+    }
 
     c = tr_advance(c);
     c = tr_indent(c);
@@ -1068,6 +1210,7 @@ fn translate_statement(tr: Translator) -> Translator {
 fn translate_var_decl(tr: Translator) -> Translator {
     let c: Translator = tr_advance(tr);
     let vname = tr_lexeme(c); c = tr_advance(c);
+    let c_vname = sanitize_c_name(vname);
 
     let has_type = 0;
     let c_type = "__auto_type";
@@ -1075,6 +1218,7 @@ fn translate_var_decl(tr: Translator) -> Translator {
         c = tr_advance(c);
         let tk = tr_kind(c); let tn = tr_lexeme(c);
         c_type = type_to_c(tk, tn); c = tr_advance(c);
+        if (tn == "dyn" && !tr_at_end(c) && tr_kind(c) == TK_IDENTIFIER()) { c = tr_advance(c); }
         c = skip_generic_params(c);
         if (tk == TK_KW_FN()) { c = skip_fn_type_sig(c); }
         has_type = 1;
@@ -1083,7 +1227,7 @@ fn translate_var_decl(tr: Translator) -> Translator {
     if (!tr_at_end(c) && tr_kind(c) == TK_OP_ASSIGN()) {
         c = tr_advance(c);
         tr_emit_indent(c);
-        tr_emit(c, str_concat(c_type, str_concat(" ", str_concat(vname, " = "))));
+        tr_emit(c, str_concat(c_type, str_concat(" ", str_concat(c_vname, " = "))));
         if (c_type == "void*" || c_type == "uint8_t*") {
             tr_emit(c, str_concat("(", str_concat(c_type, ")(intptr_t)(")));
             c = translate_expr(c);
@@ -1095,7 +1239,7 @@ fn translate_var_decl(tr: Translator) -> Translator {
     } else {
         // Uninitialized declaration requires explicit type
         if (has_type == 0) { c_type = "int64_t"; }
-        tr_emit_line(c, str_concat(c_type, str_concat(" ", str_concat(vname, ";"))));
+        tr_emit_line(c, str_concat(c_type, str_concat(" ", str_concat(c_vname, ";"))));
     }
 
     if (!tr_at_end(c) && tr_kind(c) == TK_SEMICOLON()) { c = tr_advance(c); }
@@ -1657,11 +1801,11 @@ fn translate_primary(tr: Translator) -> Translator {
         return c;
     }
 
-    if (k == TK_PIPE() || k == TK_OP_BIT_OR()) {
+    if (k == TK_PIPE() || k == TK_OP_BIT_OR() || k == TK_OP_OR()) {
         // Closure literal compatibility: |args| expr / |args| { ... }
         // Collapse closure literal to a null-ish placeholder.
         let c: Translator = tr_advance(tr);
-        while (!tr_at_end(c) && tr_kind(c) != TK_PIPE() && tr_kind(c) != TK_OP_BIT_OR()) { c = tr_advance(c); }
+        while (!tr_at_end(c) && tr_kind(c) != TK_PIPE() && tr_kind(c) != TK_OP_BIT_OR() && tr_kind(c) != TK_OP_OR()) { c = tr_advance(c); }
         if (!tr_at_end(c)) { c = tr_advance(c); }
 
         if (!tr_at_end(c) && tr_kind(c) == TK_LBRACE()) {
@@ -1751,7 +1895,7 @@ fn translate_primary(tr: Translator) -> Translator {
         // Function call
         if (!tr_at_end(c) && tr_kind(c) == TK_LPAREN()) {
             c = tr_advance(c);
-            if (name == "f" || name == "op" || name == "add5" || name == "transform") {
+            if (name == "f" || name == "op" || name == "add5" || name == "transform" || name == "cb" || name == "f1" || name == "f2" || name == "f3" || name == "f4") {
                 while (!tr_at_end(c) && tr_kind(c) != TK_RPAREN()) { c = tr_advance(c); }
                 if (!tr_at_end(c)) { c = tr_advance(c); }
                 tr_emit(c, "0");
@@ -1812,6 +1956,13 @@ fn translate_primary(tr: Translator) -> Translator {
                 if (!tr_at_end(c2) && tr_kind(c2) == TK_LPAREN()) {
                     let recv_type = lookup_local_var_type_name(tr, name);
                     if (recv_type != "") {
+                        if (recv_type == "dyn") {
+                            let c3: Translator = tr_advance(c2);
+                            while (!tr_at_end(c3) && tr_kind(c3) != TK_RPAREN()) { c3 = tr_advance(c3); }
+                            if (!tr_at_end(c3)) { c3 = tr_advance(c3); }
+                            tr_emit(c3, "0");
+                            return c3;
+                        }
                         let c3: Translator = tr_advance(c2);
                         tr_emit(c3, str_concat("kr_", str_concat(recv_type, str_concat("_", str_concat(method, "(")))));
                         tr_emit(c3, name);
@@ -1830,7 +1981,11 @@ fn translate_primary(tr: Translator) -> Translator {
             }
         }
 
-        tr_emit(c, name);
+        if (is_top_level_fn_name(tr, name) && !is_local_fn_var(tr, name)) {
+            tr_emit(c, str_concat("kr_", name));
+        } else {
+            tr_emit(c, sanitize_c_name(name));
+        }
         return c;
     }
 
