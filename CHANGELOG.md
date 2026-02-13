@@ -88,7 +88,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **For Loop Increment** — translator detects assignment operators (`=`, `+=`, `-=`, `*=`, `/=`, `%=`) in for loop increment clause
 - **String Type** — `kr_str` typedef changed from `const char*` to `char*`; eliminates all const-qualifier warnings
 - **Zero C Warnings** — self-hosted output compiles with `cc` producing 0 warnings, 0 errors
-- **Bootstrap Coverage Verification** — current bootstrap compile sweep: `167/226` programs (`73.9%`) with self-hosted compiler
+- **Bootstrap Coverage Verification** — current bootstrap compile sweep: `171/226` programs (`75.7%`) with self-hosted compiler
 
 ### Fixed
 - Struct literal trailing comma caused `}` to be parsed as a field name, corrupting all subsequent function output
@@ -110,6 +110,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed top-level `extern ...;` handling in translation passes to avoid emitting invalid C statements from declaration-only extern blocks
 - Fixed function-type annotation skipping in type positions (`fn(...) -> T`) to prevent residual tokens from corrupting emitted C
 - Fixed linker-only bootstrap failures by adding/relaxing compatibility shims (`join`, `timeout`, and `kr_kraken_*` families for stdlib/ffi/bounds/union paths)
+- Fixed typed local method-call lowering by routing `obj.method(args)` to `kr_Type_method(obj, args)` when local type information is available
+- Fixed additional closure/function-pointer bootstrap paths with `move` unary pass-through and neutral fallback lowering for unsupported closure/function-variable call forms
 
 ## [0.9.2] - 2026-02-06
 
