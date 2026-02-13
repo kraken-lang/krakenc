@@ -91,6 +91,23 @@ fn dir_of(path: string) -> string {
     return "";
 }
 
+// Convert module path "a.b.c" -> "a/b/c"
+fn module_name_to_rel_path(mod_name: string) -> string {
+    let out = "";
+    let i = 0;
+    let n = strlen(mod_name);
+    while (i < n) {
+        let ch = str_char_at(mod_name, i);
+        if (ch == 46) { // '.'
+            out = str_concat(out, "/");
+        } else {
+            out = str_concat(out, str_from_char_code(ch));
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
 // Resolve imports: scan source for 'import <name>;' lines, read each file,
 // and return the concatenated source (imports first, then original source).
 fn resolve_imports(source: string, source_dir: string) -> string {
@@ -113,7 +130,8 @@ fn resolve_imports(source: string, source_dir: string) -> string {
                     k = k + 1;
                 }
                 let mod_name = str_slice(source, j + 7, k);
-                let mod_path = str_concat(source_dir, str_concat(mod_name, ".kr"));
+                let mod_rel = module_name_to_rel_path(mod_name);
+                let mod_path = str_concat(source_dir, str_concat(mod_rel, ".kr"));
                 let mod_source = file_read_string(mod_path);
                 if (mod_source != "") {
                     result = str_concat(result, str_concat(mod_source, "\n"));

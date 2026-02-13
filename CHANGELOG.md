@@ -88,7 +88,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **For Loop Increment** — translator detects assignment operators (`=`, `+=`, `-=`, `*=`, `/=`, `%=`) in for loop increment clause
 - **String Type** — `kr_str` typedef changed from `const char*` to `char*`; eliminates all const-qualifier warnings
 - **Zero C Warnings** — self-hosted output compiles with `cc` producing 0 warnings, 0 errors
-- **Bootstrap Coverage Verification** — current bootstrap compile sweep: `147/226` programs (`65.0%`) with self-hosted compiler
+- **Bootstrap Coverage Verification** — current bootstrap compile sweep: `167/226` programs (`73.9%`) with self-hosted compiler
 
 ### Fixed
 - Struct literal trailing comma caused `}` to be parsed as a field name, corrupting all subsequent function output
@@ -105,6 +105,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed associated-function call lowering: `Type::method(...)` now emits `kr_Type_method(...)`, while enum-style variant access still emits `Type_Variant`
 - Fixed generic container type annotations by erasing `Vec`/`Map` base identifiers to `void*` in `type_to_c`, preventing undeclared C type emissions for `Vec<T>` / `Map<K,V>`
 - Fixed top-level `const fn` routing so const-qualified functions are emitted through function prototype/body paths (instead of malformed `#define` output)
+- Fixed dotted module import resolution by normalizing module names (`a.b.c`) to relative file paths (`a/b/c.kr`) before import file loading
+- Fixed async/defer bootstrap compatibility by lowering `await`/`spawn`/`defer` syntax paths and adding `spawn { ... }` expression fallback handling
+- Fixed top-level `extern ...;` handling in translation passes to avoid emitting invalid C statements from declaration-only extern blocks
+- Fixed function-type annotation skipping in type positions (`fn(...) -> T`) to prevent residual tokens from corrupting emitted C
+- Fixed linker-only bootstrap failures by adding/relaxing compatibility shims (`join`, `timeout`, and `kr_kraken_*` families for stdlib/ffi/bounds/union paths)
 
 ## [0.9.2] - 2026-02-06
 
