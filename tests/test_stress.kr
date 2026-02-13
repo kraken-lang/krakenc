@@ -1,0 +1,267 @@
+// krakenc stress test — edge cases and complex patterns
+
+fn assert_eq(label: string, expected: int, actual: int) {
+    if (expected == actual) { puts(str_concat("  PASS: ", label)); }
+    else { puts(str_concat("  FAIL: ", str_concat(label, str_concat(" exp=", str_concat(fmt_int(expected), str_concat(" got=", fmt_int(actual))))))); }
+}
+
+fn assert_str(label: string, expected: string, actual: string) {
+    if (expected == actual) { puts(str_concat("  PASS: ", label)); }
+    else { puts(str_concat("  FAIL: ", str_concat(label, str_concat(" exp=", str_concat(expected, str_concat(" got=", actual)))))); }
+}
+
+fn assert_true(label: string, v: bool) {
+    if (v) { puts(str_concat("  PASS: ", label)); }
+    else { puts(str_concat("  FAIL: ", label)); }
+}
+
+// ---------------------------------------------------------------------------
+// Deep nesting
+// ---------------------------------------------------------------------------
+
+fn deeply_nested(x: int) -> int {
+    if (x > 0) {
+        if (x > 10) {
+            if (x > 100) {
+                if (x > 1000) {
+                    return 4;
+                } else {
+                    return 3;
+                }
+            } else {
+                return 2;
+            }
+        } else {
+            return 1;
+        }
+    } else {
+        return 0;
+    }
+    return -1;
+}
+
+// ---------------------------------------------------------------------------
+// Complex expressions
+// ---------------------------------------------------------------------------
+
+fn complex_expr(a: int, b: int, c: int) -> int {
+    return (a + b) * c - (a * b) / (c + 1) + (a % (b + 1));
+}
+
+fn chained_calls(s: string) -> string {
+    return str_concat(str_concat(str_concat("[", s), "]"), str_concat(" len=", fmt_int(strlen(s))));
+}
+
+// ---------------------------------------------------------------------------
+// Multi-return paths
+// ---------------------------------------------------------------------------
+
+fn multi_return(x: int) -> string {
+    if (x < 0) { return "negative"; }
+    if (x == 0) { return "zero"; }
+    if (x == 1) { return "one"; }
+    if (x == 2) { return "two"; }
+    if (x < 10) { return "small"; }
+    if (x < 100) { return "medium"; }
+    return "large";
+}
+
+// ---------------------------------------------------------------------------
+// Struct with many fields
+// ---------------------------------------------------------------------------
+
+pub struct BigStruct {
+    a: int;
+    b: int;
+    c: int;
+    d: int;
+    e: int;
+    f: int;
+}
+
+fn sum_big(s: BigStruct) -> int {
+    return s.a + s.b + s.c + s.d + s.e + s.f;
+}
+
+// ---------------------------------------------------------------------------
+// Enum with many variants
+// ---------------------------------------------------------------------------
+
+enum Season {
+    Spring,
+    Summer,
+    Autumn,
+    Winter,
+}
+
+fn season_name(s: int) -> string {
+    match (s) {
+        Season::Spring -> { return "spring"; }
+        Season::Summer -> { return "summer"; }
+        Season::Autumn -> { return "autumn"; }
+        Season::Winter -> { return "winter"; }
+        _ -> { return "unknown"; }
+    }
+    return "";
+}
+
+fn is_warm(s: int) -> bool {
+    return s == Season::Spring || s == Season::Summer;
+}
+
+// ---------------------------------------------------------------------------
+// Complex while loop patterns
+// ---------------------------------------------------------------------------
+
+fn count_digits(n: int) -> int {
+    if (n == 0) { return 1; }
+    let val = n;
+    if (val < 0) { val = -val; }
+    let count = 0;
+    while (val > 0) {
+        val = val / 10;
+        count = count + 1;
+    }
+    return count;
+}
+
+fn reverse_int(n: int) -> int {
+    let val = n;
+    let neg = 0;
+    if (val < 0) { val = -val; neg = 1; }
+    let result = 0;
+    while (val > 0) {
+        let m = val - (val / 10) * 10;
+        result = result * 10 + m;
+        val = val / 10;
+    }
+    if (neg == 1) { return -result; }
+    return result;
+}
+
+// ---------------------------------------------------------------------------
+// For-in with range operations
+// ---------------------------------------------------------------------------
+
+fn sum_of_squares(n: int) -> int {
+    let total = 0;
+    for (let i in 0..n) {
+        total = total + i * i;
+    }
+    return total;
+}
+
+fn factorial(n: int) -> int {
+    let result = 1;
+    for (let i in 1..n) {
+        result = result * i;
+    }
+    // for-in is exclusive, so multiply by n
+    result = result * n;
+    return result;
+}
+
+// ---------------------------------------------------------------------------
+// Boolean expression complexity
+// ---------------------------------------------------------------------------
+
+fn complex_bool(a: int, b: int, c: int) -> bool {
+    return (a > 0 && b > 0) || (c < 0 && a != b) || (a == 0 && b == 0 && c == 0);
+}
+
+// ---------------------------------------------------------------------------
+// VecString operations
+// ---------------------------------------------------------------------------
+
+fn join_strings(sep: string, count: int) -> string {
+    let v = vec_string_new();
+    for (let i in 0..count) {
+        vec_string_push(v, fmt_int(i));
+    }
+    let result = "";
+    let i = 0;
+    while (i < vec_string_len(v)) {
+        if (i > 0) { result = str_concat(result, sep); }
+        result = str_concat(result, vec_string_get(v, i));
+        i = i + 1;
+    }
+    return result;
+}
+
+// ---------------------------------------------------------------------------
+// Main
+// ---------------------------------------------------------------------------
+
+fn main() -> int {
+    puts("=== krakenc Stress Test ===");
+    puts("");
+
+    puts("[Deep Nesting]");
+    assert_eq("nest(0)", 0, deeply_nested(0));
+    assert_eq("nest(5)", 1, deeply_nested(5));
+    assert_eq("nest(50)", 2, deeply_nested(50));
+    assert_eq("nest(500)", 3, deeply_nested(500));
+    assert_eq("nest(5000)", 4, deeply_nested(5000));
+
+    puts("[Complex Expr]");
+    assert_eq("complex(3,4,5)", 36, complex_expr(3, 4, 5));
+    assert_str("chained(hi)", "[hi] len=2", chained_calls("hi"));
+
+    puts("[Multi Return]");
+    assert_str("mr(-1)", "negative", multi_return(-1));
+    assert_str("mr(0)", "zero", multi_return(0));
+    assert_str("mr(1)", "one", multi_return(1));
+    assert_str("mr(2)", "two", multi_return(2));
+    assert_str("mr(7)", "small", multi_return(7));
+    assert_str("mr(42)", "medium", multi_return(42));
+    assert_str("mr(999)", "large", multi_return(999));
+
+    puts("[BigStruct]");
+    let bs = BigStruct { a: 1, b: 2, c: 3, d: 4, e: 5, f: 6 };
+    assert_eq("sum_big", 21, sum_big(bs));
+    assert_eq("bs.d", 4, bs.d);
+
+    puts("[Enums + Match]");
+    assert_str("spring", "spring", season_name(Season::Spring));
+    assert_str("winter", "winter", season_name(Season::Winter));
+    assert_true("warm(spring)", is_warm(Season::Spring));
+    assert_true("warm(summer)", is_warm(Season::Summer));
+    assert_true("!warm(winter)", !is_warm(Season::Winter));
+
+    puts("[Digit Count]");
+    assert_eq("digits(0)", 1, count_digits(0));
+    assert_eq("digits(5)", 1, count_digits(5));
+    assert_eq("digits(42)", 2, count_digits(42));
+    assert_eq("digits(999)", 3, count_digits(999));
+    assert_eq("digits(-42)", 2, count_digits(-42));
+
+    puts("[Reverse Int]");
+    assert_eq("rev(123)", 321, reverse_int(123));
+    assert_eq("rev(1000)", 1, reverse_int(1000));
+    assert_eq("rev(-456)", -654, reverse_int(-456));
+
+    puts("[Sum Squares]");
+    assert_eq("sq(0)", 0, sum_of_squares(0));
+    assert_eq("sq(4)", 14, sum_of_squares(4));
+    assert_eq("sq(5)", 30, sum_of_squares(5));
+
+    puts("[Factorial]");
+    assert_eq("fact(1)", 1, factorial(1));
+    assert_eq("fact(5)", 120, factorial(5));
+    assert_eq("fact(10)", 3628800, factorial(10));
+
+    puts("[Complex Bool]");
+    assert_true("cb(1,1,0)", complex_bool(1, 1, 0));
+    assert_true("cb(0,0,0)", complex_bool(0, 0, 0));
+    assert_true("cb(-1,0,-1)", complex_bool(-1, 0, -1));
+    assert_true("!cb(-1,-1,1)", !complex_bool(-1, -1, 1));
+
+    puts("[VecString Join]");
+    assert_str("join(3)", "0,1,2", join_strings(",", 3));
+    assert_str("join(1)", "0", join_strings(",", 1));
+    assert_str("join(5)", "0-1-2-3-4", join_strings("-", 5));
+
+    puts("");
+    puts("=== All stress tests complete ===");
+    return 0;
+}

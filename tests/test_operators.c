@@ -88,26 +88,70 @@ int64_t kr_vec_string_len(void* vp) { return ((KrVecString*)vp)->len; }
 void kr_vec_string_free(void* vp) { KrVecString* v = (KrVecString*)vp; free(v->data); free(v); }
 
 /* Forward declarations */
+void kr_assert_eq(kr_str label, int64_t expected, int64_t actual);
+void kr_assert_true(kr_str label, bool value);
 int64_t kr_main();
 
-int64_t kr_main() {
-    void* v = kr_vec_int_new();
-    kr_vec_int_push(v, 10);
-    kr_vec_int_push(v, 20);
-    kr_vec_int_push(v, 30);
-    __auto_type i = 0;
-    while (i < 3) {
-        kr_puts(kr_str_concat("v[", kr_str_concat(kr_fmt_int(i), kr_str_concat("]=", kr_fmt_int(kr_vec_int_get(v, i))))));
-        i = i + 1;
+void kr_assert_eq(kr_str label, int64_t expected, int64_t actual) {
+    if (_KR_EQ(expected, actual)) {
+        kr_puts(kr_str_concat("  PASS: ", label));
     }
-    void* names = kr_vec_string_new();
-    kr_vec_string_push(names, "Alice");
-    kr_vec_string_push(names, "Bob");
-    kr_vec_string_push(names, "Charlie");
-    kr_puts(kr_str_concat("len=", kr_fmt_int(kr_vec_string_len(names))));
-    kr_puts(kr_str_concat("names[1]=", kr_vec_string_get(names, 1)));
-    kr_vec_int_free(v);
-    kr_vec_string_free(names);
+    else {
+        kr_puts(kr_str_concat("  FAIL: ", kr_str_concat(label, kr_str_concat(" expected=", kr_str_concat(kr_fmt_int(expected), kr_str_concat(" actual=", kr_fmt_int(actual)))))));
+    }
+}
+
+void kr_assert_true(kr_str label, bool value) {
+    if (value) {
+        kr_puts(kr_str_concat("  PASS: ", label));
+    }
+    else {
+        kr_puts(kr_str_concat("  FAIL: ", label));
+    }
+}
+
+int64_t kr_main() {
+    kr_puts("=== krakenc Operator Tests ===");
+    kr_puts("");
+    kr_puts("[Shift]");
+    kr_assert_eq("1<<3", 8, 1 << 3);
+    kr_assert_eq("16>>2", 4, 16 >> 2);
+    kr_assert_eq("255<<8", 65280, 255 << 8);
+    kr_assert_eq("1024>>5", 32, 1024 >> 5);
+    kr_puts("[Modulo]");
+    kr_assert_eq("10%3", 1, 10 % 3);
+    kr_assert_eq("7%2", 1, 7 % 2);
+    kr_assert_eq("8%4", 0, 8 % 4);
+    kr_assert_eq("15%7", 1, 15 % 7);
+    kr_puts("[Compound Assign]");
+    __auto_type x = 10;
+    x += 5;
+    kr_assert_eq("x+=5", 15, x);
+    x -= 3;
+    kr_assert_eq("x-=3", 12, x);
+    x *= 2;
+    kr_assert_eq("x*=2", 24, x);
+    x /= 4;
+    kr_assert_eq("x/=4", 6, x);
+    x %= 4;
+    kr_assert_eq("x%=4", 2, x);
+    kr_puts("[Bitwise NOT]");
+    int64_t mask = 255;
+    kr_assert_eq("~0", -1, ~0);
+    kr_assert_eq("~~5", 5, ~~5);
+    kr_puts("[Unary Minus]");
+    kr_assert_eq("-(-5)", 5, -(-5));
+    kr_assert_eq("-(3+4)", -7, -(3 + 4));
+    kr_puts("[Combined]");
+    kr_assert_eq("(1<<4)|3", 19, (1 << 4) | 3);
+    kr_assert_eq("(0xFF&0xF0)>>4", 15, (255 & 240) >> 4);
+    kr_assert_eq("5+3*2", 11, 5 + 3 * 2);
+    kr_assert_eq("(5+3)*2", 16, (5 + 3) * 2);
+    kr_puts("[Shift + Compare]");
+    kr_assert_true("1<<3 > 5", (1 << 3) > 5);
+    kr_assert_true("16>>2 == 4", _KR_EQ((16 >> 2), 4));
+    kr_puts("");
+    kr_puts("=== All operator tests complete ===");
     return 0;
 }
 

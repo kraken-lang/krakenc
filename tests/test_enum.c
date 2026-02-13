@@ -88,26 +88,58 @@ int64_t kr_vec_string_len(void* vp) { return ((KrVecString*)vp)->len; }
 void kr_vec_string_free(void* vp) { KrVecString* v = (KrVecString*)vp; free(v->data); free(v); }
 
 /* Forward declarations */
+typedef int64_t Color;
+kr_str kr_color_name(int64_t c);
+int64_t kr_test_match_int(int64_t x);
 int64_t kr_main();
 
-int64_t kr_main() {
-    void* v = kr_vec_int_new();
-    kr_vec_int_push(v, 10);
-    kr_vec_int_push(v, 20);
-    kr_vec_int_push(v, 30);
-    __auto_type i = 0;
-    while (i < 3) {
-        kr_puts(kr_str_concat("v[", kr_str_concat(kr_fmt_int(i), kr_str_concat("]=", kr_fmt_int(kr_vec_int_get(v, i))))));
-        i = i + 1;
+typedef int64_t Color;
+#define Color_Red 0
+#define Color_Green 1
+#define Color_Blue 2
+
+kr_str kr_color_name(int64_t c) {
+    if (c == Color_Red) {
+        return "red";
     }
-    void* names = kr_vec_string_new();
-    kr_vec_string_push(names, "Alice");
-    kr_vec_string_push(names, "Bob");
-    kr_vec_string_push(names, "Charlie");
-    kr_puts(kr_str_concat("len=", kr_fmt_int(kr_vec_string_len(names))));
-    kr_puts(kr_str_concat("names[1]=", kr_vec_string_get(names, 1)));
-    kr_vec_int_free(v);
-    kr_vec_string_free(names);
+    else if (c == Color_Green) {
+        return "green";
+    }
+    else if (c == Color_Blue) {
+        return "blue";
+    }
+    else {
+        return "unknown";
+    }
+    return "unreachable";
+}
+
+int64_t kr_test_match_int(int64_t x) {
+    if (x == 1) {
+        return 10;
+    }
+    else if (x == 2) {
+        return 20;
+    }
+    else if (x == 3) {
+        return 30;
+    }
+    else {
+        return 99;
+    }
+    return 0;
+}
+
+int64_t kr_main() {
+    __auto_type r = Color_Red;
+    __auto_type g = Color_Green;
+    __auto_type b = Color_Blue;
+    kr_puts(kr_str_concat("red=", kr_color_name(r)));
+    kr_puts(kr_str_concat("green=", kr_color_name(g)));
+    kr_puts(kr_str_concat("blue=", kr_color_name(b)));
+    kr_puts(kr_str_concat("match(1)=", kr_fmt_int(kr_test_match_int(1))));
+    kr_puts(kr_str_concat("match(2)=", kr_fmt_int(kr_test_match_int(2))));
+    kr_puts(kr_str_concat("match(5)=", kr_fmt_int(kr_test_match_int(5))));
     return 0;
 }
 

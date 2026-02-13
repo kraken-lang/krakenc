@@ -1,0 +1,208 @@
+// Advanced krakenc translator test
+// Tests: nested match, chained member access, complex expressions,
+//        multiple return paths, deeply nested control flow, array ops
+
+fn abs_val(x: int) -> int {
+    if (x < 0) { return -x; }
+    return x;
+}
+
+fn max(a: int, b: int) -> int {
+    if (a > b) { return a; }
+    return b;
+}
+
+fn min(a: int, b: int) -> int {
+    if (a < b) { return a; }
+    return b;
+}
+
+fn clamp(x: int, lo: int, hi: int) -> int {
+    return max(lo, min(x, hi));
+}
+
+// Nested structs
+pub struct Rect {
+    x: int;
+    y: int;
+    w: int;
+    h: int;
+}
+
+fn new_rect(x: int, y: int, w: int, h: int) -> Rect {
+    return Rect { x: x, y: y, w: w, h: h };
+}
+
+fn rect_area(r: Rect) -> int {
+    return r.w * r.h;
+}
+
+fn rect_contains(r: Rect, px: int, py: int) -> bool {
+    return px >= r.x && px < r.x + r.w && py >= r.y && py < r.y + r.h;
+}
+
+// VecInt operations
+fn sum_vec(v: VecInt) -> int {
+    let total = 0;
+    let i = 0;
+    let len = vec_int_len(v);
+    while (i < len) {
+        total = total + vec_int_get(v, i);
+        i = i + 1;
+    }
+    return total;
+}
+
+fn vec_max(v: VecInt) -> int {
+    let best = vec_int_get(v, 0);
+    let i = 1;
+    let len = vec_int_len(v);
+    while (i < len) {
+        let val = vec_int_get(v, i);
+        if (val > best) { best = val; }
+        i = i + 1;
+    }
+    return best;
+}
+
+// Complex string building
+fn repeat_char(ch: string, n: int) -> string {
+    let result = "";
+    let i = 0;
+    while (i < n) {
+        result = str_concat(result, ch);
+        i = i + 1;
+    }
+    return result;
+}
+
+fn pad_right(s: string, width: int) -> string {
+    let len = strlen(s);
+    if (len >= width) { return s; }
+    return str_concat(s, repeat_char(" ", width - len));
+}
+
+// Deeply nested control flow
+fn classify_number(n: int) -> string {
+    if (n < 0) {
+        if (n < -100) { return "very negative"; }
+        if (n < -10) { return "negative"; }
+        return "slightly negative";
+    } else {
+        if (n == 0) { return "zero"; }
+        if (n <= 10) { return "small positive"; }
+        if (n <= 100) { return "positive"; }
+        return "very positive";
+    }
+    return "unreachable";
+}
+
+// Fibonacci with loop
+fn fib(n: int) -> int {
+    if (n <= 1) { return n; }
+    let a = 0;
+    let b = 1;
+    let i = 2;
+    while (i <= n) {
+        let tmp = a + b;
+        a = b;
+        b = tmp;
+        i = i + 1;
+    }
+    return b;
+}
+
+// GCD (Euclidean)
+fn gcd(a: int, b: int) -> int {
+    let x = a;
+    let y = b;
+    while (y != 0) {
+        let t = y;
+        let m = x - (x / y) * y;
+        x = y;
+        y = m;
+    }
+    return x;
+}
+
+// Test runner
+fn assert_eq_int(label: string, expected: int, actual: int) {
+    if (expected == actual) {
+        puts(str_concat("  PASS: ", label));
+    } else {
+        puts(str_concat("  FAIL: ", str_concat(label, str_concat(" expected=", str_concat(fmt_int(expected), str_concat(" actual=", fmt_int(actual)))))));
+    }
+}
+
+fn assert_eq_str(label: string, expected: string, actual: string) {
+    if (expected == actual) {
+        puts(str_concat("  PASS: ", label));
+    } else {
+        puts(str_concat("  FAIL: ", str_concat(label, str_concat(" expected=", str_concat(expected, str_concat(" actual=", actual))))));
+    }
+}
+
+fn assert_true(label: string, value: bool) {
+    if (value) { puts(str_concat("  PASS: ", label)); }
+    else { puts(str_concat("  FAIL: ", label)); }
+}
+
+fn main() -> int {
+    puts("=== krakenc Advanced Test Suite ===");
+    puts("");
+
+    puts("[Math]");
+    assert_eq_int("abs(-5)", 5, abs_val(-5));
+    assert_eq_int("abs(3)", 3, abs_val(3));
+    assert_eq_int("max(3,7)", 7, max(3, 7));
+    assert_eq_int("min(3,7)", 3, min(3, 7));
+    assert_eq_int("clamp(50,0,100)", 50, clamp(50, 0, 100));
+    assert_eq_int("clamp(-5,0,100)", 0, clamp(-5, 0, 100));
+    assert_eq_int("clamp(200,0,100)", 100, clamp(200, 0, 100));
+
+    puts("[Rect]");
+    let r = new_rect(10, 20, 30, 40);
+    assert_eq_int("area", 1200, rect_area(r));
+    assert_true("contains(15,25)", rect_contains(r, 15, 25));
+    assert_true("!contains(5,25)", !rect_contains(r, 5, 25));
+    assert_true("!contains(50,25)", !rect_contains(r, 50, 25));
+
+    puts("[VecInt]");
+    let v = vec_int_new();
+    vec_int_push(v, 10);
+    vec_int_push(v, 20);
+    vec_int_push(v, 30);
+    vec_int_push(v, 5);
+    assert_eq_int("sum", 65, sum_vec(v));
+    assert_eq_int("max", 30, vec_max(v));
+    assert_eq_int("len", 4, vec_int_len(v));
+
+    puts("[String Ops]");
+    assert_eq_str("repeat('x',3)", "xxx", repeat_char("x", 3));
+    assert_eq_str("pad_right('hi',5)", "hi   ", pad_right("hi", 5));
+    assert_eq_str("pad_right('hello',3)", "hello", pad_right("hello", 3));
+
+    puts("[Classification]");
+    assert_eq_str("classify(-200)", "very negative", classify_number(-200));
+    assert_eq_str("classify(-50)", "negative", classify_number(-50));
+    assert_eq_str("classify(-3)", "slightly negative", classify_number(-3));
+    assert_eq_str("classify(0)", "zero", classify_number(0));
+    assert_eq_str("classify(5)", "small positive", classify_number(5));
+    assert_eq_str("classify(50)", "positive", classify_number(50));
+    assert_eq_str("classify(500)", "very positive", classify_number(500));
+
+    puts("[Fibonacci]");
+    assert_eq_int("fib(0)", 0, fib(0));
+    assert_eq_int("fib(1)", 1, fib(1));
+    assert_eq_int("fib(10)", 55, fib(10));
+    assert_eq_int("fib(20)", 6765, fib(20));
+
+    puts("[GCD]");
+    assert_eq_int("gcd(12,8)", 4, gcd(12, 8));
+    assert_eq_int("gcd(100,75)", 25, gcd(100, 75));
+    assert_eq_int("gcd(7,13)", 1, gcd(7, 13));
+
+    puts("");
+    puts("=== All advanced tests complete ===");
+    return 0;
+}

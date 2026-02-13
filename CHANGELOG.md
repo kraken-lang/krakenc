@@ -14,25 +14,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Self-Hosting Achieved** — krakenc can now compile itself through multiple generations with byte-identical output (fixed point at gen2→gen3)
   - Multi-file import resolution: `resolve_imports()` reads imported `.kr` files and concatenates sources before tokenization
   - `dir_of()` helper extracts directory from file path for relative import resolution
-- **General String Equality Detection** — `scan_string_eq()` lookahead scanner detects `EXPR == STRING_LIT` patterns with paren-matching, replacing the limited `IDENTIFIER == STRING_LIT` fast path
-  - Stops at `&&`, `||`, `;`, `{`, `}` boundaries to avoid crossing expression scopes
-  - Handles function call results: `str_slice(...) == "import "` now correctly emits `_kr_str_eq()`
-- **Bitwise Operators** — added `&` (AND), `|` (OR), `^` (XOR) to expression precedence chain between logical AND and equality
-- **Trailing Comma Support** — struct literals now correctly handle trailing commas before closing `}`
-
-### Changed
-- **Two-Pass Forward Declarations** (`emit_forward_decls`) — emit ALL struct typedefs first, then ALL function prototypes; ensures struct types are declared before function signatures that reference them
-- **Two-Pass Program Translation** (`translate_program`) — emit ALL struct definitions first, then ALL function bodies; ensures struct types are complete before functions that use them by value
-- **Type Inference for Untyped Variables** — `let x = expr;` without type annotation now emits `__auto_type` (GCC/Clang extension) instead of `int64_t`, allowing correct type inference from initializer
-- **For Loop Increment** — translator now detects assignment operators (`=`, `+=`, `-=`, `*=`) in for loop increment clause
-
-### Fixed
-- Struct literal trailing comma caused `}` to be parsed as a field name, corrupting all subsequent function output
-- Forward declaration ordering: `Target` and `Diagnostic` structs used in function signatures before their typedefs appeared
-- Struct definition ordering: struct bodies emitted after functions that used them by value caused incomplete type errors
-- Bitwise AND (`&`) operator was not in the expression precedence chain, causing `node.flags & flag` to be split into separate statements
-- String equality in `resolve_imports` used pointer comparison instead of `strcmp` because the LHS was a function call result, not a simple identifier
-
 - **Token-Driven Translator** (`src/parser.kr`) — replaced AST-based parser with single-pass token-to-C translator
   - `Translator` struct with token position, output buffer, indent depth, error tracking, and source file context
   - Token access helpers: `tr_at_end`, `tr_kind`, `tr_lexeme`, `tr_line`, `tr_col`, `tr_advance`, `tr_skip`
@@ -41,29 +22,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Forward declaration emission (`emit_forward_decls`) — two-pass: struct typedefs then function prototypes
   - Function prototype emission (`emit_fn_prototype`) with Kraken-to-C return type and parameter type mapping
   - Full expression translator with precedence climbing:
-    - `translate_or` → `translate_and` → `translate_equality` → `translate_comparison` → `translate_addition` → `translate_multiplication` → `translate_unary` → `translate_postfix` → `translate_primary`
-  - Statement translation: `translate_var_decl`, `translate_return`, `translate_if`, `translate_while`, `translate_for`, `translate_expr_stmt`, `break`/`continue`
-  - Top-level declarations: `translate_fn` (with C prototype + body), `translate_struct` (with C struct emission)
+    - `translate_or` → `translate_and` → `translate_bit_or` → `translate_bit_xor` → `translate_bit_and` → `translate_equality` → `translate_comparison` → `translate_shift` → `translate_addition` → `translate_multiplication` → `translate_unary` → `translate_postfix` → `translate_primary`
+  - Statement translation: `translate_var_decl`, `translate_return`, `translate_if`, `translate_while`, `translate_for`, `translate_for_in`, `translate_match`, `translate_expr_stmt`, `break`/`continue`
+  - Top-level declarations: `translate_fn`, `translate_struct`, `translate_enum`, `translate_impl`
   - Kraken-to-C type mapping: `type_to_c` (parameter/return types), `type_to_c_value` (default values)
   - Struct literal translation to C compound initializer syntax `(TypeName){.field = value}`
   - Function call translation with `kr_` prefix name mangling
   - Member access (`.`), array subscript (`[]`), and call (`()`) postfix operators
-  - `TranslateResult` struct with error count and success flag
-  - `join_output()` helper for concatenating `VecString` output into a single string
   - `skip_brace_block()` utility for skipping `{ ... }` blocks during forward declaration scanning
+- **Enum Declarations** — `enum Color { Red, Green, Blue }` → C `typedef int64_t Color;` + `#define Color_Red 0` constants
+  - Enum variant expressions: `Color::Red` → `Color_Red` in all expression contexts
+  - Optional payload syntax `Some(int)` parsed and skipped (tag-only for now)
+- **Match Statements** — `match (expr) { pattern -> { body } }` → C if/else-if chains
+  - Integer literal patterns, enum variant patterns (`Color::Red`), wildcard (`_`) as else
+  - Optional payload binding syntax parsed and skipped
+- **For-In Loops** — `for (let i in 0..n) { }` → C `for (int64_t i = 0; i < n; i++)`
+  - Supports `..` (exclusive) and `..=` (inclusive) range operators
+- **Impl Blocks** — `impl TypeName { fn method(self) { } }` → free functions with `kr_TypeName_method` prefix
+  - `self` parameter translated to pass-by-value struct parameter
+  - Forward declaration prototypes emitted via `emit_impl_prototypes`
+- **General String Equality** — `_KR_EQ`/`_KR_NEQ` macros using `__builtin_choose_expr` + `__builtin_types_compatible_p`
+  - Compile-time type dispatch: `strcmp` for `char*`, `==` for integers — no runtime overhead
+  - ALL `==`/`!=` comparisons go through `scan_eq_ahead` + macro wrapping
+  - Handles `string_var == string_var`, `expr == "literal"`, and `int == int` uniformly
+- **Bitwise Operators** — `&` (AND), `|` (OR), `^` (XOR) in expression precedence chain between logical AND and equality
+- **Shift Operators** — `<<` (left shift), `>>` (right shift) between comparison and addition in precedence chain
+- **Compound Assignment** — `/=` and `%=` added to expression statement and for-loop increment handlers (joins `+=`, `-=`, `*=`)
+- **Error Recovery** — `skip_to_sync` function skips to next `;` or `}` on unexpected tokens; `translate_statement` guards against EOF/RBRACE
+- **Comprehensive Test Suites** — 135 tests across 9 test files, all passing
+  - `test_all.kr` — 37 tests: structs, enums, match, for-in, while, impl, bitwise, string comparison, nested control flow
+  - `test_advanced.kr` — 31 tests: math, rects, VecInt, string ops, classification, fibonacci, GCD
+  - `test_operators.kr` — 23 tests: shift, modulo, compound assignments, bitwise NOT, unary minus, combined expressions
+  - `test_stress.kr` — 42 tests: deep nesting, complex expressions, multi-return, BigStruct, enums+match, digit count, reverse int, sum of squares, factorial, complex booleans, VecString join
+- **Automated Test Runner** — `run_tests.sh` script compiles and runs all test files, verifies self-hosting fixed point
 
 ### Changed
-- **Lexer** (`src/lexer.kr`)
-  - Refactored `tokenize()` to use `VecInt`/`VecString` output parameters (3 params to avoid LLVM codegen limitation with 4+ params + struct returns)
-  - Added `push_token()` helper for cleaner token storage into parallel vectors
-  - Added `advance_n()` helper for multi-character token advancement
+- **Lexer** (`src/lexer.kr`) — refactored `tokenize()` to use `VecInt`/`VecString` output parameters; added `push_token()` and `advance_n()` helpers
 - **Codegen** (`src/codegen.kr`) — trimmed to minimal stubs; the translator now handles C emission directly
-- **CLI Driver** (`src/main.kr`)
-  - Integrated new translator pipeline: lex → translate → write C → invoke cc
-  - Environment variable mode selection via `KRAKENC_MODE` (`emit-c`, `tokens`, `version`, `help`, `targets`)
-  - Added `--tokens` mode with `dump_tokens()` for token stream inspection
-  - Added `derive_c_path()` and `derive_exe_path()` helpers for output path derivation
-  - Version bumped to `0.10.0-beta`
+- **CLI Driver** (`src/main.kr`) — integrated translator pipeline (lex → translate → write C → invoke cc); `KRAKENC_MODE` env var for mode selection; `--tokens` mode; version bumped to `0.10.0-beta`
+- **Two-Pass Forward Declarations** (`emit_forward_decls`) — emit ALL struct/enum typedefs first, then ALL function/impl-method prototypes
+- **Two-Pass Program Translation** (`translate_program`) — emit ALL struct/enum definitions first, then ALL function bodies and impl blocks
+- **Type Inference** — `let x = expr;` without type annotation emits `__auto_type` (GCC/Clang extension) instead of `int64_t`
+- **For Loop Increment** — translator detects assignment operators (`=`, `+=`, `-=`, `*=`, `/=`, `%=`) in for loop increment clause
+- **String Type** — `kr_str` typedef changed from `const char*` to `char*`; eliminates all const-qualifier warnings
+- **Zero C Warnings** — self-hosted output compiles with `cc` producing 0 warnings, 0 errors
+
+### Fixed
+- Struct literal trailing comma caused `}` to be parsed as a field name, corrupting all subsequent function output
+- Forward declaration ordering: `Target` and `Diagnostic` structs used in function signatures before their typedefs appeared
+- Struct definition ordering: struct bodies emitted after functions that used them by value caused incomplete type errors
+- Bitwise AND (`&`) was not in the expression precedence chain, causing `node.flags & flag` to be split into separate statements
+- String equality in `resolve_imports` used pointer comparison instead of `strcmp` for function call results
+- `scan_eq_ahead` stop conditions now only fire at paren depth 0, preventing `(a & b) != 0` from splitting across expressions
+- `scan_eq_ahead` stops at `,`, `:`, `<<`, and `>>` boundaries to prevent crossing struct literal and shift expression boundaries
+- `getenv` shim casts `const char*` return to `char*` for consistency with `kr_str` typedef
+- `KrVecString` internal storage changed from `const char**` to `char**` to match `kr_str` typedef
 
 ## [0.9.2] - 2026-02-06
 

@@ -11,7 +11,7 @@
 typedef int64_t kr_int;
 typedef double kr_float;
 typedef bool kr_bool;
-typedef const char* kr_str;
+typedef char* kr_str;
 typedef ssize_t kr_size;
 
 void kr_puts(kr_str s) { puts(s); }
@@ -20,6 +20,13 @@ int64_t kr_abs(int64_t x) { return x < 0 ? -x : x; }
 int kr_strcmp(kr_str a, kr_str b) { return strcmp(a, b); }
 static inline bool _kr_str_eq(kr_str a, kr_str b) { return strcmp(a,b)==0; }
 static inline bool _kr_str_neq(kr_str a, kr_str b) { return strcmp(a,b)!=0; }
+static inline int _kr_cmp_eq(void* a, void* b) { return strcmp((char*)a,(char*)b)==0; }
+static inline int _kr_cmp_neq(void* a, void* b) { return strcmp((char*)a,(char*)b)!=0; }
+static inline int _kr_int_eq(int64_t a, int64_t b) { return a==b; }
+static inline int _kr_int_neq(int64_t a, int64_t b) { return a!=b; }
+#define _KR_EQ(a, b) __builtin_choose_expr(__builtin_types_compatible_p(__typeof__(a), char*), _kr_cmp_eq((void*)(a),(void*)(b)), _kr_int_eq((int64_t)(intptr_t)(a),(int64_t)(intptr_t)(b)))
+#define _KR_NEQ(a, b) __builtin_choose_expr(__builtin_types_compatible_p(__typeof__(a), char*), _kr_cmp_neq((void*)(a),(void*)(b)), _kr_int_neq((int64_t)(intptr_t)(a),(int64_t)(intptr_t)(b)))
+#pragma clang diagnostic ignored "-Wint-to-void-pointer-cast"
 kr_str kr_str_concat(kr_str a, kr_str b) {
   size_t la = strlen(a), lb = strlen(b);
   char* r = (char*)malloc(la + lb + 1);
@@ -38,7 +45,7 @@ kr_str kr_fmt_int(int64_t v) {
   char* r = (char*)malloc(32); snprintf(r, 32, "%lld", (long long)v); return r;
 }
 kr_str kr_getenv(kr_str name) {
-  const char* v = getenv(name); return v ? v : "";
+  char* v = (char*)getenv(name); return v ? v : (char*)"";
 }
 int64_t kr_system(kr_str cmd) { return (int64_t)system(cmd); }
 void kr_exit(int64_t code) { exit((int)code); }
@@ -65,14 +72,14 @@ int64_t kr_vec_int_get(void* vp, int64_t i) { return ((KrVecInt*)vp)->data[i]; }
 void kr_vec_int_set(void* vp, int64_t i, int64_t val) { ((KrVecInt*)vp)->data[i] = val; }
 int64_t kr_vec_int_len(void* vp) { return ((KrVecInt*)vp)->len; }
 void kr_vec_int_free(void* vp) { KrVecInt* v = (KrVecInt*)vp; free(v->data); free(v); }
-typedef struct { const char** data; int64_t len; int64_t cap; } KrVecString;
+typedef struct { char** data; int64_t len; int64_t cap; } KrVecString;
 void* kr_vec_string_new() {
   KrVecString* v = (KrVecString*)malloc(sizeof(KrVecString));
-  v->data = (const char**)malloc(16 * sizeof(const char*)); v->len = 0; v->cap = 16; return v;
+  v->data = (char**)malloc(16 * sizeof(char*)); v->len = 0; v->cap = 16; return v;
 }
 void kr_vec_string_push(void* vp, kr_str val) {
   KrVecString* v = (KrVecString*)vp;
-  if(v->len >= v->cap) { v->cap *= 2; v->data = (const char**)realloc(v->data, v->cap * sizeof(const char*)); }
+  if(v->len >= v->cap) { v->cap *= 2; v->data = (char**)realloc(v->data, v->cap * sizeof(char*)); }
   v->data[v->len++] = val;
 }
 kr_str kr_vec_string_get(void* vp, int64_t i) { return ((KrVecString*)vp)->data[i]; }
@@ -95,7 +102,7 @@ typedef struct TranslateResult TranslateResult;
 typedef struct Diagnostic Diagnostic;
 typedef struct Target Target;
 SourceLocation kr_new_location(int64_t line, int64_t column, int64_t offset);
-Token kr_new_token(int64_t kind, const char* lexeme, int64_t line, int64_t column);
+Token kr_new_token(int64_t kind, kr_str lexeme, int64_t line, int64_t column);
 int64_t kr_TK_INT_LIT();
 int64_t kr_TK_FLOAT_LIT();
 int64_t kr_TK_STRING_LIT();
@@ -196,13 +203,13 @@ int64_t kr_TK_HASH();
 int64_t kr_TK_EOF();
 int64_t kr_TK_NEWLINE();
 int64_t kr_TK_COMMENT();
-int64_t kr_lookup_keyword(const char* s);
-const char* kr_token_kind_name(int64_t kind);
+int64_t kr_lookup_keyword(kr_str s);
+kr_str kr_token_kind_name(int64_t kind);
 bool kr_is_keyword(int64_t kind);
 bool kr_is_operator(int64_t kind);
 bool kr_is_delimiter(int64_t kind);
 bool kr_is_type_keyword(int64_t kind);
-Lexer kr_new_lexer(const char* source);
+Lexer kr_new_lexer(kr_str source);
 bool kr_is_alpha(int64_t c);
 bool kr_is_digit(int64_t c);
 bool kr_is_alnum(int64_t c);
@@ -219,7 +226,7 @@ Token kr_read_operator(Lexer lex);
 int64_t kr_token_advance_count(Token tok);
 void kr_push_token(void* kinds, void* lexemes, void* lines, void* cols, Token tok);
 Lexer kr_advance_n(Lexer lex, int64_t n);
-int64_t kr_tokenize(const char* source, void* int_data, void* lexemes);
+int64_t kr_tokenize(kr_str source, void* int_data, void* lexemes);
 int64_t kr_NODE_MODULE();
 int64_t kr_NODE_IMPORT();
 int64_t kr_NODE_VAR_DECL();
@@ -301,19 +308,19 @@ int64_t kr_FLAG_UNSAFE();
 int64_t kr_FLAG_VARIADIC();
 int64_t kr_FLAG_REFERENCE();
 bool kr_has_flag(AstNode node, int64_t flag);
-AstNode kr_new_node(int64_t kind, const char* name, int64_t line, int64_t column);
+AstNode kr_new_node(int64_t kind, kr_str name, int64_t line, int64_t column);
 AstArena kr_new_arena();
 AstArena kr_arena_add(AstArena arena);
-TypeNode kr_new_type(int64_t kind, const char* name);
+TypeNode kr_new_type(int64_t kind, kr_str name);
 TypeNode kr_type_from_keyword(int64_t kw);
-Parameter kr_new_param(const char* name, int64_t type_kind, const char* type_name);
-Field kr_new_field(const char* name, int64_t type_kind, const char* type_name);
-MatchArm kr_new_match_arm(int64_t pattern_kind, const char* pattern_value);
-const char* kr_node_kind_name(int64_t kind);
-Translator kr_new_translator(int64_t token_count, const char* file, void* id, void* lex, void* o);
+Parameter kr_new_param(kr_str name, int64_t type_kind, kr_str type_name);
+Field kr_new_field(kr_str name, int64_t type_kind, kr_str type_name);
+MatchArm kr_new_match_arm(int64_t pattern_kind, kr_str pattern_value);
+kr_str kr_node_kind_name(int64_t kind);
+Translator kr_new_translator(int64_t token_count, kr_str file, void* id, void* lex, void* o);
 bool kr_tr_at_end(Translator tr);
 int64_t kr_tr_kind(Translator tr);
-const char* kr_tr_lexeme(Translator tr);
+kr_str kr_tr_lexeme(Translator tr);
 int64_t kr_tr_line(Translator tr);
 int64_t kr_tr_col(Translator tr);
 Translator kr_tr_advance(Translator tr);
@@ -321,27 +328,35 @@ Translator kr_tr_skip(Translator tr, int64_t n);
 Translator kr_tr_indent(Translator tr);
 Translator kr_tr_dedent(Translator tr);
 Translator kr_tr_reset_pos(Translator tr);
-Translator kr_tr_error(Translator tr, const char* msg);
-void kr_tr_emit(Translator tr, const char* s);
+Translator kr_tr_error(Translator tr, kr_str msg);
+void kr_tr_emit(Translator tr, kr_str s);
 void kr_tr_emit_indent(Translator tr);
-void kr_tr_emit_line(Translator tr, const char* s);
-const char* kr_type_to_c(int64_t kind, const char* name);
-const char* kr_type_to_c_value(int64_t kind);
-TranslateResult kr_translate(void* int_data, void* lexemes, int64_t token_count, const char* file, Target target, void* out);
+void kr_tr_emit_line(Translator tr, kr_str s);
+kr_str kr_type_to_c(int64_t kind, kr_str name);
+kr_str kr_type_to_c_value(int64_t kind);
+TranslateResult kr_translate(void* int_data, void* lexemes, int64_t token_count, kr_str file, Target target, void* out);
 Translator kr_emit_forward_decls(Translator tr);
 Translator kr_emit_fn_prototype(Translator tr);
+Translator kr_emit_impl_prototypes(Translator tr);
 Translator kr_skip_brace_block(Translator tr);
 Translator kr_translate_program(Translator tr);
 Translator kr_translate_top_level(Translator tr);
+Translator kr_translate_impl(Translator tr);
+Translator kr_translate_impl_fn(Translator tr, kr_str type_name);
+Translator kr_translate_enum(Translator tr);
 Translator kr_translate_struct(Translator tr);
 Translator kr_translate_fn(Translator tr);
 Translator kr_translate_block_body(Translator tr);
+Translator kr_skip_to_sync(Translator tr);
 Translator kr_translate_statement(Translator tr);
 Translator kr_translate_var_decl(Translator tr);
 Translator kr_translate_return(Translator tr);
 Translator kr_translate_if(Translator tr);
 Translator kr_translate_while(Translator tr);
 Translator kr_translate_for(Translator tr);
+Translator kr_translate_match(Translator tr);
+Translator kr_translate_match_simple(Translator tr);
+Translator kr_translate_for_in(Translator tr, kr_str vname);
 Translator kr_translate_expr_stmt(Translator tr);
 Translator kr_translate_expr(Translator tr);
 Translator kr_translate_or(Translator tr);
@@ -349,44 +364,45 @@ Translator kr_translate_and(Translator tr);
 Translator kr_translate_bit_or(Translator tr);
 Translator kr_translate_bit_xor(Translator tr);
 Translator kr_translate_bit_and(Translator tr);
-int64_t kr_scan_string_eq(Translator tr);
+int64_t kr_scan_eq_ahead(Translator tr);
 Translator kr_translate_equality(Translator tr);
 Translator kr_translate_comparison(Translator tr);
+Translator kr_translate_shift(Translator tr);
 Translator kr_translate_addition(Translator tr);
 Translator kr_translate_multiplication(Translator tr);
 Translator kr_translate_unary(Translator tr);
 Translator kr_translate_postfix(Translator tr);
 Translator kr_translate_primary(Translator tr);
-const char* kr_join_output(void* out);
-const char* kr_emit_binary_op(int64_t op);
-const char* kr_emit_unary_op(int64_t op);
-const char* kr_make_indent(int64_t level);
-const char* kr_mangle_name(const char* mod_name, const char* name);
-const char* kr_mangle_struct(const char* name);
-const char* kr_mangle_enum(const char* name);
+kr_str kr_join_output(void* out);
+kr_str kr_emit_binary_op(int64_t op);
+kr_str kr_emit_unary_op(int64_t op);
+kr_str kr_make_indent(int64_t level);
+kr_str kr_mangle_name(kr_str mod_name, kr_str name);
+kr_str kr_mangle_struct(kr_str name);
+kr_str kr_mangle_enum(kr_str name);
 int64_t kr_SEV_ERROR();
 int64_t kr_SEV_WARNING();
 int64_t kr_SEV_INFO();
 int64_t kr_SEV_HINT();
-Diagnostic kr_new_error(const char* code, const char* message, const char* file, int64_t line, int64_t column);
-Diagnostic kr_new_warning(const char* code, const char* message, const char* file, int64_t line, int64_t column);
-Diagnostic kr_with_hint(Diagnostic d, const char* hint);
-const char* kr_KRA_UNEXPECTED_CHAR();
-const char* kr_KRA_UNTERMINATED_STR();
-const char* kr_KRA_EXPECTED_TOKEN();
-const char* kr_KRA_UNEXPECTED_TOKEN();
-const char* kr_KRA_TYPE_MISMATCH();
-const char* kr_KRA_UNDEFINED_VAR();
-const char* kr_KRA_DUPLICATE_DECL();
-const char* kr_KRA_MISSING_RETURN();
-const char* kr_KRA_INVALID_ASSIGN();
-const char* kr_KRA_UNKNOWN_TYPE();
-const char* kr_KRA_ARG_COUNT();
-const char* kr_KRA_UNREACHABLE();
-const char* kr_KRA_CODEGEN_FAIL();
-const char* kr_KRA_IO_ERROR();
-const char* kr_severity_label(int64_t severity);
-const char* kr_format_diagnostic(Diagnostic d);
+Diagnostic kr_new_error(kr_str code, kr_str message, kr_str file, int64_t line, int64_t column);
+Diagnostic kr_new_warning(kr_str code, kr_str message, kr_str file, int64_t line, int64_t column);
+Diagnostic kr_with_hint(Diagnostic d, kr_str hint);
+kr_str kr_KRA_UNEXPECTED_CHAR();
+kr_str kr_KRA_UNTERMINATED_STR();
+kr_str kr_KRA_EXPECTED_TOKEN();
+kr_str kr_KRA_UNEXPECTED_TOKEN();
+kr_str kr_KRA_TYPE_MISMATCH();
+kr_str kr_KRA_UNDEFINED_VAR();
+kr_str kr_KRA_DUPLICATE_DECL();
+kr_str kr_KRA_MISSING_RETURN();
+kr_str kr_KRA_INVALID_ASSIGN();
+kr_str kr_KRA_UNKNOWN_TYPE();
+kr_str kr_KRA_ARG_COUNT();
+kr_str kr_KRA_UNREACHABLE();
+kr_str kr_KRA_CODEGEN_FAIL();
+kr_str kr_KRA_IO_ERROR();
+kr_str kr_severity_label(int64_t severity);
+kr_str kr_format_diagnostic(Diagnostic d);
 void kr_print_diagnostic(Diagnostic d);
 int64_t kr_OS_UNKNOWN();
 int64_t kr_OS_LINUX();
@@ -394,8 +410,8 @@ int64_t kr_OS_MACOS();
 int64_t kr_OS_WINDOWS();
 int64_t kr_OS_FREEBSD();
 int64_t kr_OS_WASI();
-const char* kr_os_name(int64_t os);
-const char* kr_os_display_name(int64_t os);
+kr_str kr_os_name(int64_t os);
+kr_str kr_os_display_name(int64_t os);
 bool kr_os_is_posix(int64_t os);
 bool kr_os_is_windows(int64_t os);
 int64_t kr_ARCH_UNKNOWN();
@@ -404,7 +420,7 @@ int64_t kr_ARCH_AARCH64();
 int64_t kr_ARCH_ARM();
 int64_t kr_ARCH_RISCV64();
 int64_t kr_ARCH_WASM32();
-const char* kr_arch_name(int64_t arch);
+kr_str kr_arch_name(int64_t arch);
 int64_t kr_arch_pointer_width(int64_t arch);
 bool kr_arch_is_64bit(int64_t arch);
 int64_t kr_ABI_UNKNOWN();
@@ -412,33 +428,33 @@ int64_t kr_ABI_GNU();
 int64_t kr_ABI_MSVC();
 int64_t kr_ABI_MUSL();
 int64_t kr_ABI_NONE();
-const char* kr_abi_name(int64_t abi);
-Target kr_parse_target(const char* triple);
-Target kr_new_target(int64_t os, int64_t arch, int64_t abi, const char* vendor, const char* triple);
+kr_str kr_abi_name(int64_t abi);
+Target kr_parse_target(kr_str triple);
+Target kr_new_target(int64_t os, int64_t arch, int64_t abi, kr_str vendor, kr_str triple);
 Target kr_detect_host_target();
 bool kr_target_is_valid(Target t);
-const char* kr_format_target(Target t);
-const char* kr_format_target_display(Target t);
-const char* kr_default_cc(Target t);
-const char* kr_cc_cross_flags(Target t);
-const char* kr_c_includes_posix();
-const char* kr_c_includes_windows();
-const char* kr_c_includes_wasi();
-const char* kr_c_includes_for_target(Target t);
-const char* kr_c_typedefs_common();
-const char* kr_c_size_type(Target t);
-const char* kr_c_runtime_shims_posix();
-const char* kr_c_runtime_shims_windows();
-const char* kr_c_runtime_shims_wasi();
-const char* kr_c_runtime_shims_for_target(Target t);
-const char* kr_c_main_signature(Target t);
-const char* kr_linker_flags(Target t);
-const char* kr_object_ext(Target t);
-const char* kr_exe_ext(Target t);
-const char* kr_emit_c_preamble(Target t);
+kr_str kr_format_target(Target t);
+kr_str kr_format_target_display(Target t);
+kr_str kr_default_cc(Target t);
+kr_str kr_cc_cross_flags(Target t);
+kr_str kr_c_includes_posix();
+kr_str kr_c_includes_windows();
+kr_str kr_c_includes_wasi();
+kr_str kr_c_includes_for_target(Target t);
+kr_str kr_c_typedefs_common();
+kr_str kr_c_size_type(Target t);
+kr_str kr_c_runtime_shims_posix();
+kr_str kr_c_runtime_shims_windows();
+kr_str kr_c_runtime_shims_wasi();
+kr_str kr_c_runtime_shims_for_target(Target t);
+kr_str kr_c_main_signature(Target t);
+kr_str kr_linker_flags(Target t);
+kr_str kr_object_ext(Target t);
+kr_str kr_exe_ext(Target t);
+kr_str kr_emit_c_preamble(Target t);
 void kr_print_supported_targets();
-const char* kr_COMPILER_VERSION();
-const char* kr_COMPILER_NAME();
+kr_str kr_COMPILER_VERSION();
+kr_str kr_COMPILER_NAME();
 int64_t kr_MODE_COMPILE();
 int64_t kr_MODE_EMIT_C();
 int64_t kr_MODE_TOKENS();
@@ -448,10 +464,10 @@ int64_t kr_MODE_TARGETS();
 void kr_print_banner();
 void kr_print_version();
 void kr_print_help();
-const char* kr_dir_of(const char* path);
-const char* kr_resolve_imports(const char* source, const char* source_dir);
-const char* kr_derive_c_path(const char* input);
-const char* kr_derive_exe_path(const char* input, Target target);
+kr_str kr_dir_of(kr_str path);
+kr_str kr_resolve_imports(kr_str source, kr_str source_dir);
+kr_str kr_derive_c_path(kr_str input);
+kr_str kr_derive_exe_path(kr_str input, Target target);
 void kr_dump_tokens(void* int_data, void* lexemes, int64_t count);
 int64_t kr_main();
 
@@ -463,13 +479,13 @@ int64_t offset;
 
 struct Token {
 int64_t kind;
-const char* lexeme;
+kr_str lexeme;
 int64_t line;
 int64_t column;
 };
 
 struct Lexer {
-const char* source;
+kr_str source;
 int64_t pos;
 int64_t line;
 int64_t column;
@@ -478,8 +494,8 @@ int64_t length;
 
 struct AstNode {
 int64_t kind;
-const char* name;
-const char* str_value;
+kr_str name;
+kr_str str_value;
 int64_t int_value;
 int64_t line;
 int64_t column;
@@ -495,27 +511,27 @@ int64_t count;
 
 struct TypeNode {
 int64_t kind;
-const char* name;
+kr_str name;
 bool is_mutable;
 };
 
 struct Parameter {
-const char* name;
+kr_str name;
 int64_t type_kind;
-const char* type_name;
+kr_str type_name;
 bool is_reference;
 };
 
 struct Field {
-const char* name;
+kr_str name;
 int64_t type_kind;
-const char* type_name;
+kr_str type_name;
 bool is_public;
 };
 
 struct MatchArm {
 int64_t pattern_kind;
-const char* pattern_value;
+kr_str pattern_value;
 int64_t body_start;
 int64_t body_count;
 };
@@ -525,7 +541,7 @@ int64_t pos;
 int64_t count;
 int64_t indent;
 int64_t errors;
-const char* file;
+kr_str file;
 void* int_data;
 void* lexemes;
 void* out;
@@ -538,27 +554,27 @@ bool success;
 
 struct Diagnostic {
 int64_t severity;
-const char* code;
-const char* message;
-const char* file;
+kr_str code;
+kr_str message;
+kr_str file;
 int64_t line;
 int64_t column;
-const char* hint;
+kr_str hint;
 };
 
 struct Target {
 int64_t os;
 int64_t arch;
 int64_t abi;
-const char* vendor;
-const char* triple;
+kr_str vendor;
+kr_str triple;
 };
 
 SourceLocation kr_new_location(int64_t line, int64_t column, int64_t offset) {
     return (SourceLocation){.line = line, .column = column, .offset = offset};
 }
 
-Token kr_new_token(int64_t kind, const char* lexeme, int64_t line, int64_t column) {
+Token kr_new_token(int64_t kind, kr_str lexeme, int64_t line, int64_t column) {
     return (Token){.kind = kind, .lexeme = lexeme, .line = line, .column = column};
 }
 
@@ -962,180 +978,180 @@ int64_t kr_TK_COMMENT() {
     return 302;
 }
 
-int64_t kr_lookup_keyword(const char* s) {
-    if (_kr_str_eq(s, "if")) {
+int64_t kr_lookup_keyword(kr_str s) {
+    if (_KR_EQ(s, "if")) {
         return kr_TK_KW_IF();
     }
-    if (_kr_str_eq(s, "else")) {
+    if (_KR_EQ(s, "else")) {
         return kr_TK_KW_ELSE();
     }
-    if (_kr_str_eq(s, "match")) {
+    if (_KR_EQ(s, "match")) {
         return kr_TK_KW_MATCH();
     }
-    if (_kr_str_eq(s, "for")) {
+    if (_KR_EQ(s, "for")) {
         return kr_TK_KW_FOR();
     }
-    if (_kr_str_eq(s, "while")) {
+    if (_KR_EQ(s, "while")) {
         return kr_TK_KW_WHILE();
     }
-    if (_kr_str_eq(s, "do")) {
+    if (_KR_EQ(s, "do")) {
         return kr_TK_KW_DO();
     }
-    if (_kr_str_eq(s, "break")) {
+    if (_KR_EQ(s, "break")) {
         return kr_TK_KW_BREAK();
     }
-    if (_kr_str_eq(s, "continue")) {
+    if (_KR_EQ(s, "continue")) {
         return kr_TK_KW_CONTINUE();
     }
-    if (_kr_str_eq(s, "return")) {
+    if (_KR_EQ(s, "return")) {
         return kr_TK_KW_RETURN();
     }
-    if (_kr_str_eq(s, "fn")) {
+    if (_KR_EQ(s, "fn")) {
         return kr_TK_KW_FN();
     }
-    if (_kr_str_eq(s, "let")) {
+    if (_KR_EQ(s, "let")) {
         return kr_TK_KW_LET();
     }
-    if (_kr_str_eq(s, "const")) {
+    if (_KR_EQ(s, "const")) {
         return kr_TK_KW_CONST();
     }
-    if (_kr_str_eq(s, "module")) {
+    if (_KR_EQ(s, "module")) {
         return kr_TK_KW_MODULE();
     }
-    if (_kr_str_eq(s, "import")) {
+    if (_KR_EQ(s, "import")) {
         return kr_TK_KW_IMPORT();
     }
-    if (_kr_str_eq(s, "struct")) {
+    if (_KR_EQ(s, "struct")) {
         return kr_TK_KW_STRUCT();
     }
-    if (_kr_str_eq(s, "enum")) {
+    if (_KR_EQ(s, "enum")) {
         return kr_TK_KW_ENUM();
     }
-    if (_kr_str_eq(s, "trait")) {
+    if (_KR_EQ(s, "trait")) {
         return kr_TK_KW_TRAIT();
     }
-    if (_kr_str_eq(s, "impl")) {
+    if (_KR_EQ(s, "impl")) {
         return kr_TK_KW_IMPL();
     }
-    if (_kr_str_eq(s, "type")) {
+    if (_KR_EQ(s, "type")) {
         return kr_TK_KW_TYPE();
     }
-    if (_kr_str_eq(s, "pub")) {
+    if (_KR_EQ(s, "pub")) {
         return kr_TK_KW_PUB();
     }
-    if (_kr_str_eq(s, "priv")) {
+    if (_KR_EQ(s, "priv")) {
         return kr_TK_KW_PRIV();
     }
-    if (_kr_str_eq(s, "static")) {
+    if (_KR_EQ(s, "static")) {
         return kr_TK_KW_STATIC();
     }
-    if (_kr_str_eq(s, "async")) {
+    if (_KR_EQ(s, "async")) {
         return kr_TK_KW_ASYNC();
     }
-    if (_kr_str_eq(s, "await")) {
+    if (_KR_EQ(s, "await")) {
         return kr_TK_KW_AWAIT();
     }
-    if (_kr_str_eq(s, "spawn")) {
+    if (_KR_EQ(s, "spawn")) {
         return kr_TK_KW_SPAWN();
     }
-    if (_kr_str_eq(s, "ref")) {
+    if (_KR_EQ(s, "ref")) {
         return kr_TK_KW_REF();
     }
-    if (_kr_str_eq(s, "mut")) {
+    if (_KR_EQ(s, "mut")) {
         return kr_TK_KW_MUT();
     }
-    if (_kr_str_eq(s, "move")) {
+    if (_KR_EQ(s, "move")) {
         return kr_TK_KW_MOVE();
     }
-    if (_kr_str_eq(s, "unsafe")) {
+    if (_KR_EQ(s, "unsafe")) {
         return kr_TK_KW_UNSAFE();
     }
-    if (_kr_str_eq(s, "true")) {
+    if (_KR_EQ(s, "true")) {
         return kr_TK_KW_TRUE();
     }
-    if (_kr_str_eq(s, "false")) {
+    if (_KR_EQ(s, "false")) {
         return kr_TK_KW_FALSE();
     }
-    if (_kr_str_eq(s, "null")) {
+    if (_KR_EQ(s, "null")) {
         return kr_TK_KW_NULL();
     }
-    if (_kr_str_eq(s, "self")) {
+    if (_KR_EQ(s, "self")) {
         return kr_TK_KW_SELF();
     }
-    if (_kr_str_eq(s, "super")) {
+    if (_KR_EQ(s, "super")) {
         return kr_TK_KW_SUPER();
     }
-    if (_kr_str_eq(s, "defer")) {
+    if (_KR_EQ(s, "defer")) {
         return kr_TK_KW_DEFER();
     }
-    if (_kr_str_eq(s, "where")) {
+    if (_KR_EQ(s, "where")) {
         return kr_TK_KW_WHERE();
     }
-    if (_kr_str_eq(s, "as")) {
+    if (_KR_EQ(s, "as")) {
         return kr_TK_KW_AS();
     }
-    if (_kr_str_eq(s, "in")) {
+    if (_KR_EQ(s, "in")) {
         return kr_TK_KW_IN();
     }
-    if (_kr_str_eq(s, "dyn")) {
+    if (_KR_EQ(s, "dyn")) {
         return kr_TK_KW_DYN();
     }
-    if (_kr_str_eq(s, "union")) {
+    if (_KR_EQ(s, "union")) {
         return kr_TK_KW_UNION();
     }
-    if (_kr_str_eq(s, "class")) {
+    if (_KR_EQ(s, "class")) {
         return kr_TK_KW_CLASS();
     }
-    if (_kr_str_eq(s, "interface")) {
+    if (_KR_EQ(s, "interface")) {
         return kr_TK_KW_INTERFACE();
     }
-    if (_kr_str_eq(s, "int")) {
+    if (_KR_EQ(s, "int")) {
         return kr_TK_KW_INT();
     }
-    if (_kr_str_eq(s, "float")) {
+    if (_KR_EQ(s, "float")) {
         return kr_TK_KW_FLOAT();
     }
-    if (_kr_str_eq(s, "bool")) {
+    if (_KR_EQ(s, "bool")) {
         return kr_TK_KW_BOOL();
     }
-    if (_kr_str_eq(s, "string")) {
+    if (_KR_EQ(s, "string")) {
         return kr_TK_KW_STRING();
     }
-    if (_kr_str_eq(s, "str")) {
+    if (_KR_EQ(s, "str")) {
         return kr_TK_KW_STR();
     }
-    if (_kr_str_eq(s, "bytes")) {
+    if (_KR_EQ(s, "bytes")) {
         return kr_TK_KW_BYTES();
     }
-    if (_kr_str_eq(s, "void")) {
+    if (_KR_EQ(s, "void")) {
         return kr_TK_KW_VOID();
     }
     return 0;
 }
 
-const char* kr_token_kind_name(int64_t kind) {
-    if (kind == kr_TK_INT_LIT()) {
+kr_str kr_token_kind_name(int64_t kind) {
+    if (_KR_EQ(kind, kr_TK_INT_LIT())) {
         return "integer literal";
     }
-    if (kind == kr_TK_FLOAT_LIT()) {
+    if (_KR_EQ(kind, kr_TK_FLOAT_LIT())) {
         return "float literal";
     }
-    if (kind == kr_TK_STRING_LIT()) {
+    if (_KR_EQ(kind, kr_TK_STRING_LIT())) {
         return "string literal";
     }
-    if (kind == kr_TK_BOOL_LIT()) {
+    if (_KR_EQ(kind, kr_TK_BOOL_LIT())) {
         return "bool literal";
     }
-    if (kind == kr_TK_IDENTIFIER()) {
+    if (_KR_EQ(kind, kr_TK_IDENTIFIER())) {
         return "identifier";
     }
-    if (kind == kr_TK_EOF()) {
+    if (_KR_EQ(kind, kr_TK_EOF())) {
         return "end of file";
     }
-    if (kind == kr_TK_NEWLINE()) {
+    if (_KR_EQ(kind, kr_TK_NEWLINE())) {
         return "newline";
     }
-    if (kind == kr_TK_COMMENT()) {
+    if (_KR_EQ(kind, kr_TK_COMMENT())) {
         return "comment";
     }
     if (kind >= 100) {
@@ -1172,12 +1188,12 @@ bool kr_is_type_keyword(int64_t kind) {
     return kind >= 150 && kind < 180;
 }
 
-Lexer kr_new_lexer(const char* source) {
+Lexer kr_new_lexer(kr_str source) {
     return (Lexer){.source = source, .pos = 0, .line = 1, .column = 1, .length = kr_strlen(source)};
 }
 
 bool kr_is_alpha(int64_t c) {
-    return (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 95;
+    return (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || _KR_EQ(c, 95);
 }
 
 bool kr_is_digit(int64_t c) {
@@ -1189,7 +1205,7 @@ bool kr_is_alnum(int64_t c) {
 }
 
 bool kr_is_whitespace(int64_t c) {
-    return c == 32 || c == 9 || c == 13;
+    return _KR_EQ(c, 32) || _KR_EQ(c, 9) || _KR_EQ(c, 13);
 }
 
 bool kr_at_end(Lexer lex) {
@@ -1215,7 +1231,7 @@ Lexer kr_advance(Lexer lex) {
     __auto_type new_pos = lex.pos + 1;
     __auto_type new_line = lex.line;
     __auto_type new_col = lex.column + 1;
-    if (c == 10) {
+    if (_KR_EQ(c, 10)) {
         new_line = lex.line + 1;
         new_col = 1;
     }
@@ -1226,25 +1242,25 @@ Lexer kr_skip_whitespace(Lexer lex) {
     Lexer current = lex;
     while (!kr_at_end(current)) {
         __auto_type c = kr_peek_char(current);
-        if (kr_is_whitespace(c) || c == 10) {
+        if (kr_is_whitespace(c) || _KR_EQ(c, 10)) {
             current = kr_advance(current);
         }
         else {
-            if (c == 47) {
+            if (_KR_EQ(c, 47)) {
                 __auto_type next = kr_peek_next(current);
-                if (next == 47) {
+                if (_KR_EQ(next, 47)) {
                     current = kr_advance(current);
                     current = kr_advance(current);
-                    while (!kr_at_end(current) && kr_peek_char(current) != 10) {
+                    while (!kr_at_end(current) && _KR_NEQ(kr_peek_char(current), 10)) {
                         current = kr_advance(current);
                     }
                 }
                 else {
-                    if (next == 42) {
+                    if (_KR_EQ(next, 42)) {
                         current = kr_advance(current);
                         current = kr_advance(current);
                         while (!kr_at_end(current)) {
-                            if (kr_peek_char(current) == 42 && kr_peek_next(current) == 47) {
+                            if (_KR_EQ(kr_peek_char(current), 42) && _KR_EQ(kr_peek_next(current), 47)) {
                                 current = kr_advance(current);
                                 current = kr_advance(current);
                                 break;
@@ -1274,7 +1290,7 @@ Token kr_read_identifier(Lexer lex) {
     }
     __auto_type text = kr_str_slice(lex.source, start, current.pos);
     __auto_type kw = kr_lookup_keyword(text);
-    if (kw != 0) {
+    if (_KR_NEQ(kw, 0)) {
         return kr_new_token(kw, text, lex.line, start_col);
     }
     return kr_new_token(kr_TK_IDENTIFIER(), text, lex.line, start_col);
@@ -1288,7 +1304,7 @@ Token kr_read_number(Lexer lex) {
     while (!kr_at_end(current) && kr_is_digit(kr_peek_char(current))) {
         current = kr_advance(current);
     }
-    if (!kr_at_end(current) && kr_peek_char(current) == 46) {
+    if (!kr_at_end(current) && _KR_EQ(kr_peek_char(current), 46)) {
         if (kr_is_digit(kr_peek_next(current))) {
             is_float = 1;
             current = kr_advance(current);
@@ -1298,7 +1314,7 @@ Token kr_read_number(Lexer lex) {
         }
     }
     __auto_type text = kr_str_slice(lex.source, start, current.pos);
-    if (is_float == 1) {
+    if (_KR_EQ(is_float, 1)) {
         return kr_new_token(kr_TK_FLOAT_LIT(), text, lex.line, start_col);
     }
     return kr_new_token(kr_TK_INT_LIT(), text, lex.line, start_col);
@@ -1308,8 +1324,8 @@ Token kr_read_string(Lexer lex) {
     __auto_type start_col = lex.column;
     Lexer current = kr_advance(lex);
     __auto_type start = current.pos;
-    while (!kr_at_end(current) && kr_peek_char(current) != 34) {
-        if (kr_peek_char(current) == 92) {
+    while (!kr_at_end(current) && _KR_NEQ(kr_peek_char(current), 34)) {
+        if (_KR_EQ(kr_peek_char(current), 92)) {
             current = kr_advance(current);
         }
         current = kr_advance(current);
@@ -1326,127 +1342,127 @@ Token kr_read_operator(Lexer lex) {
     __auto_type next = kr_peek_next(lex);
     __auto_type col = lex.column;
     __auto_type ln = lex.line;
-    if (c == 61 && next == 61) {
+    if (_KR_EQ(c, 61) && _KR_EQ(next, 61)) {
         return kr_new_token(kr_TK_OP_EQ(), "==", ln, col);
     }
-    if (c == 33 && next == 61) {
+    if (_KR_EQ(c, 33) && _KR_EQ(next, 61)) {
         return kr_new_token(kr_TK_OP_NEQ(), "!=", ln, col);
     }
-    if (c == 60 && next == 61) {
+    if (_KR_EQ(c, 60) && _KR_EQ(next, 61)) {
         return kr_new_token(kr_TK_OP_LTE(), "<=", ln, col);
     }
-    if (c == 62 && next == 61) {
+    if (_KR_EQ(c, 62) && _KR_EQ(next, 61)) {
         return kr_new_token(kr_TK_OP_GTE(), ">=", ln, col);
     }
-    if (c == 38 && next == 38) {
+    if (_KR_EQ(c, 38) && _KR_EQ(next, 38)) {
         return kr_new_token(kr_TK_OP_AND(), "&&", ln, col);
     }
-    if (c == 124 && next == 124) {
+    if (_KR_EQ(c, 124) && _KR_EQ(next, 124)) {
         return kr_new_token(kr_TK_OP_OR(), "||", ln, col);
     }
-    if (c == 60 && next == 60) {
+    if (_KR_EQ(c, 60) && _KR_EQ(next, 60)) {
         return kr_new_token(kr_TK_OP_LSHIFT(), "<<", ln, col);
     }
-    if (c == 62 && next == 62) {
+    if (_KR_EQ(c, 62) && _KR_EQ(next, 62)) {
         return kr_new_token(kr_TK_OP_RSHIFT(), ">>", ln, col);
     }
-    if (c == 43 && next == 61) {
+    if (_KR_EQ(c, 43) && _KR_EQ(next, 61)) {
         return kr_new_token(kr_TK_OP_PLUS_ASSIGN(), "+=", ln, col);
     }
-    if (c == 45 && next == 61) {
+    if (_KR_EQ(c, 45) && _KR_EQ(next, 61)) {
         return kr_new_token(kr_TK_OP_MINUS_ASSIGN(), "-=", ln, col);
     }
-    if (c == 42 && next == 61) {
+    if (_KR_EQ(c, 42) && _KR_EQ(next, 61)) {
         return kr_new_token(kr_TK_OP_STAR_ASSIGN(), "*=", ln, col);
     }
-    if (c == 47 && next == 61) {
+    if (_KR_EQ(c, 47) && _KR_EQ(next, 61)) {
         return kr_new_token(kr_TK_OP_SLASH_ASSIGN(), "/=", ln, col);
     }
-    if (c == 37 && next == 61) {
+    if (_KR_EQ(c, 37) && _KR_EQ(next, 61)) {
         return kr_new_token(kr_TK_OP_PERCENT_ASSIGN(), "%=", ln, col);
     }
-    if (c == 45 && next == 62) {
+    if (_KR_EQ(c, 45) && _KR_EQ(next, 62)) {
         return kr_new_token(kr_TK_ARROW(), "->", ln, col);
     }
-    if (c == 58 && next == 58) {
+    if (_KR_EQ(c, 58) && _KR_EQ(next, 58)) {
         return kr_new_token(kr_TK_COLON_COLON(), "::", ln, col);
     }
-    if (c == 46 && next == 46) {
+    if (_KR_EQ(c, 46) && _KR_EQ(next, 46)) {
         return kr_new_token(kr_TK_OP_DOT_DOT(), "..", ln, col);
     }
-    if (c == 43) {
+    if (_KR_EQ(c, 43)) {
         return kr_new_token(kr_TK_OP_PLUS(), "+", ln, col);
     }
-    if (c == 45) {
+    if (_KR_EQ(c, 45)) {
         return kr_new_token(kr_TK_OP_MINUS(), "-", ln, col);
     }
-    if (c == 42) {
+    if (_KR_EQ(c, 42)) {
         return kr_new_token(kr_TK_OP_STAR(), "*", ln, col);
     }
-    if (c == 47) {
+    if (_KR_EQ(c, 47)) {
         return kr_new_token(kr_TK_OP_SLASH(), "/", ln, col);
     }
-    if (c == 37) {
+    if (_KR_EQ(c, 37)) {
         return kr_new_token(kr_TK_OP_PERCENT(), "%", ln, col);
     }
-    if (c == 60) {
+    if (_KR_EQ(c, 60)) {
         return kr_new_token(kr_TK_OP_LT(), "<", ln, col);
     }
-    if (c == 62) {
+    if (_KR_EQ(c, 62)) {
         return kr_new_token(kr_TK_OP_GT(), ">", ln, col);
     }
-    if (c == 33) {
+    if (_KR_EQ(c, 33)) {
         return kr_new_token(kr_TK_OP_NOT(), "!", ln, col);
     }
-    if (c == 38) {
+    if (_KR_EQ(c, 38)) {
         return kr_new_token(kr_TK_OP_BIT_AND(), "&", ln, col);
     }
-    if (c == 124) {
+    if (_KR_EQ(c, 124)) {
         return kr_new_token(kr_TK_OP_BIT_OR(), "|", ln, col);
     }
-    if (c == 94) {
+    if (_KR_EQ(c, 94)) {
         return kr_new_token(kr_TK_OP_BIT_XOR(), "^", ln, col);
     }
-    if (c == 126) {
+    if (_KR_EQ(c, 126)) {
         return kr_new_token(kr_TK_OP_BIT_NOT(), "~", ln, col);
     }
-    if (c == 61) {
+    if (_KR_EQ(c, 61)) {
         return kr_new_token(kr_TK_OP_ASSIGN(), "=", ln, col);
     }
-    if (c == 40) {
+    if (_KR_EQ(c, 40)) {
         return kr_new_token(kr_TK_LPAREN(), "(", ln, col);
     }
-    if (c == 41) {
+    if (_KR_EQ(c, 41)) {
         return kr_new_token(kr_TK_RPAREN(), ")", ln, col);
     }
-    if (c == 123) {
+    if (_KR_EQ(c, 123)) {
         return kr_new_token(kr_TK_LBRACE(), "{", ln, col);
     }
-    if (c == 125) {
+    if (_KR_EQ(c, 125)) {
         return kr_new_token(kr_TK_RBRACE(), "}", ln, col);
     }
-    if (c == 91) {
+    if (_KR_EQ(c, 91)) {
         return kr_new_token(kr_TK_LBRACKET(), "[", ln, col);
     }
-    if (c == 93) {
+    if (_KR_EQ(c, 93)) {
         return kr_new_token(kr_TK_RBRACKET(), "]", ln, col);
     }
-    if (c == 59) {
+    if (_KR_EQ(c, 59)) {
         return kr_new_token(kr_TK_SEMICOLON(), ";", ln, col);
     }
-    if (c == 44) {
+    if (_KR_EQ(c, 44)) {
         return kr_new_token(kr_TK_COMMA(), ",", ln, col);
     }
-    if (c == 46) {
+    if (_KR_EQ(c, 46)) {
         return kr_new_token(kr_TK_DOT(), ".", ln, col);
     }
-    if (c == 58) {
+    if (_KR_EQ(c, 58)) {
         return kr_new_token(kr_TK_COLON(), ":", ln, col);
     }
-    if (c == 63) {
+    if (_KR_EQ(c, 63)) {
         return kr_new_token(kr_TK_QUESTION(), "?", ln, col);
     }
-    if (c == 35) {
+    if (_KR_EQ(c, 35)) {
         return kr_new_token(kr_TK_HASH(), "#", ln, col);
     }
     return kr_new_token(kr_TK_EOF(), "", ln, col);
@@ -1473,7 +1489,7 @@ Lexer kr_advance_n(Lexer lex, int64_t n) {
     return current;
 }
 
-int64_t kr_tokenize(const char* source, void* int_data, void* lexemes) {
+int64_t kr_tokenize(kr_str source, void* int_data, void* lexemes) {
     Lexer lex = kr_new_lexer(source);
     __auto_type count = 0;
     while (!kr_at_end(lex)) {
@@ -1502,7 +1518,7 @@ int64_t kr_tokenize(const char* source, void* int_data, void* lexemes) {
                 count = count + 1;
             }
             else {
-                if (c == 34) {
+                if (_KR_EQ(c, 34)) {
                     Token tok = kr_read_string(lex);
                     kr_vec_int_push(int_data, tok.kind);
                     kr_vec_int_push(int_data, tok.line);
@@ -1518,7 +1534,7 @@ int64_t kr_tokenize(const char* source, void* int_data, void* lexemes) {
                     kr_vec_int_push(int_data, tok.column);
                     kr_vec_string_push(lexemes, tok.lexeme);
                     __auto_type adv = kr_strlen(tok.lexeme);
-                    if (adv == 0) {
+                    if (_KR_EQ(adv, 0)) {
                         adv = 1;
                     }
                     lex = kr_advance_n(lex, adv);
@@ -1856,10 +1872,10 @@ int64_t kr_FLAG_REFERENCE() {
 }
 
 bool kr_has_flag(AstNode node, int64_t flag) {
-    return (node.flags & flag) != 0;
+    return _KR_NEQ((node.flags & flag), 0);
 }
 
-AstNode kr_new_node(int64_t kind, const char* name, int64_t line, int64_t column) {
+AstNode kr_new_node(int64_t kind, kr_str name, int64_t line, int64_t column) {
     return (AstNode){.kind = kind, .name = name, .str_value = "", .int_value = 0, .line = line, .column = column, .flags = 0, .parent_id = -1, .first_child = -1, .next_sibling = -1};
 }
 
@@ -1871,154 +1887,154 @@ AstArena kr_arena_add(AstArena arena) {
     return (AstArena){.count = arena.count + 1};
 }
 
-TypeNode kr_new_type(int64_t kind, const char* name) {
+TypeNode kr_new_type(int64_t kind, kr_str name) {
     return (TypeNode){.kind = kind, .name = name, .is_mutable = false};
 }
 
 TypeNode kr_type_from_keyword(int64_t kw) {
-    if (kw == 150) {
+    if (_KR_EQ(kw, 150)) {
         return kr_new_type(kr_TYPE_INT(), "int");
     }
-    if (kw == 151) {
+    if (_KR_EQ(kw, 151)) {
         return kr_new_type(kr_TYPE_FLOAT(), "float");
     }
-    if (kw == 152) {
+    if (_KR_EQ(kw, 152)) {
         return kr_new_type(kr_TYPE_BOOL(), "bool");
     }
-    if (kw == 153) {
+    if (_KR_EQ(kw, 153)) {
         return kr_new_type(kr_TYPE_STRING(), "string");
     }
-    if (kw == 154) {
+    if (_KR_EQ(kw, 154)) {
         return kr_new_type(kr_TYPE_STR(), "str");
     }
-    if (kw == 155) {
+    if (_KR_EQ(kw, 155)) {
         return kr_new_type(kr_TYPE_BYTES(), "bytes");
     }
-    if (kw == 156) {
+    if (_KR_EQ(kw, 156)) {
         return kr_new_type(kr_TYPE_VOID(), "void");
     }
     return kr_new_type(kr_TYPE_CUSTOM(), "unknown");
 }
 
-Parameter kr_new_param(const char* name, int64_t type_kind, const char* type_name) {
+Parameter kr_new_param(kr_str name, int64_t type_kind, kr_str type_name) {
     return (Parameter){.name = name, .type_kind = type_kind, .type_name = type_name, .is_reference = false};
 }
 
-Field kr_new_field(const char* name, int64_t type_kind, const char* type_name) {
+Field kr_new_field(kr_str name, int64_t type_kind, kr_str type_name) {
     return (Field){.name = name, .type_kind = type_kind, .type_name = type_name, .is_public = false};
 }
 
-MatchArm kr_new_match_arm(int64_t pattern_kind, const char* pattern_value) {
+MatchArm kr_new_match_arm(int64_t pattern_kind, kr_str pattern_value) {
     return (MatchArm){.pattern_kind = pattern_kind, .pattern_value = pattern_value, .body_start = 0, .body_count = 0};
 }
 
-const char* kr_node_kind_name(int64_t kind) {
-    if (kind == kr_NODE_MODULE()) {
+kr_str kr_node_kind_name(int64_t kind) {
+    if (_KR_EQ(kind, kr_NODE_MODULE())) {
         return "module";
     }
-    if (kind == kr_NODE_IMPORT()) {
+    if (_KR_EQ(kind, kr_NODE_IMPORT())) {
         return "import";
     }
-    if (kind == kr_NODE_VAR_DECL()) {
+    if (_KR_EQ(kind, kr_NODE_VAR_DECL())) {
         return "variable_declaration";
     }
-    if (kind == kr_NODE_CONST_DECL()) {
+    if (_KR_EQ(kind, kr_NODE_CONST_DECL())) {
         return "constant_declaration";
     }
-    if (kind == kr_NODE_FN_DECL()) {
+    if (_KR_EQ(kind, kr_NODE_FN_DECL())) {
         return "function_declaration";
     }
-    if (kind == kr_NODE_STRUCT_DECL()) {
+    if (_KR_EQ(kind, kr_NODE_STRUCT_DECL())) {
         return "struct_declaration";
     }
-    if (kind == kr_NODE_ENUM_DECL()) {
+    if (_KR_EQ(kind, kr_NODE_ENUM_DECL())) {
         return "enum_declaration";
     }
-    if (kind == kr_NODE_TRAIT_DECL()) {
+    if (_KR_EQ(kind, kr_NODE_TRAIT_DECL())) {
         return "trait_declaration";
     }
-    if (kind == kr_NODE_IMPL_BLOCK()) {
+    if (_KR_EQ(kind, kr_NODE_IMPL_BLOCK())) {
         return "impl_block";
     }
-    if (kind == kr_NODE_TRAIT_IMPL()) {
+    if (_KR_EQ(kind, kr_NODE_TRAIT_IMPL())) {
         return "trait_impl";
     }
-    if (kind == kr_NODE_TYPE_ALIAS()) {
+    if (_KR_EQ(kind, kr_NODE_TYPE_ALIAS())) {
         return "type_alias";
     }
-    if (kind == kr_NODE_RETURN()) {
+    if (_KR_EQ(kind, kr_NODE_RETURN())) {
         return "return";
     }
-    if (kind == kr_NODE_IF()) {
+    if (_KR_EQ(kind, kr_NODE_IF())) {
         return "if";
     }
-    if (kind == kr_NODE_WHILE()) {
+    if (_KR_EQ(kind, kr_NODE_WHILE())) {
         return "while";
     }
-    if (kind == kr_NODE_FOR()) {
+    if (_KR_EQ(kind, kr_NODE_FOR())) {
         return "for";
     }
-    if (kind == kr_NODE_FOR_IN()) {
+    if (_KR_EQ(kind, kr_NODE_FOR_IN())) {
         return "for_in";
     }
-    if (kind == kr_NODE_MATCH()) {
+    if (_KR_EQ(kind, kr_NODE_MATCH())) {
         return "match";
     }
-    if (kind == kr_NODE_BREAK()) {
+    if (_KR_EQ(kind, kr_NODE_BREAK())) {
         return "break";
     }
-    if (kind == kr_NODE_CONTINUE()) {
+    if (_KR_EQ(kind, kr_NODE_CONTINUE())) {
         return "continue";
     }
-    if (kind == kr_NODE_DEFER()) {
+    if (_KR_EQ(kind, kr_NODE_DEFER())) {
         return "defer";
     }
-    if (kind == kr_NODE_EXPRESSION()) {
+    if (_KR_EQ(kind, kr_NODE_EXPRESSION())) {
         return "expression";
     }
-    if (kind == kr_EXPR_INT_LIT()) {
+    if (_KR_EQ(kind, kr_EXPR_INT_LIT())) {
         return "int_literal";
     }
-    if (kind == kr_EXPR_FLOAT_LIT()) {
+    if (_KR_EQ(kind, kr_EXPR_FLOAT_LIT())) {
         return "float_literal";
     }
-    if (kind == kr_EXPR_STRING_LIT()) {
+    if (_KR_EQ(kind, kr_EXPR_STRING_LIT())) {
         return "string_literal";
     }
-    if (kind == kr_EXPR_BOOL_LIT()) {
+    if (_KR_EQ(kind, kr_EXPR_BOOL_LIT())) {
         return "bool_literal";
     }
-    if (kind == kr_EXPR_IDENTIFIER()) {
+    if (_KR_EQ(kind, kr_EXPR_IDENTIFIER())) {
         return "identifier";
     }
-    if (kind == kr_EXPR_BINARY()) {
+    if (_KR_EQ(kind, kr_EXPR_BINARY())) {
         return "binary";
     }
-    if (kind == kr_EXPR_UNARY()) {
+    if (_KR_EQ(kind, kr_EXPR_UNARY())) {
         return "unary";
     }
-    if (kind == kr_EXPR_CALL()) {
+    if (_KR_EQ(kind, kr_EXPR_CALL())) {
         return "call";
     }
-    if (kind == kr_EXPR_ARRAY()) {
+    if (_KR_EQ(kind, kr_EXPR_ARRAY())) {
         return "array";
     }
-    if (kind == kr_EXPR_INDEX()) {
+    if (_KR_EQ(kind, kr_EXPR_INDEX())) {
         return "index";
     }
-    if (kind == kr_EXPR_MEMBER()) {
+    if (_KR_EQ(kind, kr_EXPR_MEMBER())) {
         return "member_access";
     }
-    if (kind == kr_EXPR_STRUCT_LIT()) {
+    if (_KR_EQ(kind, kr_EXPR_STRUCT_LIT())) {
         return "struct_literal";
     }
-    if (kind == kr_EXPR_ASSIGNMENT()) {
+    if (_KR_EQ(kind, kr_EXPR_ASSIGNMENT())) {
         return "assignment";
     }
     return "unknown";
 }
 
-Translator kr_new_translator(int64_t token_count, const char* file, void* id, void* lex, void* o) {
+Translator kr_new_translator(int64_t token_count, kr_str file, void* id, void* lex, void* o) {
     return (Translator){.pos = 0, .count = token_count, .indent = 0, .errors = 0, .file = file, .int_data = id, .lexemes = lex, .out = o};
 }
 
@@ -2033,7 +2049,7 @@ int64_t kr_tr_kind(Translator tr) {
     return kr_vec_int_get(tr.int_data, tr.pos * 3);
 }
 
-const char* kr_tr_lexeme(Translator tr) {
+kr_str kr_tr_lexeme(Translator tr) {
     if (kr_tr_at_end(tr)) {
         return "";
     }
@@ -2078,7 +2094,7 @@ Translator kr_tr_reset_pos(Translator tr) {
     return (Translator){.pos = 0, .count = tr.count, .indent = 0, .errors = tr.errors, .file = tr.file, .int_data = tr.int_data, .lexemes = tr.lexemes, .out = tr.out};
 }
 
-Translator kr_tr_error(Translator tr, const char* msg) {
+Translator kr_tr_error(Translator tr, kr_str msg) {
     __auto_type ln = kr_tr_line(tr);
     __auto_type co = kr_tr_col(tr);
     __auto_type d = kr_new_error(kr_KRA_UNEXPECTED_TOKEN(), msg, tr.file, ln, co);
@@ -2086,7 +2102,7 @@ Translator kr_tr_error(Translator tr, const char* msg) {
     return (Translator){.pos = tr.pos, .count = tr.count, .indent = tr.indent, .errors = tr.errors + 1, .file = tr.file, .int_data = tr.int_data, .lexemes = tr.lexemes, .out = tr.out};
 }
 
-void kr_tr_emit(Translator tr, const char* s) {
+void kr_tr_emit(Translator tr, kr_str s) {
     kr_vec_string_push(tr.out, s);
 }
 
@@ -2098,48 +2114,48 @@ void kr_tr_emit_indent(Translator tr) {
     }
 }
 
-void kr_tr_emit_line(Translator tr, const char* s) {
+void kr_tr_emit_line(Translator tr, kr_str s) {
     kr_tr_emit_indent(tr);
     kr_vec_string_push(tr.out, s);
     kr_vec_string_push(tr.out, "\n");
 }
 
-const char* kr_type_to_c(int64_t kind, const char* name) {
-    if (kind == kr_TK_KW_INT()) {
+kr_str kr_type_to_c(int64_t kind, kr_str name) {
+    if (_KR_EQ(kind, kr_TK_KW_INT())) {
         return "int64_t";
     }
-    if (kind == kr_TK_KW_FLOAT()) {
+    if (_KR_EQ(kind, kr_TK_KW_FLOAT())) {
         return "double";
     }
-    if (kind == kr_TK_KW_BOOL()) {
+    if (_KR_EQ(kind, kr_TK_KW_BOOL())) {
         return "bool";
     }
-    if (kind == kr_TK_KW_STRING()) {
-        return "const char*";
+    if (_KR_EQ(kind, kr_TK_KW_STRING())) {
+        return "kr_str";
     }
-    if (kind == kr_TK_KW_STR()) {
-        return "const char*";
+    if (_KR_EQ(kind, kr_TK_KW_STR())) {
+        return "kr_str";
     }
-    if (kind == kr_TK_KW_BYTES()) {
+    if (_KR_EQ(kind, kr_TK_KW_BYTES())) {
         return "uint8_t*";
     }
-    if (kind == kr_TK_KW_VOID()) {
+    if (_KR_EQ(kind, kr_TK_KW_VOID())) {
         return "void";
     }
-    if (kind == kr_TK_IDENTIFIER()) {
-        if (kr_strcmp(name, "VecInt") == 0) {
+    if (_KR_EQ(kind, kr_TK_IDENTIFIER())) {
+        if (_KR_EQ(kr_strcmp(name, "VecInt"), 0)) {
             return "void*";
         }
-        if (kr_strcmp(name, "VecString") == 0) {
+        if (_KR_EQ(kr_strcmp(name, "VecString"), 0)) {
             return "void*";
         }
-        if (kr_strcmp(name, "VecBytes") == 0) {
+        if (_KR_EQ(kr_strcmp(name, "VecBytes"), 0)) {
             return "void*";
         }
-        if (kr_strcmp(name, "MapStringInt") == 0) {
+        if (_KR_EQ(kr_strcmp(name, "MapStringInt"), 0)) {
             return "void*";
         }
-        if (kr_strcmp(name, "MapStringString") == 0) {
+        if (_KR_EQ(kr_strcmp(name, "MapStringString"), 0)) {
             return "void*";
         }
         return name;
@@ -2147,26 +2163,26 @@ const char* kr_type_to_c(int64_t kind, const char* name) {
     return "void*";
 }
 
-const char* kr_type_to_c_value(int64_t kind) {
-    if (kind == kr_TK_KW_INT()) {
+kr_str kr_type_to_c_value(int64_t kind) {
+    if (_KR_EQ(kind, kr_TK_KW_INT())) {
         return "0";
     }
-    if (kind == kr_TK_KW_FLOAT()) {
+    if (_KR_EQ(kind, kr_TK_KW_FLOAT())) {
         return "0.0";
     }
-    if (kind == kr_TK_KW_BOOL()) {
+    if (_KR_EQ(kind, kr_TK_KW_BOOL())) {
         return "false";
     }
-    if (kind == kr_TK_KW_STRING()) {
+    if (_KR_EQ(kind, kr_TK_KW_STRING())) {
         return "\"\"";
     }
-    if (kind == kr_TK_KW_STR()) {
+    if (_KR_EQ(kind, kr_TK_KW_STR())) {
         return "\"\"";
     }
     return "NULL";
 }
 
-TranslateResult kr_translate(void* int_data, void* lexemes, int64_t token_count, const char* file, Target target, void* out) {
+TranslateResult kr_translate(void* int_data, void* lexemes, int64_t token_count, kr_str file, Target target, void* out) {
     Translator tr = kr_new_translator(token_count, file, int_data, lexemes, out);
     kr_tr_emit(tr, kr_emit_c_preamble(target));
     kr_tr_emit(tr, "\n");
@@ -2176,7 +2192,7 @@ TranslateResult kr_translate(void* int_data, void* lexemes, int64_t token_count,
     kr_tr_emit(tr, "\nint main(int argc, char* argv[]) {\n");
     kr_tr_emit(tr, "    return (int)kr_main();\n");
     kr_tr_emit(tr, "}\n");
-    return (TranslateResult){.errors = tr.errors, .success = tr.errors == 0};
+    return (TranslateResult){.errors = tr.errors, .success = _KR_EQ(tr.errors, 0)};
 }
 
 Translator kr_emit_forward_decls(Translator tr) {
@@ -2184,48 +2200,76 @@ Translator kr_emit_forward_decls(Translator tr) {
     kr_tr_emit_line(c, "/* Forward declarations */");
     while (!kr_tr_at_end(c)) {
         __auto_type k = kr_tr_kind(c);
-        if (k == kr_TK_KW_PUB()) {
+        if (_KR_EQ(k, kr_TK_KW_PUB())) {
             c = kr_tr_advance(c);
-            if (kr_tr_kind(c) == kr_TK_KW_STRUCT()) {
+            __auto_type k2 = kr_tr_kind(c);
+            if (_KR_EQ(k2, kr_TK_KW_STRUCT())) {
                 c = kr_tr_advance(c);
                 __auto_type name = kr_tr_lexeme(c);
                 kr_tr_emit_line(c, kr_str_concat(kr_str_concat("typedef struct ", name), kr_str_concat(" ", kr_str_concat(name, ";"))));
                 c = kr_tr_advance(c);
             }
             else {
-                c = kr_tr_advance(c);
+                if (_KR_EQ(k2, kr_TK_KW_ENUM())) {
+                    c = kr_tr_advance(c);
+                    __auto_type name = kr_tr_lexeme(c);
+                    kr_tr_emit_line(c, kr_str_concat("typedef int64_t ", kr_str_concat(name, ";")));
+                    c = kr_tr_advance(c);
+                }
+                else {
+                    c = kr_tr_advance(c);
+                }
             }
         }
         else {
-            if (k == kr_TK_KW_STRUCT()) {
+            if (_KR_EQ(k, kr_TK_KW_STRUCT())) {
                 c = kr_tr_advance(c);
                 __auto_type name = kr_tr_lexeme(c);
                 kr_tr_emit_line(c, kr_str_concat(kr_str_concat("typedef struct ", name), kr_str_concat(" ", kr_str_concat(name, ";"))));
                 c = kr_tr_advance(c);
             }
             else {
-                c = kr_tr_advance(c);
+                if (_KR_EQ(k, kr_TK_KW_ENUM())) {
+                    c = kr_tr_advance(c);
+                    __auto_type name = kr_tr_lexeme(c);
+                    kr_tr_emit_line(c, kr_str_concat("typedef int64_t ", kr_str_concat(name, ";")));
+                    c = kr_tr_advance(c);
+                }
+                else {
+                    c = kr_tr_advance(c);
+                }
             }
         }
     }
     c = kr_tr_reset_pos(c);
     while (!kr_tr_at_end(c)) {
         __auto_type k = kr_tr_kind(c);
-        if (k == kr_TK_KW_PUB()) {
+        if (_KR_EQ(k, kr_TK_KW_PUB())) {
             c = kr_tr_advance(c);
-            if (kr_tr_kind(c) == kr_TK_KW_FN()) {
+            __auto_type k2 = kr_tr_kind(c);
+            if (_KR_EQ(k2, kr_TK_KW_FN())) {
                 c = kr_emit_fn_prototype(c);
             }
             else {
-                c = kr_tr_advance(c);
+                if (_KR_EQ(k2, kr_TK_KW_IMPL())) {
+                    c = kr_emit_impl_prototypes(c);
+                }
+                else {
+                    c = kr_tr_advance(c);
+                }
             }
         }
         else {
-            if (k == kr_TK_KW_FN()) {
+            if (_KR_EQ(k, kr_TK_KW_FN())) {
                 c = kr_emit_fn_prototype(c);
             }
             else {
-                c = kr_tr_advance(c);
+                if (_KR_EQ(k, kr_TK_KW_IMPL())) {
+                    c = kr_emit_impl_prototypes(c);
+                }
+                else {
+                    c = kr_tr_advance(c);
+                }
             }
         }
     }
@@ -2240,8 +2284,8 @@ Translator kr_emit_fn_prototype(Translator tr) {
     c = kr_tr_advance(c);
     __auto_type params = "";
     __auto_type first = 1;
-    while (!kr_tr_at_end(c) && kr_tr_kind(c) != kr_TK_RPAREN()) {
-        if (first == 0) {
+    while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RPAREN())) {
+        if (_KR_EQ(first, 0)) {
             params = kr_str_concat(params, ", ");
             c = kr_tr_advance(c);
         }
@@ -2256,7 +2300,7 @@ Translator kr_emit_fn_prototype(Translator tr) {
     }
     c = kr_tr_advance(c);
     __auto_type ret_c = "void";
-    if (!kr_tr_at_end(c) && kr_tr_kind(c) == kr_TK_ARROW()) {
+    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_ARROW())) {
         c = kr_tr_advance(c);
         __auto_type rk = kr_tr_kind(c);
         __auto_type rn = kr_tr_lexeme(c);
@@ -2269,19 +2313,78 @@ Translator kr_emit_fn_prototype(Translator tr) {
     return c;
 }
 
+Translator kr_emit_impl_prototypes(Translator tr) {
+    Translator c = kr_tr_advance(tr);
+    __auto_type type_name = kr_tr_lexeme(c);
+    c = kr_tr_advance(c);
+    c = kr_tr_advance(c);
+    while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RBRACE())) {
+        if (_KR_EQ(kr_tr_kind(c), kr_TK_KW_PUB())) {
+            c = kr_tr_advance(c);
+        }
+        if (_KR_EQ(kr_tr_kind(c), kr_TK_KW_FN())) {
+            c = kr_tr_advance(c);
+            __auto_type fname = kr_tr_lexeme(c);
+            c = kr_tr_advance(c);
+            c = kr_tr_advance(c);
+            __auto_type params = "";
+            __auto_type first = 1;
+            while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RPAREN())) {
+                if (_KR_EQ(first, 0)) {
+                    params = kr_str_concat(params, ", ");
+                    c = kr_tr_advance(c);
+                }
+                __auto_type pname = kr_tr_lexeme(c);
+                if (_KR_EQ(pname, "self")) {
+                    c = kr_tr_advance(c);
+                    params = kr_str_concat(params, kr_str_concat(type_name, " self"));
+                }
+                else {
+                    c = kr_tr_advance(c);
+                    c = kr_tr_advance(c);
+                    __auto_type pk = kr_tr_kind(c);
+                    __auto_type pn = kr_tr_lexeme(c);
+                    c = kr_tr_advance(c);
+                    params = kr_str_concat(params, kr_str_concat(kr_type_to_c(pk, pn), kr_str_concat(" ", pname)));
+                }
+                first = 0;
+            }
+            c = kr_tr_advance(c);
+            __auto_type ret_c = "void";
+            if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_ARROW())) {
+                c = kr_tr_advance(c);
+                __auto_type rk = kr_tr_kind(c);
+                __auto_type rn = kr_tr_lexeme(c);
+                ret_c = kr_type_to_c(rk, rn);
+                c = kr_tr_advance(c);
+            }
+            __auto_type mangled = kr_str_concat("kr_", kr_str_concat(type_name, kr_str_concat("_", fname)));
+            kr_tr_emit_line(c, kr_str_concat(ret_c, kr_str_concat(" ", kr_str_concat(mangled, kr_str_concat("(", kr_str_concat(params, ");"))))));
+            c = kr_skip_brace_block(c);
+        }
+        else {
+            c = kr_tr_advance(c);
+        }
+    }
+    if (!kr_tr_at_end(c)) {
+        c = kr_tr_advance(c);
+    }
+    return c;
+}
+
 Translator kr_skip_brace_block(Translator tr) {
     Translator c = tr;
-    if (kr_tr_at_end(c) || kr_tr_kind(c) != kr_TK_LBRACE()) {
+    if (kr_tr_at_end(c) || _KR_NEQ(kr_tr_kind(c), kr_TK_LBRACE())) {
         return c;
     }
     c = kr_tr_advance(c);
     __auto_type depth = 1;
     while (!kr_tr_at_end(c) && depth > 0) {
         __auto_type k = kr_tr_kind(c);
-        if (k == kr_TK_LBRACE()) {
+        if (_KR_EQ(k, kr_TK_LBRACE())) {
             depth = depth + 1;
         }
-        if (k == kr_TK_RBRACE()) {
+        if (_KR_EQ(k, kr_TK_RBRACE())) {
             depth = depth - 1;
         }
         c = kr_tr_advance(c);
@@ -2293,32 +2396,43 @@ Translator kr_translate_program(Translator tr) {
     Translator c = tr;
     while (!kr_tr_at_end(c)) {
         __auto_type k = kr_tr_kind(c);
-        if (k == kr_TK_EOF()) {
+        if (_KR_EQ(k, kr_TK_EOF())) {
             break;
         }
-        if (k == kr_TK_KW_MODULE() || k == kr_TK_KW_IMPORT()) {
+        if (_KR_EQ(k, kr_TK_KW_MODULE()) || _KR_EQ(k, kr_TK_KW_IMPORT())) {
             c = kr_tr_advance(c);
             c = kr_tr_advance(c);
-            if (!kr_tr_at_end(c) && kr_tr_kind(c) == kr_TK_SEMICOLON()) {
+            if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_SEMICOLON())) {
                 c = kr_tr_advance(c);
             }
         }
         else {
-            if (k == kr_TK_KW_PUB()) {
+            if (_KR_EQ(k, kr_TK_KW_PUB())) {
                 c = kr_tr_advance(c);
-                if (kr_tr_kind(c) == kr_TK_KW_STRUCT()) {
+                __auto_type k2 = kr_tr_kind(c);
+                if (_KR_EQ(k2, kr_TK_KW_STRUCT())) {
                     c = kr_translate_struct(c);
                 }
                 else {
-                    c = kr_tr_advance(c);
+                    if (_KR_EQ(k2, kr_TK_KW_ENUM())) {
+                        c = kr_translate_enum(c);
+                    }
+                    else {
+                        c = kr_tr_advance(c);
+                    }
                 }
             }
             else {
-                if (k == kr_TK_KW_STRUCT()) {
+                if (_KR_EQ(k, kr_TK_KW_STRUCT())) {
                     c = kr_translate_struct(c);
                 }
                 else {
-                    c = kr_tr_advance(c);
+                    if (_KR_EQ(k, kr_TK_KW_ENUM())) {
+                        c = kr_translate_enum(c);
+                    }
+                    else {
+                        c = kr_tr_advance(c);
+                    }
                 }
             }
         }
@@ -2326,41 +2440,52 @@ Translator kr_translate_program(Translator tr) {
     c = kr_tr_reset_pos(c);
     while (!kr_tr_at_end(c)) {
         __auto_type k = kr_tr_kind(c);
-        if (k == kr_TK_EOF()) {
+        if (_KR_EQ(k, kr_TK_EOF())) {
             break;
         }
-        if (k == kr_TK_KW_MODULE() || k == kr_TK_KW_IMPORT()) {
+        if (_KR_EQ(k, kr_TK_KW_MODULE()) || _KR_EQ(k, kr_TK_KW_IMPORT())) {
             c = kr_tr_advance(c);
             c = kr_tr_advance(c);
-            if (!kr_tr_at_end(c) && kr_tr_kind(c) == kr_TK_SEMICOLON()) {
+            if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_SEMICOLON())) {
                 c = kr_tr_advance(c);
             }
         }
         else {
-            if (k == kr_TK_KW_PUB()) {
+            if (_KR_EQ(k, kr_TK_KW_PUB())) {
                 c = kr_tr_advance(c);
-                if (kr_tr_kind(c) == kr_TK_KW_FN()) {
+                __auto_type k2 = kr_tr_kind(c);
+                if (_KR_EQ(k2, kr_TK_KW_FN())) {
                     c = kr_translate_fn(c);
                 }
                 else {
-                    if (kr_tr_kind(c) == kr_TK_KW_STRUCT()) {
+                    if (_KR_EQ(k2, kr_TK_KW_STRUCT()) || _KR_EQ(k2, kr_TK_KW_ENUM())) {
                         c = kr_skip_brace_block(kr_tr_advance(kr_tr_advance(c)));
                     }
                     else {
-                        c = kr_tr_advance(c);
+                        if (_KR_EQ(k2, kr_TK_KW_IMPL())) {
+                            c = kr_translate_impl(c);
+                        }
+                        else {
+                            c = kr_tr_advance(c);
+                        }
                     }
                 }
             }
             else {
-                if (k == kr_TK_KW_FN()) {
+                if (_KR_EQ(k, kr_TK_KW_FN())) {
                     c = kr_translate_fn(c);
                 }
                 else {
-                    if (k == kr_TK_KW_STRUCT()) {
+                    if (_KR_EQ(k, kr_TK_KW_STRUCT()) || _KR_EQ(k, kr_TK_KW_ENUM())) {
                         c = kr_skip_brace_block(kr_tr_advance(kr_tr_advance(c)));
                     }
                     else {
-                        c = kr_tr_advance(c);
+                        if (_KR_EQ(k, kr_TK_KW_IMPL())) {
+                            c = kr_translate_impl(c);
+                        }
+                        else {
+                            c = kr_tr_advance(c);
+                        }
                     }
                 }
             }
@@ -2371,13 +2496,112 @@ Translator kr_translate_program(Translator tr) {
 
 Translator kr_translate_top_level(Translator tr) {
     __auto_type k = kr_tr_kind(tr);
-    if (k == kr_TK_KW_FN()) {
+    if (_KR_EQ(k, kr_TK_KW_FN())) {
         return kr_translate_fn(tr);
     }
-    if (k == kr_TK_KW_STRUCT()) {
+    if (_KR_EQ(k, kr_TK_KW_STRUCT())) {
         return kr_translate_struct(tr);
     }
     return kr_tr_advance(tr);
+}
+
+Translator kr_translate_impl(Translator tr) {
+    Translator c = kr_tr_advance(tr);
+    __auto_type type_name = kr_tr_lexeme(c);
+    c = kr_tr_advance(c);
+    c = kr_tr_advance(c);
+    while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RBRACE())) {
+        if (_KR_EQ(kr_tr_kind(c), kr_TK_KW_PUB())) {
+            c = kr_tr_advance(c);
+        }
+        if (_KR_EQ(kr_tr_kind(c), kr_TK_KW_FN())) {
+            c = kr_translate_impl_fn(c, type_name);
+        }
+        else {
+            c = kr_tr_advance(c);
+        }
+    }
+    if (!kr_tr_at_end(c)) {
+        c = kr_tr_advance(c);
+    }
+    return c;
+}
+
+Translator kr_translate_impl_fn(Translator tr, kr_str type_name) {
+    Translator c = kr_tr_advance(tr);
+    __auto_type fname = kr_tr_lexeme(c);
+    c = kr_tr_advance(c);
+    c = kr_tr_advance(c);
+    __auto_type params = "";
+    __auto_type first = 1;
+    while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RPAREN())) {
+        if (_KR_EQ(first, 0)) {
+            params = kr_str_concat(params, ", ");
+            c = kr_tr_advance(c);
+        }
+        __auto_type pname = kr_tr_lexeme(c);
+        if (_KR_EQ(pname, "self")) {
+            c = kr_tr_advance(c);
+            params = kr_str_concat(params, kr_str_concat(type_name, " self"));
+        }
+        else {
+            c = kr_tr_advance(c);
+            c = kr_tr_advance(c);
+            __auto_type ptype_kind = kr_tr_kind(c);
+            __auto_type ptype_name = kr_tr_lexeme(c);
+            c = kr_tr_advance(c);
+            params = kr_str_concat(params, kr_str_concat(kr_type_to_c(ptype_kind, ptype_name), kr_str_concat(" ", pname)));
+        }
+        first = 0;
+    }
+    c = kr_tr_advance(c);
+    __auto_type ret_c = "void";
+    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_ARROW())) {
+        c = kr_tr_advance(c);
+        __auto_type rk = kr_tr_kind(c);
+        __auto_type rn = kr_tr_lexeme(c);
+        ret_c = kr_type_to_c(rk, rn);
+        c = kr_tr_advance(c);
+    }
+    __auto_type mangled = kr_str_concat("kr_", kr_str_concat(type_name, kr_str_concat("_", fname)));
+    kr_tr_emit(c, kr_str_concat(ret_c, kr_str_concat(" ", kr_str_concat(mangled, kr_str_concat("(", kr_str_concat(params, ") {\n"))))));
+    c = kr_tr_advance(c);
+    c = kr_tr_indent(c);
+    c = kr_translate_block_body(c);
+    c = kr_tr_dedent(c);
+    kr_tr_emit_line(c, "}");
+    kr_tr_emit(c, "\n");
+    return c;
+}
+
+Translator kr_translate_enum(Translator tr) {
+    Translator c = kr_tr_advance(tr);
+    __auto_type name = kr_tr_lexeme(c);
+    c = kr_tr_advance(c);
+    c = kr_tr_advance(c);
+    kr_tr_emit_line(c, kr_str_concat("typedef int64_t ", kr_str_concat(name, ";")));
+    __auto_type idx = 0;
+    while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RBRACE())) {
+        __auto_type variant = kr_tr_lexeme(c);
+        c = kr_tr_advance(c);
+        kr_tr_emit_line(c, kr_str_concat("#define ", kr_str_concat(name, kr_str_concat("_", kr_str_concat(variant, kr_str_concat(" ", kr_fmt_int(idx)))))));
+        idx = idx + 1;
+        if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_LPAREN())) {
+            c = kr_tr_advance(c);
+            while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RPAREN())) {
+                c = kr_tr_advance(c);
+            }
+            c = kr_tr_advance(c);
+        }
+        if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_COMMA())) {
+            c = kr_tr_advance(c);
+        }
+    }
+    if (!kr_tr_at_end(c)) {
+        c = kr_tr_advance(c);
+    }
+    kr_tr_emit(c, "\n");
+    return c;
 }
 
 Translator kr_translate_struct(Translator tr) {
@@ -2386,7 +2610,7 @@ Translator kr_translate_struct(Translator tr) {
     c = kr_tr_advance(c);
     c = kr_tr_advance(c);
     kr_tr_emit_line(c, kr_str_concat("struct ", kr_str_concat(name, " {")));
-    while (!kr_tr_at_end(c) && kr_tr_kind(c) != kr_TK_RBRACE()) {
+    while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RBRACE())) {
         __auto_type fname = kr_tr_lexeme(c);
         c = kr_tr_advance(c);
         c = kr_tr_advance(c);
@@ -2394,7 +2618,7 @@ Translator kr_translate_struct(Translator tr) {
         __auto_type fn_name = kr_tr_lexeme(c);
         c = kr_tr_advance(c);
         kr_tr_emit_line(c, kr_str_concat(kr_type_to_c(fk, fn_name), kr_str_concat(" ", kr_str_concat(fname, ";"))));
-        if (!kr_tr_at_end(c) && kr_tr_kind(c) == kr_TK_SEMICOLON()) {
+        if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_SEMICOLON())) {
             c = kr_tr_advance(c);
         }
     }
@@ -2411,8 +2635,8 @@ Translator kr_translate_fn(Translator tr) {
     c = kr_tr_advance(c);
     __auto_type params = "";
     __auto_type first = 1;
-    while (!kr_tr_at_end(c) && kr_tr_kind(c) != kr_TK_RPAREN()) {
-        if (first == 0) {
+    while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RPAREN())) {
+        if (_KR_EQ(first, 0)) {
             params = kr_str_concat(params, ", ");
             c = kr_tr_advance(c);
         }
@@ -2427,7 +2651,7 @@ Translator kr_translate_fn(Translator tr) {
     }
     c = kr_tr_advance(c);
     __auto_type ret_c = "void";
-    if (!kr_tr_at_end(c) && kr_tr_kind(c) == kr_TK_ARROW()) {
+    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_ARROW())) {
         c = kr_tr_advance(c);
         __auto_type rk = kr_tr_kind(c);
         __auto_type rn = kr_tr_lexeme(c);
@@ -2447,7 +2671,7 @@ Translator kr_translate_fn(Translator tr) {
 
 Translator kr_translate_block_body(Translator tr) {
     Translator c = tr;
-    while (!kr_tr_at_end(c) && kr_tr_kind(c) != kr_TK_RBRACE()) {
+    while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RBRACE())) {
         c = kr_translate_statement(c);
     }
     if (!kr_tr_at_end(c)) {
@@ -2456,38 +2680,62 @@ Translator kr_translate_block_body(Translator tr) {
     return c;
 }
 
+Translator kr_skip_to_sync(Translator tr) {
+    Translator c = tr;
+    while (!kr_tr_at_end(c)) {
+        __auto_type k = kr_tr_kind(c);
+        if (_KR_EQ(k, kr_TK_SEMICOLON())) {
+            return kr_tr_advance(c);
+        }
+        if (_KR_EQ(k, kr_TK_RBRACE())) {
+            return c;
+        }
+        c = kr_tr_advance(c);
+    }
+    return c;
+}
+
 Translator kr_translate_statement(Translator tr) {
     __auto_type k = kr_tr_kind(tr);
-    if (k == kr_TK_KW_LET() || k == kr_TK_KW_CONST()) {
+    if (_KR_EQ(k, kr_TK_SEMICOLON())) {
+        return kr_tr_advance(tr);
+    }
+    if (_KR_EQ(k, kr_TK_KW_LET()) || _KR_EQ(k, kr_TK_KW_CONST())) {
         return kr_translate_var_decl(tr);
     }
-    if (k == kr_TK_KW_RETURN()) {
+    if (_KR_EQ(k, kr_TK_KW_RETURN())) {
         return kr_translate_return(tr);
     }
-    if (k == kr_TK_KW_IF()) {
+    if (_KR_EQ(k, kr_TK_KW_IF())) {
         return kr_translate_if(tr);
     }
-    if (k == kr_TK_KW_WHILE()) {
+    if (_KR_EQ(k, kr_TK_KW_WHILE())) {
         return kr_translate_while(tr);
     }
-    if (k == kr_TK_KW_FOR()) {
+    if (_KR_EQ(k, kr_TK_KW_FOR())) {
         return kr_translate_for(tr);
     }
-    if (k == kr_TK_KW_BREAK()) {
+    if (_KR_EQ(k, kr_TK_KW_MATCH())) {
+        return kr_translate_match(tr);
+    }
+    if (_KR_EQ(k, kr_TK_KW_BREAK())) {
         kr_tr_emit_line(tr, "break;");
         Translator c = kr_tr_advance(tr);
-        if (!kr_tr_at_end(c) && kr_tr_kind(c) == kr_TK_SEMICOLON()) {
+        if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_SEMICOLON())) {
             c = kr_tr_advance(c);
         }
         return c;
     }
-    if (k == kr_TK_KW_CONTINUE()) {
+    if (_KR_EQ(k, kr_TK_KW_CONTINUE())) {
         kr_tr_emit_line(tr, "continue;");
         Translator c = kr_tr_advance(tr);
-        if (!kr_tr_at_end(c) && kr_tr_kind(c) == kr_TK_SEMICOLON()) {
+        if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_SEMICOLON())) {
             c = kr_tr_advance(c);
         }
         return c;
+    }
+    if (_KR_EQ(k, kr_TK_EOF()) || _KR_EQ(k, kr_TK_RBRACE())) {
+        return tr;
     }
     return kr_translate_expr_stmt(tr);
 }
@@ -2498,7 +2746,7 @@ Translator kr_translate_var_decl(Translator tr) {
     c = kr_tr_advance(c);
     __auto_type has_type = 0;
     __auto_type c_type = "__auto_type";
-    if (!kr_tr_at_end(c) && kr_tr_kind(c) == kr_TK_COLON()) {
+    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_COLON())) {
         c = kr_tr_advance(c);
         __auto_type tk = kr_tr_kind(c);
         __auto_type tn = kr_tr_lexeme(c);
@@ -2506,7 +2754,7 @@ Translator kr_translate_var_decl(Translator tr) {
         c = kr_tr_advance(c);
         has_type = 1;
     }
-    if (!kr_tr_at_end(c) && kr_tr_kind(c) == kr_TK_OP_ASSIGN()) {
+    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_OP_ASSIGN())) {
         c = kr_tr_advance(c);
         kr_tr_emit_indent(c);
         kr_tr_emit(c, kr_str_concat(c_type, kr_str_concat(" ", kr_str_concat(vname, " = "))));
@@ -2514,12 +2762,12 @@ Translator kr_translate_var_decl(Translator tr) {
         kr_tr_emit(c, ";\n");
     }
     else {
-        if (has_type == 0) {
+        if (_KR_EQ(has_type, 0)) {
             c_type = "int64_t";
         }
         kr_tr_emit_line(c, kr_str_concat(c_type, kr_str_concat(" ", kr_str_concat(vname, ";"))));
     }
-    if (!kr_tr_at_end(c) && kr_tr_kind(c) == kr_TK_SEMICOLON()) {
+    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_SEMICOLON())) {
         c = kr_tr_advance(c);
     }
     return c;
@@ -2527,7 +2775,7 @@ Translator kr_translate_var_decl(Translator tr) {
 
 Translator kr_translate_return(Translator tr) {
     Translator c = kr_tr_advance(tr);
-    if (!kr_tr_at_end(c) && kr_tr_kind(c) != kr_TK_SEMICOLON()) {
+    if (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_SEMICOLON())) {
         kr_tr_emit_indent(c);
         kr_tr_emit(c, "return ");
         c = kr_translate_expr(c);
@@ -2536,7 +2784,7 @@ Translator kr_translate_return(Translator tr) {
     else {
         kr_tr_emit_line(c, "return;");
     }
-    if (!kr_tr_at_end(c) && kr_tr_kind(c) == kr_TK_SEMICOLON()) {
+    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_SEMICOLON())) {
         c = kr_tr_advance(c);
     }
     return c;
@@ -2547,12 +2795,12 @@ Translator kr_translate_if(Translator tr) {
     kr_tr_emit_indent(c);
     kr_tr_emit(c, "if (");
     __auto_type had_paren = 0;
-    if (!kr_tr_at_end(c) && kr_tr_kind(c) == kr_TK_LPAREN()) {
+    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_LPAREN())) {
         c = kr_tr_advance(c);
         had_paren = 1;
     }
     c = kr_translate_expr(c);
-    if (had_paren == 1 && !kr_tr_at_end(c) && kr_tr_kind(c) == kr_TK_RPAREN()) {
+    if (_KR_EQ(had_paren, 1) && !kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_RPAREN())) {
         c = kr_tr_advance(c);
     }
     kr_tr_emit(c, ") {\n");
@@ -2561,9 +2809,9 @@ Translator kr_translate_if(Translator tr) {
     c = kr_translate_block_body(c);
     c = kr_tr_dedent(c);
     kr_tr_emit_line(c, "}");
-    if (!kr_tr_at_end(c) && kr_tr_kind(c) == kr_TK_KW_ELSE()) {
+    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_KW_ELSE())) {
         c = kr_tr_advance(c);
-        if (!kr_tr_at_end(c) && kr_tr_kind(c) == kr_TK_KW_IF()) {
+        if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_KW_IF())) {
             kr_tr_emit_indent(c);
             kr_tr_emit(c, "else ");
             c = kr_translate_if(c);
@@ -2584,12 +2832,12 @@ Translator kr_translate_while(Translator tr) {
     kr_tr_emit_indent(c);
     kr_tr_emit(c, "while (");
     __auto_type had_paren = 0;
-    if (!kr_tr_at_end(c) && kr_tr_kind(c) == kr_TK_LPAREN()) {
+    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_LPAREN())) {
         c = kr_tr_advance(c);
         had_paren = 1;
     }
     c = kr_translate_expr(c);
-    if (had_paren == 1 && !kr_tr_at_end(c) && kr_tr_kind(c) == kr_TK_RPAREN()) {
+    if (_KR_EQ(had_paren, 1) && !kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_RPAREN())) {
         c = kr_tr_advance(c);
     }
     kr_tr_emit(c, ") {\n");
@@ -2604,14 +2852,18 @@ Translator kr_translate_while(Translator tr) {
 Translator kr_translate_for(Translator tr) {
     Translator c = kr_tr_advance(tr);
     c = kr_tr_advance(c);
-    kr_tr_emit_indent(c);
-    kr_tr_emit(c, "for (");
-    if (kr_tr_kind(c) == kr_TK_KW_LET()) {
+    if (_KR_EQ(kr_tr_kind(c), kr_TK_KW_LET())) {
         c = kr_tr_advance(c);
         __auto_type vname = kr_tr_lexeme(c);
         c = kr_tr_advance(c);
+        if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_KW_IN())) {
+            c = kr_tr_advance(c);
+            return kr_translate_for_in(c, vname);
+        }
+        kr_tr_emit_indent(c);
+        kr_tr_emit(c, "for (");
         __auto_type c_type = "int64_t";
-        if (!kr_tr_at_end(c) && kr_tr_kind(c) == kr_TK_COLON()) {
+        if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_COLON())) {
             c = kr_tr_advance(c);
             __auto_type tk = kr_tr_kind(c);
             __auto_type tn = kr_tr_lexeme(c);
@@ -2623,6 +2875,8 @@ Translator kr_translate_for(Translator tr) {
         c = kr_translate_expr(c);
     }
     else {
+        kr_tr_emit_indent(c);
+        kr_tr_emit(c, "for (");
         c = kr_translate_expr(c);
     }
     c = kr_tr_advance(c);
@@ -2632,7 +2886,7 @@ Translator kr_translate_for(Translator tr) {
     kr_tr_emit(c, "; ");
     c = kr_translate_expr(c);
     __auto_type ik = kr_tr_kind(c);
-    if (ik == kr_TK_OP_ASSIGN() || ik == kr_TK_OP_PLUS_ASSIGN() || ik == kr_TK_OP_MINUS_ASSIGN() || ik == kr_TK_OP_STAR_ASSIGN()) {
+    if (_KR_EQ(ik, kr_TK_OP_ASSIGN()) || _KR_EQ(ik, kr_TK_OP_PLUS_ASSIGN()) || _KR_EQ(ik, kr_TK_OP_MINUS_ASSIGN()) || _KR_EQ(ik, kr_TK_OP_STAR_ASSIGN()) || _KR_EQ(ik, kr_TK_OP_SLASH_ASSIGN()) || _KR_EQ(ik, kr_TK_OP_PERCENT_ASSIGN())) {
         __auto_type op_lex = kr_tr_lexeme(c);
         kr_tr_emit(c, kr_str_concat(" ", kr_str_concat(op_lex, " ")));
         c = kr_tr_advance(c);
@@ -2648,18 +2902,148 @@ Translator kr_translate_for(Translator tr) {
     return c;
 }
 
+Translator kr_translate_match(Translator tr) {
+    return kr_translate_match_simple(tr);
+}
+
+Translator kr_translate_match_simple(Translator tr) {
+    Translator c = kr_tr_advance(tr);
+    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_LPAREN())) {
+        c = kr_tr_advance(c);
+    }
+    __auto_type subject = kr_tr_lexeme(c);
+    c = kr_tr_advance(c);
+    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_DOT())) {
+        subject = kr_str_concat(subject, ".");
+        c = kr_tr_advance(c);
+        subject = kr_str_concat(subject, kr_tr_lexeme(c));
+        c = kr_tr_advance(c);
+    }
+    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_RPAREN())) {
+        c = kr_tr_advance(c);
+    }
+    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_LBRACE())) {
+        c = kr_tr_advance(c);
+    }
+    __auto_type arm_idx = 0;
+    while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RBRACE())) {
+        __auto_type k = kr_tr_kind(c);
+        if (_KR_EQ(k, kr_TK_IDENTIFIER()) && _KR_EQ(kr_tr_lexeme(c), "_")) {
+            c = kr_tr_advance(c);
+            if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_ARROW())) {
+                c = kr_tr_advance(c);
+            }
+            if (arm_idx > 0) {
+                kr_tr_emit_line(c, "else {");
+            }
+            else {
+                kr_tr_emit_indent(c);
+                kr_tr_emit(c, "{\n");
+            }
+            c = kr_tr_advance(c);
+            c = kr_tr_indent(c);
+            c = kr_translate_block_body(c);
+            c = kr_tr_dedent(c);
+            kr_tr_emit_line(c, "}");
+            arm_idx = arm_idx + 1;
+        }
+        else {
+            kr_tr_emit_indent(c);
+            if (arm_idx > 0) {
+                kr_tr_emit(c, "else ");
+            }
+            kr_tr_emit(c, kr_str_concat("if (", kr_str_concat(subject, " == ")));
+            if (_KR_EQ(k, kr_TK_IDENTIFIER())) {
+                __auto_type pat_name = kr_tr_lexeme(c);
+                c = kr_tr_advance(c);
+                if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_COLON_COLON())) {
+                    c = kr_tr_advance(c);
+                    __auto_type variant = kr_tr_lexeme(c);
+                    c = kr_tr_advance(c);
+                    kr_tr_emit(c, kr_str_concat(pat_name, kr_str_concat("_", variant)));
+                    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_LPAREN())) {
+                        c = kr_tr_advance(c);
+                        while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RPAREN())) {
+                            c = kr_tr_advance(c);
+                        }
+                        c = kr_tr_advance(c);
+                    }
+                }
+                else {
+                    kr_tr_emit(c, pat_name);
+                }
+            }
+            else {
+                if (_KR_EQ(k, kr_TK_STRING_LIT())) {
+                    kr_tr_emit(c, kr_str_concat("\"", kr_str_concat(kr_tr_lexeme(c), "\"")));
+                }
+                else {
+                    kr_tr_emit(c, kr_tr_lexeme(c));
+                }
+                c = kr_tr_advance(c);
+            }
+            kr_tr_emit(c, ") {\n");
+            if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_ARROW())) {
+                c = kr_tr_advance(c);
+            }
+            if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_LBRACE())) {
+                c = kr_tr_advance(c);
+            }
+            c = kr_tr_indent(c);
+            c = kr_translate_block_body(c);
+            c = kr_tr_dedent(c);
+            kr_tr_emit_line(c, "}");
+            arm_idx = arm_idx + 1;
+        }
+    }
+    if (!kr_tr_at_end(c)) {
+        c = kr_tr_advance(c);
+    }
+    return c;
+}
+
+Translator kr_translate_for_in(Translator tr, kr_str vname) {
+    Translator c = tr;
+    kr_tr_emit_indent(c);
+    kr_tr_emit(c, "for (");
+    __auto_type range_start = kr_tr_lexeme(c);
+    c = kr_tr_advance(c);
+    __auto_type inclusive = 0;
+    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_OP_DOT_DOT_EQ())) {
+        inclusive = 1;
+    }
+    c = kr_tr_advance(c);
+    __auto_type range_end = kr_tr_lexeme(c);
+    c = kr_tr_advance(c);
+    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_RPAREN())) {
+        c = kr_tr_advance(c);
+    }
+    __auto_type cmp = " < ";
+    if (_KR_EQ(inclusive, 1)) {
+        cmp = " <= ";
+    }
+    kr_tr_emit(c, kr_str_concat("int64_t ", kr_str_concat(vname, kr_str_concat(" = ", kr_str_concat(range_start, kr_str_concat("; ", kr_str_concat(vname, kr_str_concat(cmp, kr_str_concat(range_end, kr_str_concat("; ", kr_str_concat(vname, "++")))))))))));
+    kr_tr_emit(c, ") {\n");
+    c = kr_tr_advance(c);
+    c = kr_tr_indent(c);
+    c = kr_translate_block_body(c);
+    c = kr_tr_dedent(c);
+    kr_tr_emit_line(c, "}");
+    return c;
+}
+
 Translator kr_translate_expr_stmt(Translator tr) {
     kr_tr_emit_indent(tr);
     Translator c = kr_translate_expr(tr);
     __auto_type k = kr_tr_kind(c);
-    if (k == kr_TK_OP_ASSIGN() || k == kr_TK_OP_PLUS_ASSIGN() || k == kr_TK_OP_MINUS_ASSIGN() || k == kr_TK_OP_STAR_ASSIGN()) {
+    if (_KR_EQ(k, kr_TK_OP_ASSIGN()) || _KR_EQ(k, kr_TK_OP_PLUS_ASSIGN()) || _KR_EQ(k, kr_TK_OP_MINUS_ASSIGN()) || _KR_EQ(k, kr_TK_OP_STAR_ASSIGN()) || _KR_EQ(k, kr_TK_OP_SLASH_ASSIGN()) || _KR_EQ(k, kr_TK_OP_PERCENT_ASSIGN())) {
         __auto_type op_lex = kr_tr_lexeme(c);
         kr_tr_emit(c, kr_str_concat(" ", kr_str_concat(op_lex, " ")));
         c = kr_tr_advance(c);
         c = kr_translate_expr(c);
     }
     kr_tr_emit(c, ";\n");
-    if (!kr_tr_at_end(c) && kr_tr_kind(c) == kr_TK_SEMICOLON()) {
+    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_SEMICOLON())) {
         c = kr_tr_advance(c);
     }
     return c;
@@ -2671,7 +3055,7 @@ Translator kr_translate_expr(Translator tr) {
 
 Translator kr_translate_or(Translator tr) {
     Translator c = kr_translate_and(tr);
-    while (!kr_tr_at_end(c) && kr_tr_kind(c) == kr_TK_OP_OR()) {
+    while (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_OP_OR())) {
         kr_tr_emit(c, " || ");
         c = kr_tr_advance(c);
         c = kr_translate_and(c);
@@ -2681,7 +3065,7 @@ Translator kr_translate_or(Translator tr) {
 
 Translator kr_translate_and(Translator tr) {
     Translator c = kr_translate_bit_or(tr);
-    while (!kr_tr_at_end(c) && kr_tr_kind(c) == kr_TK_OP_AND()) {
+    while (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_OP_AND())) {
         kr_tr_emit(c, " && ");
         c = kr_tr_advance(c);
         c = kr_translate_bit_or(c);
@@ -2691,7 +3075,7 @@ Translator kr_translate_and(Translator tr) {
 
 Translator kr_translate_bit_or(Translator tr) {
     Translator c = kr_translate_bit_xor(tr);
-    while (!kr_tr_at_end(c) && kr_tr_kind(c) == kr_TK_OP_BIT_OR()) {
+    while (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_OP_BIT_OR())) {
         kr_tr_emit(c, " | ");
         c = kr_tr_advance(c);
         c = kr_translate_bit_xor(c);
@@ -2701,7 +3085,7 @@ Translator kr_translate_bit_or(Translator tr) {
 
 Translator kr_translate_bit_xor(Translator tr) {
     Translator c = kr_translate_bit_and(tr);
-    while (!kr_tr_at_end(c) && kr_tr_kind(c) == kr_TK_OP_BIT_XOR()) {
+    while (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_OP_BIT_XOR())) {
         kr_tr_emit(c, " ^ ");
         c = kr_tr_advance(c);
         c = kr_translate_bit_and(c);
@@ -2711,7 +3095,7 @@ Translator kr_translate_bit_xor(Translator tr) {
 
 Translator kr_translate_bit_and(Translator tr) {
     Translator c = kr_translate_equality(tr);
-    while (!kr_tr_at_end(c) && kr_tr_kind(c) == kr_TK_OP_BIT_AND()) {
+    while (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_OP_BIT_AND())) {
         kr_tr_emit(c, " & ");
         c = kr_tr_advance(c);
         c = kr_translate_equality(c);
@@ -2719,31 +3103,27 @@ Translator kr_translate_bit_and(Translator tr) {
     return c;
 }
 
-int64_t kr_scan_string_eq(Translator tr) {
+int64_t kr_scan_eq_ahead(Translator tr) {
     __auto_type i = tr.pos;
     __auto_type depth = 0;
     while (i < tr.count) {
         __auto_type k = kr_vec_int_get(tr.int_data, i * 3);
-        if (k == kr_TK_LPAREN()) {
+        if (_KR_EQ(k, kr_TK_LPAREN())) {
             depth = depth + 1;
         }
-        if (k == kr_TK_RPAREN()) {
+        if (_KR_EQ(k, kr_TK_RPAREN())) {
             depth = depth - 1;
         }
         if (depth < 0) {
             return 0;
         }
-        if (depth == 0 && (k == kr_TK_OP_EQ() || k == kr_TK_OP_NEQ())) {
-            __auto_type next = i + 1;
-            if (next < tr.count && kr_vec_int_get(tr.int_data, next * 3) == kr_TK_STRING_LIT()) {
-                if (k == kr_TK_OP_EQ()) {
-                    return 1;
-                }
-                return 2;
+        if (_KR_EQ(depth, 0) && (_KR_EQ(k, kr_TK_OP_EQ()) || _KR_EQ(k, kr_TK_OP_NEQ()))) {
+            if (_KR_EQ(k, kr_TK_OP_EQ())) {
+                return 1;
             }
-            return 0;
+            return 2;
         }
-        if (k == kr_TK_SEMICOLON() || k == kr_TK_LBRACE() || k == kr_TK_RBRACE() || k == kr_TK_OP_AND() || k == kr_TK_OP_OR() || k == kr_TK_OP_BIT_AND() || k == kr_TK_OP_BIT_OR() || k == kr_TK_OP_BIT_XOR()) {
+        if (_KR_EQ(depth, 0) && (_KR_EQ(k, kr_TK_SEMICOLON()) || _KR_EQ(k, kr_TK_LBRACE()) || _KR_EQ(k, kr_TK_RBRACE()) || _KR_EQ(k, kr_TK_COMMA()) || _KR_EQ(k, kr_TK_COLON()) || _KR_EQ(k, kr_TK_OP_AND()) || _KR_EQ(k, kr_TK_OP_OR()) || _KR_EQ(k, kr_TK_OP_BIT_AND()) || _KR_EQ(k, kr_TK_OP_BIT_OR()) || _KR_EQ(k, kr_TK_OP_BIT_XOR()) || _KR_EQ(k, kr_TK_OP_LSHIFT()) || _KR_EQ(k, kr_TK_OP_RSHIFT()))) {
             return 0;
         }
         i = i + 1;
@@ -2752,13 +3132,13 @@ int64_t kr_scan_string_eq(Translator tr) {
 }
 
 Translator kr_translate_equality(Translator tr) {
-    __auto_type eq_mode = kr_scan_string_eq(tr);
+    __auto_type eq_mode = kr_scan_eq_ahead(tr);
     if (eq_mode > 0) {
-        if (eq_mode == 1) {
-            kr_tr_emit(tr, "_kr_str_eq(");
+        if (_KR_EQ(eq_mode, 1)) {
+            kr_tr_emit(tr, "_KR_EQ(");
         }
         else {
-            kr_tr_emit(tr, "_kr_str_neq(");
+            kr_tr_emit(tr, "_KR_NEQ(");
         }
         Translator c = kr_translate_comparison(tr);
         c = kr_tr_advance(c);
@@ -2768,32 +3148,30 @@ Translator kr_translate_equality(Translator tr) {
         return c;
     }
     Translator c = kr_translate_comparison(tr);
+    return c;
+}
+
+Translator kr_translate_comparison(Translator tr) {
+    Translator c = kr_translate_shift(tr);
     while (!kr_tr_at_end(c)) {
         __auto_type k = kr_tr_kind(c);
-        if (k == kr_TK_OP_EQ()) {
-            kr_tr_emit(c, " == ");
+        if (_KR_EQ(k, kr_TK_OP_LT()) || _KR_EQ(k, kr_TK_OP_LTE()) || _KR_EQ(k, kr_TK_OP_GT()) || _KR_EQ(k, kr_TK_OP_GTE())) {
+            kr_tr_emit(c, kr_str_concat(" ", kr_str_concat(kr_tr_lexeme(c), " ")));
             c = kr_tr_advance(c);
-            c = kr_translate_comparison(c);
+            c = kr_translate_shift(c);
         }
         else {
-            if (k == kr_TK_OP_NEQ()) {
-                kr_tr_emit(c, " != ");
-                c = kr_tr_advance(c);
-                c = kr_translate_comparison(c);
-            }
-            else {
-                break;
-            }
+            break;
         }
     }
     return c;
 }
 
-Translator kr_translate_comparison(Translator tr) {
+Translator kr_translate_shift(Translator tr) {
     Translator c = kr_translate_addition(tr);
     while (!kr_tr_at_end(c)) {
         __auto_type k = kr_tr_kind(c);
-        if (k == kr_TK_OP_LT() || k == kr_TK_OP_LTE() || k == kr_TK_OP_GT() || k == kr_TK_OP_GTE()) {
+        if (_KR_EQ(k, kr_TK_OP_LSHIFT()) || _KR_EQ(k, kr_TK_OP_RSHIFT())) {
             kr_tr_emit(c, kr_str_concat(" ", kr_str_concat(kr_tr_lexeme(c), " ")));
             c = kr_tr_advance(c);
             c = kr_translate_addition(c);
@@ -2809,13 +3187,13 @@ Translator kr_translate_addition(Translator tr) {
     Translator c = kr_translate_multiplication(tr);
     while (!kr_tr_at_end(c)) {
         __auto_type k = kr_tr_kind(c);
-        if (k == kr_TK_OP_PLUS()) {
+        if (_KR_EQ(k, kr_TK_OP_PLUS())) {
             kr_tr_emit(c, " + ");
             c = kr_tr_advance(c);
             c = kr_translate_multiplication(c);
         }
         else {
-            if (k == kr_TK_OP_MINUS()) {
+            if (_KR_EQ(k, kr_TK_OP_MINUS())) {
                 kr_tr_emit(c, " - ");
                 c = kr_tr_advance(c);
                 c = kr_translate_multiplication(c);
@@ -2832,7 +3210,7 @@ Translator kr_translate_multiplication(Translator tr) {
     Translator c = kr_translate_unary(tr);
     while (!kr_tr_at_end(c)) {
         __auto_type k = kr_tr_kind(c);
-        if (k == kr_TK_OP_STAR() || k == kr_TK_OP_SLASH() || k == kr_TK_OP_PERCENT()) {
+        if (_KR_EQ(k, kr_TK_OP_STAR()) || _KR_EQ(k, kr_TK_OP_SLASH()) || _KR_EQ(k, kr_TK_OP_PERCENT())) {
             kr_tr_emit(c, kr_str_concat(" ", kr_str_concat(kr_tr_lexeme(c), " ")));
             c = kr_tr_advance(c);
             c = kr_translate_unary(c);
@@ -2846,15 +3224,15 @@ Translator kr_translate_multiplication(Translator tr) {
 
 Translator kr_translate_unary(Translator tr) {
     __auto_type k = kr_tr_kind(tr);
-    if (k == kr_TK_OP_NOT()) {
+    if (_KR_EQ(k, kr_TK_OP_NOT())) {
         kr_tr_emit(tr, "!");
         return kr_translate_unary(kr_tr_advance(tr));
     }
-    if (k == kr_TK_OP_MINUS()) {
+    if (_KR_EQ(k, kr_TK_OP_MINUS())) {
         kr_tr_emit(tr, "-");
         return kr_translate_unary(kr_tr_advance(tr));
     }
-    if (k == kr_TK_OP_BIT_NOT()) {
+    if (_KR_EQ(k, kr_TK_OP_BIT_NOT())) {
         kr_tr_emit(tr, "~");
         return kr_translate_unary(kr_tr_advance(tr));
     }
@@ -2865,19 +3243,19 @@ Translator kr_translate_postfix(Translator tr) {
     Translator c = kr_translate_primary(tr);
     while (!kr_tr_at_end(c)) {
         __auto_type k = kr_tr_kind(c);
-        if (k == kr_TK_DOT()) {
+        if (_KR_EQ(k, kr_TK_DOT())) {
             kr_tr_emit(c, ".");
             c = kr_tr_advance(c);
             kr_tr_emit(c, kr_tr_lexeme(c));
             c = kr_tr_advance(c);
         }
         else {
-            if (k == kr_TK_LPAREN()) {
+            if (_KR_EQ(k, kr_TK_LPAREN())) {
                 c = kr_tr_advance(c);
                 kr_tr_emit(c, "(");
                 __auto_type fa = 1;
-                while (!kr_tr_at_end(c) && kr_tr_kind(c) != kr_TK_RPAREN()) {
-                    if (fa == 0) {
+                while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RPAREN())) {
+                    if (_KR_EQ(fa, 0)) {
                         kr_tr_emit(c, ", ");
                         c = kr_tr_advance(c);
                     }
@@ -2888,7 +3266,7 @@ Translator kr_translate_postfix(Translator tr) {
                 kr_tr_emit(c, ")");
             }
             else {
-                if (k == kr_TK_LBRACKET()) {
+                if (_KR_EQ(k, kr_TK_LBRACKET())) {
                     kr_tr_emit(c, "[");
                     c = kr_tr_advance(c);
                     c = kr_translate_expr(c);
@@ -2906,49 +3284,63 @@ Translator kr_translate_postfix(Translator tr) {
 
 Translator kr_translate_primary(Translator tr) {
     __auto_type k = kr_tr_kind(tr);
-    if (k == kr_TK_INT_LIT()) {
+    if (_KR_EQ(k, kr_TK_INT_LIT())) {
         kr_tr_emit(tr, kr_tr_lexeme(tr));
         return kr_tr_advance(tr);
     }
-    if (k == kr_TK_FLOAT_LIT()) {
+    if (_KR_EQ(k, kr_TK_FLOAT_LIT())) {
         kr_tr_emit(tr, kr_tr_lexeme(tr));
         return kr_tr_advance(tr);
     }
-    if (k == kr_TK_STRING_LIT()) {
+    if (_KR_EQ(k, kr_TK_STRING_LIT())) {
         kr_tr_emit(tr, kr_str_concat("\"", kr_str_concat(kr_tr_lexeme(tr), "\"")));
         return kr_tr_advance(tr);
     }
-    if (k == kr_TK_KW_TRUE()) {
+    if (_KR_EQ(k, kr_TK_KW_TRUE())) {
         kr_tr_emit(tr, "true");
         return kr_tr_advance(tr);
     }
-    if (k == kr_TK_KW_FALSE()) {
+    if (_KR_EQ(k, kr_TK_KW_FALSE())) {
         kr_tr_emit(tr, "false");
         return kr_tr_advance(tr);
     }
-    if (k == kr_TK_KW_NULL()) {
+    if (_KR_EQ(k, kr_TK_KW_NULL())) {
         kr_tr_emit(tr, "NULL");
         return kr_tr_advance(tr);
     }
-    if (k == kr_TK_LPAREN()) {
+    if (_KR_EQ(k, kr_TK_LPAREN())) {
         kr_tr_emit(tr, "(");
         Translator c = kr_tr_advance(tr);
         c = kr_translate_expr(c);
-        if (!kr_tr_at_end(c) && kr_tr_kind(c) == kr_TK_RPAREN()) {
+        if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_RPAREN())) {
             c = kr_tr_advance(c);
         }
         kr_tr_emit(c, ")");
         return c;
     }
-    if (k == kr_TK_IDENTIFIER()) {
+    if (_KR_EQ(k, kr_TK_IDENTIFIER())) {
         __auto_type name = kr_tr_lexeme(tr);
         Translator c = kr_tr_advance(tr);
-        if (!kr_tr_at_end(c) && kr_tr_kind(c) == kr_TK_LPAREN()) {
+        if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_COLON_COLON())) {
+            c = kr_tr_advance(c);
+            __auto_type variant = kr_tr_lexeme(c);
+            c = kr_tr_advance(c);
+            kr_tr_emit(c, kr_str_concat(name, kr_str_concat("_", variant)));
+            if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_LPAREN())) {
+                c = kr_tr_advance(c);
+                while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RPAREN())) {
+                    c = kr_tr_advance(c);
+                }
+                c = kr_tr_advance(c);
+            }
+            return c;
+        }
+        if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_LPAREN())) {
             c = kr_tr_advance(c);
             kr_tr_emit(c, kr_str_concat("kr_", kr_str_concat(name, "(")));
             __auto_type fa = 1;
-            while (!kr_tr_at_end(c) && kr_tr_kind(c) != kr_TK_RPAREN()) {
-                if (fa == 0) {
+            while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RPAREN())) {
+                if (_KR_EQ(fa, 0)) {
                     kr_tr_emit(c, ", ");
                     c = kr_tr_advance(c);
                 }
@@ -2959,14 +3351,14 @@ Translator kr_translate_primary(Translator tr) {
             kr_tr_emit(c, ")");
             return c;
         }
-        if (!kr_tr_at_end(c) && kr_tr_kind(c) == kr_TK_LBRACE()) {
+        if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_LBRACE())) {
             c = kr_tr_advance(c);
             kr_tr_emit(c, kr_str_concat("(", kr_str_concat(name, "){")));
             __auto_type ff = 1;
-            while (!kr_tr_at_end(c) && kr_tr_kind(c) != kr_TK_RBRACE()) {
-                if (ff == 0) {
+            while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RBRACE())) {
+                if (_KR_EQ(ff, 0)) {
                     c = kr_tr_advance(c);
-                    if (kr_tr_kind(c) == kr_TK_RBRACE()) {
+                    if (_KR_EQ(kr_tr_kind(c), kr_TK_RBRACE())) {
                         break;
                     }
                     kr_tr_emit(c, ", ");
@@ -2992,7 +3384,7 @@ Translator kr_translate_primary(Translator tr) {
     return tr;
 }
 
-const char* kr_join_output(void* out) {
+kr_str kr_join_output(void* out) {
     __auto_type result = "";
     __auto_type len = kr_vec_string_len(out);
     __auto_type i = 0;
@@ -3003,78 +3395,78 @@ const char* kr_join_output(void* out) {
     return result;
 }
 
-const char* kr_emit_binary_op(int64_t op) {
-    if (op == 200) {
+kr_str kr_emit_binary_op(int64_t op) {
+    if (_KR_EQ(op, 200)) {
         return "+";
     }
-    if (op == 201) {
+    if (_KR_EQ(op, 201)) {
         return "-";
     }
-    if (op == 202) {
+    if (_KR_EQ(op, 202)) {
         return "*";
     }
-    if (op == 203) {
+    if (_KR_EQ(op, 203)) {
         return "/";
     }
-    if (op == 204) {
+    if (_KR_EQ(op, 204)) {
         return "%";
     }
-    if (op == 205) {
+    if (_KR_EQ(op, 205)) {
         return "==";
     }
-    if (op == 206) {
+    if (_KR_EQ(op, 206)) {
         return "!=";
     }
-    if (op == 207) {
+    if (_KR_EQ(op, 207)) {
         return "<";
     }
-    if (op == 208) {
+    if (_KR_EQ(op, 208)) {
         return "<=";
     }
-    if (op == 209) {
+    if (_KR_EQ(op, 209)) {
         return ">";
     }
-    if (op == 210) {
+    if (_KR_EQ(op, 210)) {
         return ">=";
     }
-    if (op == 211) {
+    if (_KR_EQ(op, 211)) {
         return "&&";
     }
-    if (op == 212) {
+    if (_KR_EQ(op, 212)) {
         return "||";
     }
-    if (op == 214) {
+    if (_KR_EQ(op, 214)) {
         return "&";
     }
-    if (op == 215) {
+    if (_KR_EQ(op, 215)) {
         return "|";
     }
-    if (op == 216) {
+    if (_KR_EQ(op, 216)) {
         return "^";
     }
-    if (op == 218) {
+    if (_KR_EQ(op, 218)) {
         return "<<";
     }
-    if (op == 219) {
+    if (_KR_EQ(op, 219)) {
         return ">>";
     }
     return "?";
 }
 
-const char* kr_emit_unary_op(int64_t op) {
-    if (op == 201) {
+kr_str kr_emit_unary_op(int64_t op) {
+    if (_KR_EQ(op, 201)) {
         return "-";
     }
-    if (op == 213) {
+    if (_KR_EQ(op, 213)) {
         return "!";
     }
-    if (op == 217) {
+    if (_KR_EQ(op, 217)) {
         return "~";
     }
     return "?";
 }
 
-const char* kr_make_indent(int64_t level) {
+kr_str kr_make_indent(int64_t level) {
     __auto_type result = "";
     __auto_type i = 0;
     while (i < level) {
@@ -3084,18 +3476,18 @@ const char* kr_make_indent(int64_t level) {
     return result;
 }
 
-const char* kr_mangle_name(const char* mod_name, const char* name) {
-    if (_kr_str_eq(mod_name, "")) {
+kr_str kr_mangle_name(kr_str mod_name, kr_str name) {
+    if (_KR_EQ(mod_name, "")) {
         return kr_str_concat("kr_", name);
     }
     return kr_str_concat(kr_str_concat(kr_str_concat("kr_", mod_name), "_"), name);
 }
 
-const char* kr_mangle_struct(const char* name) {
+kr_str kr_mangle_struct(kr_str name) {
     return kr_str_concat("KrStruct_", name);
 }
 
-const char* kr_mangle_enum(const char* name) {
+kr_str kr_mangle_enum(kr_str name) {
     return kr_str_concat("KrEnum_", name);
 }
 
@@ -3115,91 +3507,91 @@ int64_t kr_SEV_HINT() {
     return 3;
 }
 
-Diagnostic kr_new_error(const char* code, const char* message, const char* file, int64_t line, int64_t column) {
+Diagnostic kr_new_error(kr_str code, kr_str message, kr_str file, int64_t line, int64_t column) {
     return (Diagnostic){.severity = kr_SEV_ERROR(), .code = code, .message = message, .file = file, .line = line, .column = column, .hint = ""};
 }
 
-Diagnostic kr_new_warning(const char* code, const char* message, const char* file, int64_t line, int64_t column) {
+Diagnostic kr_new_warning(kr_str code, kr_str message, kr_str file, int64_t line, int64_t column) {
     return (Diagnostic){.severity = kr_SEV_WARNING(), .code = code, .message = message, .file = file, .line = line, .column = column, .hint = ""};
 }
 
-Diagnostic kr_with_hint(Diagnostic d, const char* hint) {
+Diagnostic kr_with_hint(Diagnostic d, kr_str hint) {
     return (Diagnostic){.severity = d.severity, .code = d.code, .message = d.message, .file = d.file, .line = d.line, .column = d.column, .hint = hint};
 }
 
-const char* kr_KRA_UNEXPECTED_CHAR() {
+kr_str kr_KRA_UNEXPECTED_CHAR() {
     return "KRA0001";
 }
 
-const char* kr_KRA_UNTERMINATED_STR() {
+kr_str kr_KRA_UNTERMINATED_STR() {
     return "KRA0002";
 }
 
-const char* kr_KRA_EXPECTED_TOKEN() {
+kr_str kr_KRA_EXPECTED_TOKEN() {
     return "KRA0003";
 }
 
-const char* kr_KRA_UNEXPECTED_TOKEN() {
+kr_str kr_KRA_UNEXPECTED_TOKEN() {
     return "KRA0004";
 }
 
-const char* kr_KRA_TYPE_MISMATCH() {
+kr_str kr_KRA_TYPE_MISMATCH() {
     return "KRA0005";
 }
 
-const char* kr_KRA_UNDEFINED_VAR() {
+kr_str kr_KRA_UNDEFINED_VAR() {
     return "KRA0006";
 }
 
-const char* kr_KRA_DUPLICATE_DECL() {
+kr_str kr_KRA_DUPLICATE_DECL() {
     return "KRA0007";
 }
 
-const char* kr_KRA_MISSING_RETURN() {
+kr_str kr_KRA_MISSING_RETURN() {
     return "KRA0008";
 }
 
-const char* kr_KRA_INVALID_ASSIGN() {
+kr_str kr_KRA_INVALID_ASSIGN() {
     return "KRA0009";
 }
 
-const char* kr_KRA_UNKNOWN_TYPE() {
+kr_str kr_KRA_UNKNOWN_TYPE() {
     return "KRA0010";
 }
 
-const char* kr_KRA_ARG_COUNT() {
+kr_str kr_KRA_ARG_COUNT() {
     return "KRA0011";
 }
 
-const char* kr_KRA_UNREACHABLE() {
+kr_str kr_KRA_UNREACHABLE() {
     return "KRA0012";
 }
 
-const char* kr_KRA_CODEGEN_FAIL() {
+kr_str kr_KRA_CODEGEN_FAIL() {
     return "KRA0013";
 }
 
-const char* kr_KRA_IO_ERROR() {
+kr_str kr_KRA_IO_ERROR() {
     return "KRA0014";
 }
 
-const char* kr_severity_label(int64_t severity) {
-    if (severity == kr_SEV_ERROR()) {
+kr_str kr_severity_label(int64_t severity) {
+    if (_KR_EQ(severity, kr_SEV_ERROR())) {
         return "error";
     }
-    if (severity == kr_SEV_WARNING()) {
+    if (_KR_EQ(severity, kr_SEV_WARNING())) {
         return "warning";
     }
-    if (severity == kr_SEV_INFO()) {
+    if (_KR_EQ(severity, kr_SEV_INFO())) {
         return "info";
     }
-    if (severity == kr_SEV_HINT()) {
+    if (_KR_EQ(severity, kr_SEV_HINT())) {
         return "hint";
     }
     return "unknown";
 }
 
-const char* kr_format_diagnostic(Diagnostic d) {
+kr_str kr_format_diagnostic(Diagnostic d) {
     __auto_type header = kr_severity_label(d.severity);
     __auto_type result = kr_str_concat(kr_str_concat(kr_str_concat(kr_str_concat(header, "["), d.code), "]: "), d.message);
     return result;
@@ -3234,50 +3626,50 @@ int64_t kr_OS_WASI() {
     return 5;
 }
 
-const char* kr_os_name(int64_t os) {
-    if (os == kr_OS_LINUX()) {
+kr_str kr_os_name(int64_t os) {
+    if (_KR_EQ(os, kr_OS_LINUX())) {
         return "linux";
     }
-    if (os == kr_OS_MACOS()) {
+    if (_KR_EQ(os, kr_OS_MACOS())) {
         return "darwin";
     }
-    if (os == kr_OS_WINDOWS()) {
+    if (_KR_EQ(os, kr_OS_WINDOWS())) {
         return "windows";
     }
-    if (os == kr_OS_FREEBSD()) {
+    if (_KR_EQ(os, kr_OS_FREEBSD())) {
         return "freebsd";
     }
-    if (os == kr_OS_WASI()) {
+    if (_KR_EQ(os, kr_OS_WASI())) {
         return "wasi";
     }
     return "unknown";
 }
 
-const char* kr_os_display_name(int64_t os) {
-    if (os == kr_OS_LINUX()) {
+kr_str kr_os_display_name(int64_t os) {
+    if (_KR_EQ(os, kr_OS_LINUX())) {
         return "Linux";
     }
-    if (os == kr_OS_MACOS()) {
+    if (_KR_EQ(os, kr_OS_MACOS())) {
         return "macOS";
     }
-    if (os == kr_OS_WINDOWS()) {
+    if (_KR_EQ(os, kr_OS_WINDOWS())) {
         return "Windows";
     }
-    if (os == kr_OS_FREEBSD()) {
+    if (_KR_EQ(os, kr_OS_FREEBSD())) {
         return "FreeBSD";
     }
-    if (os == kr_OS_WASI()) {
+    if (_KR_EQ(os, kr_OS_WASI())) {
         return "WebAssembly (WASI)";
     }
     return "Unknown OS";
 }
 
 bool kr_os_is_posix(int64_t os) {
-    return os == kr_OS_LINUX() || os == kr_OS_MACOS() || os == kr_OS_FREEBSD();
+    return _KR_EQ(os, kr_OS_LINUX()) || _KR_EQ(os, kr_OS_MACOS()) || _KR_EQ(os, kr_OS_FREEBSD());
 }
 
 bool kr_os_is_windows(int64_t os) {
-    return os == kr_OS_WINDOWS();
+    return _KR_EQ(os, kr_OS_WINDOWS());
 }
 
 int64_t kr_ARCH_UNKNOWN() {
@@ -3304,37 +3696,37 @@ int64_t kr_ARCH_WASM32() {
     return 5;
 }
 
-const char* kr_arch_name(int64_t arch) {
-    if (arch == kr_ARCH_X86_64()) {
+kr_str kr_arch_name(int64_t arch) {
+    if (_KR_EQ(arch, kr_ARCH_X86_64())) {
         return "x86_64";
     }
-    if (arch == kr_ARCH_AARCH64()) {
+    if (_KR_EQ(arch, kr_ARCH_AARCH64())) {
         return "aarch64";
     }
-    if (arch == kr_ARCH_ARM()) {
+    if (_KR_EQ(arch, kr_ARCH_ARM())) {
         return "arm";
     }
-    if (arch == kr_ARCH_RISCV64()) {
+    if (_KR_EQ(arch, kr_ARCH_RISCV64())) {
         return "riscv64";
     }
-    if (arch == kr_ARCH_WASM32()) {
+    if (_KR_EQ(arch, kr_ARCH_WASM32())) {
         return "wasm32";
     }
     return "unknown";
 }
 
 int64_t kr_arch_pointer_width(int64_t arch) {
-    if (arch == kr_ARCH_WASM32()) {
+    if (_KR_EQ(arch, kr_ARCH_WASM32())) {
         return 4;
     }
-    if (arch == kr_ARCH_ARM()) {
+    if (_KR_EQ(arch, kr_ARCH_ARM())) {
         return 4;
     }
     return 8;
 }
 
 bool kr_arch_is_64bit(int64_t arch) {
-    return arch == kr_ARCH_X86_64() || arch == kr_ARCH_AARCH64() || arch == kr_ARCH_RISCV64();
+    return _KR_EQ(arch, kr_ARCH_X86_64()) || _KR_EQ(arch, kr_ARCH_AARCH64()) || _KR_EQ(arch, kr_ARCH_RISCV64());
 }
 
 int64_t kr_ABI_UNKNOWN() {
@@ -3357,87 +3749,87 @@ int64_t kr_ABI_NONE() {
     return 4;
 }
 
-const char* kr_abi_name(int64_t abi) {
-    if (abi == kr_ABI_GNU()) {
+kr_str kr_abi_name(int64_t abi) {
+    if (_KR_EQ(abi, kr_ABI_GNU())) {
         return "gnu";
     }
-    if (abi == kr_ABI_MSVC()) {
+    if (_KR_EQ(abi, kr_ABI_MSVC())) {
         return "msvc";
     }
-    if (abi == kr_ABI_MUSL()) {
+    if (_KR_EQ(abi, kr_ABI_MUSL())) {
         return "musl";
     }
-    if (abi == kr_ABI_NONE()) {
+    if (_KR_EQ(abi, kr_ABI_NONE())) {
         return "";
     }
     return "unknown";
 }
 
-Target kr_parse_target(const char* triple) {
-    if (_kr_str_eq(triple, "x86_64-apple-darwin")) {
+Target kr_parse_target(kr_str triple) {
+    if (_KR_EQ(triple, "x86_64-apple-darwin")) {
         return kr_new_target(kr_OS_MACOS(), kr_ARCH_X86_64(), kr_ABI_NONE(), "apple", triple);
     }
-    if (_kr_str_eq(triple, "aarch64-apple-darwin")) {
+    if (_KR_EQ(triple, "aarch64-apple-darwin")) {
         return kr_new_target(kr_OS_MACOS(), kr_ARCH_AARCH64(), kr_ABI_NONE(), "apple", triple);
     }
-    if (_kr_str_eq(triple, "x86_64-unknown-linux-gnu")) {
+    if (_KR_EQ(triple, "x86_64-unknown-linux-gnu")) {
         return kr_new_target(kr_OS_LINUX(), kr_ARCH_X86_64(), kr_ABI_GNU(), "unknown", triple);
     }
-    if (_kr_str_eq(triple, "aarch64-unknown-linux-gnu")) {
+    if (_KR_EQ(triple, "aarch64-unknown-linux-gnu")) {
         return kr_new_target(kr_OS_LINUX(), kr_ARCH_AARCH64(), kr_ABI_GNU(), "unknown", triple);
     }
-    if (_kr_str_eq(triple, "x86_64-unknown-linux-musl")) {
+    if (_KR_EQ(triple, "x86_64-unknown-linux-musl")) {
         return kr_new_target(kr_OS_LINUX(), kr_ARCH_X86_64(), kr_ABI_MUSL(), "unknown", triple);
     }
-    if (_kr_str_eq(triple, "aarch64-unknown-linux-musl")) {
+    if (_KR_EQ(triple, "aarch64-unknown-linux-musl")) {
         return kr_new_target(kr_OS_LINUX(), kr_ARCH_AARCH64(), kr_ABI_MUSL(), "unknown", triple);
     }
-    if (_kr_str_eq(triple, "x86_64-pc-windows-msvc")) {
+    if (_KR_EQ(triple, "x86_64-pc-windows-msvc")) {
         return kr_new_target(kr_OS_WINDOWS(), kr_ARCH_X86_64(), kr_ABI_MSVC(), "pc", triple);
     }
-    if (_kr_str_eq(triple, "x86_64-pc-windows-gnu")) {
+    if (_KR_EQ(triple, "x86_64-pc-windows-gnu")) {
         return kr_new_target(kr_OS_WINDOWS(), kr_ARCH_X86_64(), kr_ABI_GNU(), "pc", triple);
     }
-    if (_kr_str_eq(triple, "aarch64-pc-windows-msvc")) {
+    if (_KR_EQ(triple, "aarch64-pc-windows-msvc")) {
         return kr_new_target(kr_OS_WINDOWS(), kr_ARCH_AARCH64(), kr_ABI_MSVC(), "pc", triple);
     }
-    if (_kr_str_eq(triple, "x86_64-unknown-freebsd")) {
+    if (_KR_EQ(triple, "x86_64-unknown-freebsd")) {
         return kr_new_target(kr_OS_FREEBSD(), kr_ARCH_X86_64(), kr_ABI_NONE(), "unknown", triple);
     }
-    if (_kr_str_eq(triple, "aarch64-unknown-freebsd")) {
+    if (_KR_EQ(triple, "aarch64-unknown-freebsd")) {
         return kr_new_target(kr_OS_FREEBSD(), kr_ARCH_AARCH64(), kr_ABI_NONE(), "unknown", triple);
     }
-    if (_kr_str_eq(triple, "wasm32-unknown-wasi")) {
+    if (_KR_EQ(triple, "wasm32-unknown-wasi")) {
         return kr_new_target(kr_OS_WASI(), kr_ARCH_WASM32(), kr_ABI_NONE(), "unknown", triple);
     }
-    if (_kr_str_eq(triple, "linux")) {
+    if (_KR_EQ(triple, "linux")) {
         return kr_parse_target("x86_64-unknown-linux-gnu");
     }
-    if (_kr_str_eq(triple, "macos")) {
+    if (_KR_EQ(triple, "macos")) {
         return kr_parse_target("x86_64-apple-darwin");
     }
-    if (_kr_str_eq(triple, "darwin")) {
+    if (_KR_EQ(triple, "darwin")) {
         return kr_parse_target("x86_64-apple-darwin");
     }
-    if (_kr_str_eq(triple, "windows")) {
+    if (_KR_EQ(triple, "windows")) {
         return kr_parse_target("x86_64-pc-windows-msvc");
     }
-    if (_kr_str_eq(triple, "win32")) {
+    if (_KR_EQ(triple, "win32")) {
         return kr_parse_target("x86_64-pc-windows-msvc");
     }
-    if (_kr_str_eq(triple, "freebsd")) {
+    if (_KR_EQ(triple, "freebsd")) {
         return kr_parse_target("x86_64-unknown-freebsd");
     }
-    if (_kr_str_eq(triple, "wasm")) {
+    if (_KR_EQ(triple, "wasm")) {
         return kr_parse_target("wasm32-unknown-wasi");
     }
-    if (_kr_str_eq(triple, "wasi")) {
+    if (_KR_EQ(triple, "wasi")) {
         return kr_parse_target("wasm32-unknown-wasi");
     }
     return kr_new_target(kr_OS_UNKNOWN(), kr_ARCH_UNKNOWN(), kr_ABI_UNKNOWN(), "unknown", triple);
 }
 
-Target kr_new_target(int64_t os, int64_t arch, int64_t abi, const char* vendor, const char* triple) {
+Target kr_new_target(int64_t os, int64_t arch, int64_t abi, kr_str vendor, kr_str triple) {
     return (Target){.os = os, .arch = arch, .abi = abi, .vendor = vendor, .triple = triple};
 }
 
@@ -3446,79 +3838,79 @@ Target kr_detect_host_target() {
 }
 
 bool kr_target_is_valid(Target t) {
-    return t.os != kr_OS_UNKNOWN() && t.arch != kr_ARCH_UNKNOWN();
+    return _KR_NEQ(t.os, kr_OS_UNKNOWN()) && _KR_NEQ(t.arch, kr_ARCH_UNKNOWN());
 }
 
-const char* kr_format_target(Target t) {
+kr_str kr_format_target(Target t) {
     return t.triple;
 }
 
-const char* kr_format_target_display(Target t) {
+kr_str kr_format_target_display(Target t) {
     __auto_type os_str = kr_os_display_name(t.os);
     __auto_type arch_str = kr_arch_name(t.arch);
     return kr_str_concat(kr_str_concat(os_str, " ("), kr_str_concat(arch_str, ")"));
 }
 
-const char* kr_default_cc(Target t) {
-    if (t.os == kr_OS_WINDOWS() && t.abi == kr_ABI_MSVC()) {
+kr_str kr_default_cc(Target t) {
+    if (_KR_EQ(t.os, kr_OS_WINDOWS()) && _KR_EQ(t.abi, kr_ABI_MSVC())) {
         return "cl.exe";
     }
-    if (t.os == kr_OS_WINDOWS() && t.abi == kr_ABI_GNU()) {
+    if (_KR_EQ(t.os, kr_OS_WINDOWS()) && _KR_EQ(t.abi, kr_ABI_GNU())) {
         return "x86_64-w64-mingw32-gcc";
     }
-    if (t.os == kr_OS_MACOS()) {
+    if (_KR_EQ(t.os, kr_OS_MACOS())) {
         return "cc";
     }
-    if (t.os == kr_OS_FREEBSD()) {
+    if (_KR_EQ(t.os, kr_OS_FREEBSD())) {
         return "cc";
     }
-    if (t.os == kr_OS_WASI()) {
+    if (_KR_EQ(t.os, kr_OS_WASI())) {
         return "clang";
     }
     return "cc";
 }
 
-const char* kr_cc_cross_flags(Target t) {
-    if (t.os == kr_OS_WASI()) {
+kr_str kr_cc_cross_flags(Target t) {
+    if (_KR_EQ(t.os, kr_OS_WASI())) {
         return "--target=wasm32-unknown-wasi --sysroot=/opt/wasi-sdk/share/wasi-sysroot";
     }
     return "";
 }
 
-const char* kr_c_includes_posix() {
+kr_str kr_c_includes_posix() {
     return kr_str_concat(kr_str_concat(kr_str_concat(kr_str_concat(kr_str_concat("#include <stdio.h>\n", "#include <stdlib.h>\n"), "#include <string.h>\n"), "#include <stdint.h>\n"), "#include <stdbool.h>\n"), "#include <unistd.h>\n");
 }
 
-const char* kr_c_includes_windows() {
+kr_str kr_c_includes_windows() {
     return kr_str_concat(kr_str_concat(kr_str_concat(kr_str_concat(kr_str_concat(kr_str_concat("#include <stdio.h>\n", "#include <stdlib.h>\n"), "#include <string.h>\n"), "#include <stdint.h>\n"), "#include <stdbool.h>\n"), "#define WIN32_LEAN_AND_MEAN\n"), "#include <windows.h>\n");
 }
 
-const char* kr_c_includes_wasi() {
+kr_str kr_c_includes_wasi() {
     return kr_str_concat(kr_str_concat(kr_str_concat(kr_str_concat("#include <stdio.h>\n", "#include <stdlib.h>\n"), "#include <string.h>\n"), "#include <stdint.h>\n"), "#include <stdbool.h>\n");
 }
 
-const char* kr_c_includes_for_target(Target t) {
+kr_str kr_c_includes_for_target(Target t) {
     if (kr_os_is_windows(t.os)) {
         return kr_c_includes_windows();
     }
-    if (t.os == kr_OS_WASI()) {
+    if (_KR_EQ(t.os, kr_OS_WASI())) {
         return kr_c_includes_wasi();
     }
     return kr_c_includes_posix();
 }
 
-const char* kr_c_typedefs_common() {
-    return kr_str_concat(kr_str_concat(kr_str_concat("typedef int64_t kr_int;\n", "typedef double kr_float;\n"), "typedef bool kr_bool;\n"), "typedef const char* kr_str;\n");
+kr_str kr_c_typedefs_common() {
+    return kr_str_concat(kr_str_concat(kr_str_concat("typedef int64_t kr_int;\n", "typedef double kr_float;\n"), "typedef bool kr_bool;\n"), "typedef char* kr_str;\n");
 }
 
-const char* kr_c_size_type(Target t) {
+kr_str kr_c_size_type(Target t) {
     if (kr_os_is_windows(t.os)) {
         return "typedef long long kr_size;\n";
     }
     return "typedef ssize_t kr_size;\n";
 }
 
-const char* kr_c_runtime_shims_posix() {
+kr_str kr_c_runtime_shims_posix() {
     __auto_type s = "";
     s = kr_str_concat(s, "void kr_puts(kr_str s) { puts(s); }\n");
     s = kr_str_concat(s, "int64_t kr_strlen(kr_str s) { return (int64_t)strlen(s); }\n");
@@ -3526,6 +3918,13 @@ const char* kr_c_runtime_shims_posix() {
     s = kr_str_concat(s, "int kr_strcmp(kr_str a, kr_str b) { return strcmp(a, b); }\n");
     s = kr_str_concat(s, "static inline bool _kr_str_eq(kr_str a, kr_str b) { return strcmp(a,b)==0; }\n");
     s = kr_str_concat(s, "static inline bool _kr_str_neq(kr_str a, kr_str b) { return strcmp(a,b)!=0; }\n");
+    s = kr_str_concat(s, "static inline int _kr_cmp_eq(void* a, void* b) { return strcmp((char*)a,(char*)b)==0; }\n");
+    s = kr_str_concat(s, "static inline int _kr_cmp_neq(void* a, void* b) { return strcmp((char*)a,(char*)b)!=0; }\n");
+    s = kr_str_concat(s, "static inline int _kr_int_eq(int64_t a, int64_t b) { return a==b; }\n");
+    s = kr_str_concat(s, "static inline int _kr_int_neq(int64_t a, int64_t b) { return a!=b; }\n");
+    s = kr_str_concat(s, "#define _KR_EQ(a, b) __builtin_choose_expr(__builtin_types_compatible_p(__typeof__(a), char*), _kr_cmp_eq((void*)(a),(void*)(b)), _kr_int_eq((int64_t)(intptr_t)(a),(int64_t)(intptr_t)(b)))\n");
+    s = kr_str_concat(s, "#define _KR_NEQ(a, b) __builtin_choose_expr(__builtin_types_compatible_p(__typeof__(a), char*), _kr_cmp_neq((void*)(a),(void*)(b)), _kr_int_neq((int64_t)(intptr_t)(a),(int64_t)(intptr_t)(b)))\n");
+    s = kr_str_concat(s, "#pragma clang diagnostic ignored \"-Wint-to-void-pointer-cast\"\n");
     s = kr_str_concat(s, "kr_str kr_str_concat(kr_str a, kr_str b) {\n");
     s = kr_str_concat(s, "  size_t la = strlen(a), lb = strlen(b);\n");
     s = kr_str_concat(s, "  char* r = (char*)malloc(la + lb + 1);\n");
@@ -3540,7 +3939,7 @@ const char* kr_c_runtime_shims_posix() {
     s = kr_str_concat(s, "kr_str kr_fmt_int(int64_t v) {\n");
     s = kr_str_concat(s, "  char* r = (char*)malloc(32); snprintf(r, 32, \"%lld\", (long long)v); return r;\n}\n");
     s = kr_str_concat(s, "kr_str kr_getenv(kr_str name) {\n");
-    s = kr_str_concat(s, "  const char* v = getenv(name); return v ? v : \"\";\n}\n");
+    s = kr_str_concat(s, "  char* v = (char*)getenv(name); return v ? v : (char*)\"\";\n}\n");
     s = kr_str_concat(s, "int64_t kr_system(kr_str cmd) { return (int64_t)system(cmd); }\n");
     s = kr_str_concat(s, "void kr_exit(int64_t code) { exit((int)code); }\n");
     s = kr_str_concat(s, "void* kr_fopen(kr_str path, kr_str mode) { return (void*)fopen(path, mode); }\n");
@@ -3563,13 +3962,13 @@ const char* kr_c_runtime_shims_posix() {
     s = kr_str_concat(s, "void kr_vec_int_set(void* vp, int64_t i, int64_t val) { ((KrVecInt*)vp)->data[i] = val; }\n");
     s = kr_str_concat(s, "int64_t kr_vec_int_len(void* vp) { return ((KrVecInt*)vp)->len; }\n");
     s = kr_str_concat(s, "void kr_vec_int_free(void* vp) { KrVecInt* v = (KrVecInt*)vp; free(v->data); free(v); }\n");
-    s = kr_str_concat(s, "typedef struct { const char** data; int64_t len; int64_t cap; } KrVecString;\n");
+    s = kr_str_concat(s, "typedef struct { char** data; int64_t len; int64_t cap; } KrVecString;\n");
     s = kr_str_concat(s, "void* kr_vec_string_new() {\n");
     s = kr_str_concat(s, "  KrVecString* v = (KrVecString*)malloc(sizeof(KrVecString));\n");
-    s = kr_str_concat(s, "  v->data = (const char**)malloc(16 * sizeof(const char*)); v->len = 0; v->cap = 16; return v;\n}\n");
+    s = kr_str_concat(s, "  v->data = (char**)malloc(16 * sizeof(char*)); v->len = 0; v->cap = 16; return v;\n}\n");
     s = kr_str_concat(s, "void kr_vec_string_push(void* vp, kr_str val) {\n");
     s = kr_str_concat(s, "  KrVecString* v = (KrVecString*)vp;\n");
-    s = kr_str_concat(s, "  if(v->len >= v->cap) { v->cap *= 2; v->data = (const char**)realloc(v->data, v->cap * sizeof(const char*)); }\n");
+    s = kr_str_concat(s, "  if(v->len >= v->cap) { v->cap *= 2; v->data = (char**)realloc(v->data, v->cap * sizeof(char*)); }\n");
     s = kr_str_concat(s, "  v->data[v->len++] = val;\n}\n");
     s = kr_str_concat(s, "kr_str kr_vec_string_get(void* vp, int64_t i) { return ((KrVecString*)vp)->data[i]; }\n");
     s = kr_str_concat(s, "void kr_vec_string_set(void* vp, int64_t i, kr_str val) { ((KrVecString*)vp)->data[i] = val; }\n");
@@ -3578,77 +3977,77 @@ const char* kr_c_runtime_shims_posix() {
     return s;
 }
 
-const char* kr_c_runtime_shims_windows() {
+kr_str kr_c_runtime_shims_windows() {
     __auto_type s = kr_c_runtime_shims_posix();
     s = kr_str_concat(s, "#define kr_snprintf _snprintf\n");
     s = kr_str_concat(s, "#define kr_strdup _strdup\n");
     return s;
 }
 
-const char* kr_c_runtime_shims_wasi() {
+kr_str kr_c_runtime_shims_wasi() {
     return kr_c_runtime_shims_posix();
 }
 
-const char* kr_c_runtime_shims_for_target(Target t) {
+kr_str kr_c_runtime_shims_for_target(Target t) {
     if (kr_os_is_windows(t.os)) {
         return kr_c_runtime_shims_windows();
     }
-    if (t.os == kr_OS_WASI()) {
+    if (_KR_EQ(t.os, kr_OS_WASI())) {
         return kr_c_runtime_shims_wasi();
     }
     return kr_c_runtime_shims_posix();
 }
 
-const char* kr_c_main_signature(Target t) {
-    if (kr_os_is_windows(t.os) && t.abi == kr_ABI_MSVC()) {
+kr_str kr_c_main_signature(Target t) {
+    if (kr_os_is_windows(t.os) && _KR_EQ(t.abi, kr_ABI_MSVC())) {
         return "int main(int argc, char* argv[])";
     }
     return "int main(int argc, char* argv[])";
 }
 
-const char* kr_linker_flags(Target t) {
-    if (t.os == kr_OS_LINUX() && t.abi == kr_ABI_GNU()) {
+kr_str kr_linker_flags(Target t) {
+    if (_KR_EQ(t.os, kr_OS_LINUX()) && _KR_EQ(t.abi, kr_ABI_GNU())) {
         return "-lm -lpthread";
     }
-    if (t.os == kr_OS_LINUX() && t.abi == kr_ABI_MUSL()) {
+    if (_KR_EQ(t.os, kr_OS_LINUX()) && _KR_EQ(t.abi, kr_ABI_MUSL())) {
         return "-static -lm";
     }
-    if (t.os == kr_OS_MACOS()) {
+    if (_KR_EQ(t.os, kr_OS_MACOS())) {
         return "-lm";
     }
-    if (t.os == kr_OS_FREEBSD()) {
+    if (_KR_EQ(t.os, kr_OS_FREEBSD())) {
         return "-lm -lpthread";
     }
-    if (t.os == kr_OS_WINDOWS() && t.abi == kr_ABI_MSVC()) {
+    if (_KR_EQ(t.os, kr_OS_WINDOWS()) && _KR_EQ(t.abi, kr_ABI_MSVC())) {
         return "/link /DEFAULTLIB:msvcrt.lib";
     }
-    if (t.os == kr_OS_WINDOWS() && t.abi == kr_ABI_GNU()) {
+    if (_KR_EQ(t.os, kr_OS_WINDOWS()) && _KR_EQ(t.abi, kr_ABI_GNU())) {
         return "-lm";
     }
-    if (t.os == kr_OS_WASI()) {
+    if (_KR_EQ(t.os, kr_OS_WASI())) {
         return "";
     }
     return "";
 }
 
-const char* kr_object_ext(Target t) {
+kr_str kr_object_ext(Target t) {
     if (kr_os_is_windows(t.os)) {
         return ".obj";
     }
     return ".o";
 }
 
-const char* kr_exe_ext(Target t) {
+kr_str kr_exe_ext(Target t) {
     if (kr_os_is_windows(t.os)) {
         return ".exe";
     }
-    if (t.os == kr_OS_WASI()) {
+    if (_KR_EQ(t.os, kr_OS_WASI())) {
         return ".wasm";
     }
     return "";
 }
 
-const char* kr_emit_c_preamble(Target t) {
+kr_str kr_emit_c_preamble(Target t) {
     __auto_type includes = kr_c_includes_for_target(t);
     __auto_type typedefs = kr_c_typedefs_common();
     __auto_type size_t = kr_c_size_type(t);
@@ -3675,11 +4074,11 @@ void kr_print_supported_targets() {
     kr_puts("  linux, macos, darwin, windows, win32, freebsd, wasm, wasi");
 }
 
-const char* kr_COMPILER_VERSION() {
-    return "0.10.0-beta";
+kr_str kr_COMPILER_VERSION() {
+    return "0.9.3";
 }
 
-const char* kr_COMPILER_NAME() {
+kr_str kr_COMPILER_NAME() {
     return "krakenc";
 }
 
@@ -3738,11 +4137,11 @@ void kr_print_help() {
     kr_puts("");
 }
 
-const char* kr_dir_of(const char* path) {
+kr_str kr_dir_of(kr_str path) {
     __auto_type len = kr_strlen(path);
     __auto_type i = len - 1;
     while (i >= 0) {
-        if (kr_str_char_at(path, i) == 47) {
+        if (_KR_EQ(kr_str_char_at(path, i), 47)) {
             return kr_str_slice(path, 0, i + 1);
         }
         i = i - 1;
@@ -3750,25 +4149,25 @@ const char* kr_dir_of(const char* path) {
     return "";
 }
 
-const char* kr_resolve_imports(const char* source, const char* source_dir) {
+kr_str kr_resolve_imports(kr_str source, kr_str source_dir) {
     __auto_type result = "";
     __auto_type len = kr_strlen(source);
     __auto_type i = 0;
     while (i < len) {
-        if (i == 0 || kr_str_char_at(source, i - 1) == 10) {
+        if (_KR_EQ(i, 0) || _KR_EQ(kr_str_char_at(source, i - 1), 10)) {
             __auto_type j = i;
-            while (j < len && (kr_str_char_at(source, j) == 32 || kr_str_char_at(source, j) == 9)) {
+            while (j < len && (_KR_EQ(kr_str_char_at(source, j), 32) || _KR_EQ(kr_str_char_at(source, j), 9))) {
                 j = j + 1;
             }
-            if (j + 7 <= len && _kr_str_eq(kr_str_slice(source, j, j + 7), "import ")) {
+            if (j + 7 <= len && _KR_EQ(kr_str_slice(source, j, j + 7), "import ")) {
                 __auto_type k = j + 7;
-                while (k < len && kr_str_char_at(source, k) != 59 && kr_str_char_at(source, k) != 10) {
+                while (k < len && _KR_NEQ(kr_str_char_at(source, k), 59) && _KR_NEQ(kr_str_char_at(source, k), 10)) {
                     k = k + 1;
                 }
                 __auto_type mod_name = kr_str_slice(source, j + 7, k);
                 __auto_type mod_path = kr_str_concat(source_dir, kr_str_concat(mod_name, ".kr"));
                 __auto_type mod_source = kr_file_read_string(mod_path);
-                if (_kr_str_neq(mod_source, "")) {
+                if (_KR_NEQ(mod_source, "")) {
                     result = kr_str_concat(result, kr_str_concat(mod_source, "\n"));
                 }
             }
@@ -3779,7 +4178,7 @@ const char* kr_resolve_imports(const char* source, const char* source_dir) {
     return result;
 }
 
-const char* kr_derive_c_path(const char* input) {
+kr_str kr_derive_c_path(kr_str input) {
     if (kr_str_ends_with(input, ".kr")) {
         __auto_type base = kr_str_slice(input, 0, kr_strlen(input) - 3);
         return kr_str_concat(base, ".c");
@@ -3787,7 +4186,7 @@ const char* kr_derive_c_path(const char* input) {
     return kr_str_concat(input, ".c");
 }
 
-const char* kr_derive_exe_path(const char* input, Target target) {
+kr_str kr_derive_exe_path(kr_str input, Target target) {
     if (kr_str_ends_with(input, ".kr")) {
         __auto_type base = kr_str_slice(input, 0, kr_strlen(input) - 3);
         return kr_str_concat(base, kr_exe_ext(target));
@@ -3815,37 +4214,37 @@ int64_t kr_main() {
     __auto_type env_source = kr_getenv("KRAKENC_INPUT");
     __auto_type env_mode = kr_getenv("KRAKENC_MODE");
     __auto_type env_target = kr_getenv("KRAKENC_TARGET");
-    if (_kr_str_neq(env_source, "")) {
+    if (_KR_NEQ(env_source, "")) {
         source_file = env_source;
         has_input = true;
     }
-    if (_kr_str_eq(env_mode, "emit-c")) {
+    if (_KR_EQ(env_mode, "emit-c")) {
         mode = kr_MODE_EMIT_C();
     }
-    if (_kr_str_eq(env_mode, "tokens")) {
+    if (_KR_EQ(env_mode, "tokens")) {
         mode = kr_MODE_TOKENS();
     }
-    if (_kr_str_eq(env_mode, "version")) {
+    if (_KR_EQ(env_mode, "version")) {
         mode = kr_MODE_VERSION();
     }
-    if (_kr_str_eq(env_mode, "help")) {
+    if (_KR_EQ(env_mode, "help")) {
         mode = kr_MODE_HELP();
     }
-    if (_kr_str_eq(env_mode, "targets")) {
+    if (_KR_EQ(env_mode, "targets")) {
         mode = kr_MODE_TARGETS();
     }
-    if (_kr_str_neq(env_target, "")) {
+    if (_KR_NEQ(env_target, "")) {
         target = kr_parse_target(env_target);
     }
-    if (mode == kr_MODE_VERSION()) {
+    if (_KR_EQ(mode, kr_MODE_VERSION())) {
         kr_print_version();
         return 0;
     }
-    if (mode == kr_MODE_HELP()) {
+    if (_KR_EQ(mode, kr_MODE_HELP())) {
         kr_print_help();
         return 0;
     }
-    if (mode == kr_MODE_TARGETS()) {
+    if (_KR_EQ(mode, kr_MODE_TARGETS())) {
         kr_print_supported_targets();
         return 0;
     }
@@ -3854,7 +4253,7 @@ int64_t kr_main() {
     kr_puts(kr_str_concat("  Target:   ", kr_format_target(target)));
     kr_puts(kr_str_concat("  CC:       ", kr_default_cc(target)));
     __auto_type lflags = kr_linker_flags(target);
-    if (_kr_str_neq(lflags, "")) {
+    if (_KR_NEQ(lflags, "")) {
         kr_puts(kr_str_concat("  Linker:   ", lflags));
     }
     kr_puts("");
@@ -3862,7 +4261,7 @@ int64_t kr_main() {
     if (has_input) {
         kr_puts(kr_str_concat("  Input:    ", source_file));
         source = kr_file_read_string(source_file);
-        if (_kr_str_eq(source, "")) {
+        if (_KR_EQ(source, "")) {
             kr_puts(kr_str_concat("error: could not read file: ", source_file));
             return 1;
         }
@@ -3878,7 +4277,7 @@ int64_t kr_main() {
     void* tok_lexemes = kr_vec_string_new();
     __auto_type token_count = kr_tokenize(source, int_data, tok_lexemes);
     kr_puts(kr_str_concat("  Tokens:   ", kr_fmt_int(token_count)));
-    if (mode == kr_MODE_TOKENS()) {
+    if (_KR_EQ(mode, kr_MODE_TOKENS())) {
         kr_dump_tokens(int_data, tok_lexemes, token_count);
         kr_vec_int_free(int_data);
         kr_vec_string_free(tok_lexemes);
@@ -3894,7 +4293,7 @@ int64_t kr_main() {
         kr_vec_string_free(tok_lexemes);
         return 1;
     }
-    const char* c_source = kr_join_output(out);
+    kr_str c_source = kr_join_output(out);
     kr_vec_string_free(out);
     __auto_type c_path = kr_derive_c_path(source_file);
     __auto_type exe_path = kr_derive_exe_path(source_file, target);
@@ -3902,7 +4301,7 @@ int64_t kr_main() {
     kr_fputs(c_source, c_file);
     kr_fclose(c_file);
     kr_puts(kr_str_concat("  C output: ", c_path));
-    if (mode == kr_MODE_EMIT_C()) {
+    if (_KR_EQ(mode, kr_MODE_EMIT_C())) {
         kr_puts("C source emitted successfully.");
         kr_vec_int_free(int_data);
         kr_vec_string_free(tok_lexemes);
@@ -3911,12 +4310,12 @@ int64_t kr_main() {
     __auto_type cc = kr_default_cc(target);
     __auto_type cc_cmd = kr_str_concat(cc, kr_str_concat(" -o ", kr_str_concat(exe_path, kr_str_concat(" ", c_path))));
     __auto_type cc_lflags = kr_linker_flags(target);
-    if (_kr_str_neq(cc_lflags, "")) {
+    if (_KR_NEQ(cc_lflags, "")) {
         cc_cmd = kr_str_concat(cc_cmd, kr_str_concat(" ", cc_lflags));
     }
     kr_puts(kr_str_concat("  CC cmd:   ", cc_cmd));
     __auto_type cc_result = kr_system(cc_cmd);
-    if (cc_result != 0) {
+    if (_KR_NEQ(cc_result, 0)) {
         kr_puts("error: C compilation failed.");
         return 1;
     }

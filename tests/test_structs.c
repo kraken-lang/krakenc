@@ -11,7 +11,7 @@
 typedef int64_t kr_int;
 typedef double kr_float;
 typedef bool kr_bool;
-typedef const char* kr_str;
+typedef char* kr_str;
 typedef ssize_t kr_size;
 
 void kr_puts(kr_str s) { puts(s); }
@@ -20,6 +20,13 @@ int64_t kr_abs(int64_t x) { return x < 0 ? -x : x; }
 int kr_strcmp(kr_str a, kr_str b) { return strcmp(a, b); }
 static inline bool _kr_str_eq(kr_str a, kr_str b) { return strcmp(a,b)==0; }
 static inline bool _kr_str_neq(kr_str a, kr_str b) { return strcmp(a,b)!=0; }
+static inline int _kr_cmp_eq(void* a, void* b) { return strcmp((char*)a,(char*)b)==0; }
+static inline int _kr_cmp_neq(void* a, void* b) { return strcmp((char*)a,(char*)b)!=0; }
+static inline int _kr_int_eq(int64_t a, int64_t b) { return a==b; }
+static inline int _kr_int_neq(int64_t a, int64_t b) { return a!=b; }
+#define _KR_EQ(a, b) __builtin_choose_expr(__builtin_types_compatible_p(__typeof__(a), char*), _kr_cmp_eq((void*)(a),(void*)(b)), _kr_int_eq((int64_t)(intptr_t)(a),(int64_t)(intptr_t)(b)))
+#define _KR_NEQ(a, b) __builtin_choose_expr(__builtin_types_compatible_p(__typeof__(a), char*), _kr_cmp_neq((void*)(a),(void*)(b)), _kr_int_neq((int64_t)(intptr_t)(a),(int64_t)(intptr_t)(b)))
+#pragma clang diagnostic ignored "-Wint-to-void-pointer-cast"
 kr_str kr_str_concat(kr_str a, kr_str b) {
   size_t la = strlen(a), lb = strlen(b);
   char* r = (char*)malloc(la + lb + 1);
@@ -38,7 +45,7 @@ kr_str kr_fmt_int(int64_t v) {
   char* r = (char*)malloc(32); snprintf(r, 32, "%lld", (long long)v); return r;
 }
 kr_str kr_getenv(kr_str name) {
-  const char* v = getenv(name); return v ? v : "";
+  char* v = (char*)getenv(name); return v ? v : (char*)"";
 }
 int64_t kr_system(kr_str cmd) { return (int64_t)system(cmd); }
 void kr_exit(int64_t code) { exit((int)code); }
@@ -65,14 +72,14 @@ int64_t kr_vec_int_get(void* vp, int64_t i) { return ((KrVecInt*)vp)->data[i]; }
 void kr_vec_int_set(void* vp, int64_t i, int64_t val) { ((KrVecInt*)vp)->data[i] = val; }
 int64_t kr_vec_int_len(void* vp) { return ((KrVecInt*)vp)->len; }
 void kr_vec_int_free(void* vp) { KrVecInt* v = (KrVecInt*)vp; free(v->data); free(v); }
-typedef struct { const char** data; int64_t len; int64_t cap; } KrVecString;
+typedef struct { char** data; int64_t len; int64_t cap; } KrVecString;
 void* kr_vec_string_new() {
   KrVecString* v = (KrVecString*)malloc(sizeof(KrVecString));
-  v->data = (const char**)malloc(16 * sizeof(const char*)); v->len = 0; v->cap = 16; return v;
+  v->data = (char**)malloc(16 * sizeof(char*)); v->len = 0; v->cap = 16; return v;
 }
 void kr_vec_string_push(void* vp, kr_str val) {
   KrVecString* v = (KrVecString*)vp;
-  if(v->len >= v->cap) { v->cap *= 2; v->data = (const char**)realloc(v->data, v->cap * sizeof(const char*)); }
+  if(v->len >= v->cap) { v->cap *= 2; v->data = (char**)realloc(v->data, v->cap * sizeof(char*)); }
   v->data[v->len++] = val;
 }
 kr_str kr_vec_string_get(void* vp, int64_t i) { return ((KrVecString*)vp)->data[i]; }
@@ -85,7 +92,7 @@ typedef struct Point Point;
 Point kr_make_point(int64_t x, int64_t y);
 int64_t kr_distance_sq(Point p);
 int64_t kr_count_to(int64_t n);
-const char* kr_check_keyword(const char* s);
+kr_str kr_check_keyword(kr_str s);
 int64_t kr_main();
 
 struct Point {
@@ -111,14 +118,14 @@ int64_t kr_count_to(int64_t n) {
     return sum;
 }
 
-const char* kr_check_keyword(const char* s) {
-    if (_kr_str_eq(s, "fn")) {
+kr_str kr_check_keyword(kr_str s) {
+    if (_KR_EQ(s, "fn")) {
         return "keyword:fn";
     }
-    if (_kr_str_eq(s, "let")) {
+    if (_KR_EQ(s, "let")) {
         return "keyword:let";
     }
-    if (_kr_str_eq(s, "if")) {
+    if (_KR_EQ(s, "if")) {
         return "keyword:if";
     }
     return kr_str_concat("ident:", s);

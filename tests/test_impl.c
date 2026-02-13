@@ -88,26 +88,35 @@ int64_t kr_vec_string_len(void* vp) { return ((KrVecString*)vp)->len; }
 void kr_vec_string_free(void* vp) { KrVecString* v = (KrVecString*)vp; free(v->data); free(v); }
 
 /* Forward declarations */
+typedef struct Vec2 Vec2;
+Vec2 kr_new_vec2(int64_t x, int64_t y);
+int64_t kr_Vec2_mag_sq(Vec2 self);
+Vec2 kr_Vec2_add(Vec2 self, Vec2 other);
 int64_t kr_main();
 
+struct Vec2 {
+int64_t x;
+int64_t y;
+};
+
+Vec2 kr_new_vec2(int64_t x, int64_t y) {
+    return (Vec2){.x = x, .y = y};
+}
+
+int64_t kr_Vec2_mag_sq(Vec2 self) {
+    return self.x * self.x + self.y * self.y;
+}
+
+Vec2 kr_Vec2_add(Vec2 self, Vec2 other) {
+    return (Vec2){.x = self.x + other.x, .y = self.y + other.y};
+}
+
 int64_t kr_main() {
-    void* v = kr_vec_int_new();
-    kr_vec_int_push(v, 10);
-    kr_vec_int_push(v, 20);
-    kr_vec_int_push(v, 30);
-    __auto_type i = 0;
-    while (i < 3) {
-        kr_puts(kr_str_concat("v[", kr_str_concat(kr_fmt_int(i), kr_str_concat("]=", kr_fmt_int(kr_vec_int_get(v, i))))));
-        i = i + 1;
-    }
-    void* names = kr_vec_string_new();
-    kr_vec_string_push(names, "Alice");
-    kr_vec_string_push(names, "Bob");
-    kr_vec_string_push(names, "Charlie");
-    kr_puts(kr_str_concat("len=", kr_fmt_int(kr_vec_string_len(names))));
-    kr_puts(kr_str_concat("names[1]=", kr_vec_string_get(names, 1)));
-    kr_vec_int_free(v);
-    kr_vec_string_free(names);
+    __auto_type a = kr_new_vec2(3, 4);
+    __auto_type b = kr_new_vec2(1, 2);
+    kr_puts(kr_str_concat("mag_sq(3,4)=", kr_fmt_int(kr_Vec2_mag_sq(a))));
+    __auto_type c = kr_Vec2_add(a, b);
+    kr_puts(kr_str_concat("add=(", kr_str_concat(kr_fmt_int(c.x), kr_str_concat(",", kr_str_concat(kr_fmt_int(c.y), ")")))));
     return 0;
 }
 

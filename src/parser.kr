@@ -139,8 +139,8 @@ fn type_to_c(kind: int, name: string) -> string {
     if (kind == TK_KW_INT())    { return "int64_t"; }
     if (kind == TK_KW_FLOAT())  { return "double"; }
     if (kind == TK_KW_BOOL())   { return "bool"; }
-    if (kind == TK_KW_STRING()) { return "const char*"; }
-    if (kind == TK_KW_STR())    { return "const char*"; }
+    if (kind == TK_KW_STRING()) { return "kr_str"; }
+    if (kind == TK_KW_STR())    { return "kr_str"; }
     if (kind == TK_KW_BYTES())  { return "uint8_t*"; }
     if (kind == TK_KW_VOID())   { return "void"; }
     if (kind == TK_IDENTIFIER()) {
@@ -208,40 +208,62 @@ fn emit_forward_decls(tr: Translator) -> Translator {
     let c: Translator = tr;
     tr_emit_line(c, "/* Forward declarations */");
 
-    // Sub-pass 1: emit ALL struct typedefs first
+    // Sub-pass 1: emit ALL struct/enum typedefs first
     while (!tr_at_end(c)) {
         let k = tr_kind(c);
         if (k == TK_KW_PUB()) {
             c = tr_advance(c);
-            if (tr_kind(c) == TK_KW_STRUCT()) {
+            let k2 = tr_kind(c);
+            if (k2 == TK_KW_STRUCT()) {
                 c = tr_advance(c);
                 let name = tr_lexeme(c);
                 tr_emit_line(c, str_concat(str_concat("typedef struct ", name), str_concat(" ", str_concat(name, ";"))));
                 c = tr_advance(c);
-            } else { c = tr_advance(c); }
+            } else {
+                if (k2 == TK_KW_ENUM()) {
+                    c = tr_advance(c);
+                    let name = tr_lexeme(c);
+                    tr_emit_line(c, str_concat("typedef int64_t ", str_concat(name, ";")));
+                    c = tr_advance(c);
+                } else { c = tr_advance(c); }
+            }
         } else {
             if (k == TK_KW_STRUCT()) {
                 c = tr_advance(c);
                 let name = tr_lexeme(c);
                 tr_emit_line(c, str_concat(str_concat("typedef struct ", name), str_concat(" ", str_concat(name, ";"))));
                 c = tr_advance(c);
-            } else { c = tr_advance(c); }
+            } else {
+                if (k == TK_KW_ENUM()) {
+                    c = tr_advance(c);
+                    let name = tr_lexeme(c);
+                    tr_emit_line(c, str_concat("typedef int64_t ", str_concat(name, ";")));
+                    c = tr_advance(c);
+                } else { c = tr_advance(c); }
+            }
         }
     }
 
-    // Sub-pass 2: emit ALL function prototypes
+    // Sub-pass 2: emit ALL function prototypes (including impl methods)
     c = tr_reset_pos(c);
     while (!tr_at_end(c)) {
         let k = tr_kind(c);
         if (k == TK_KW_PUB()) {
             c = tr_advance(c);
-            if (tr_kind(c) == TK_KW_FN()) {
+            let k2 = tr_kind(c);
+            if (k2 == TK_KW_FN()) {
                 c = emit_fn_prototype(c);
-            } else { c = tr_advance(c); }
+            } else {
+                if (k2 == TK_KW_IMPL()) { c = emit_impl_prototypes(c); }
+                else { c = tr_advance(c); }
+            }
         } else {
             if (k == TK_KW_FN()) {
                 c = emit_fn_prototype(c);
-            } else { c = tr_advance(c); }
+            } else {
+                if (k == TK_KW_IMPL()) { c = emit_impl_prototypes(c); }
+                else { c = tr_advance(c); }
+            }
         }
     }
 
@@ -285,6 +307,55 @@ fn emit_fn_prototype(tr: Translator) -> Translator {
     return c;
 }
 
+fn emit_impl_prototypes(tr: Translator) -> Translator {
+    let c: Translator = tr_advance(tr);
+    let type_name = tr_lexeme(c);
+    c = tr_advance(c);
+    c = tr_advance(c);
+
+    while (!tr_at_end(c) && tr_kind(c) != TK_RBRACE()) {
+        if (tr_kind(c) == TK_KW_PUB()) { c = tr_advance(c); }
+        if (tr_kind(c) == TK_KW_FN()) {
+            c = tr_advance(c);
+            let fname = tr_lexeme(c);
+            c = tr_advance(c);
+            c = tr_advance(c);
+
+            let params = "";
+            let first = 1;
+            while (!tr_at_end(c) && tr_kind(c) != TK_RPAREN()) {
+                if (first == 0) { params = str_concat(params, ", "); c = tr_advance(c); }
+                let pname = tr_lexeme(c);
+                if (pname == "self") {
+                    c = tr_advance(c);
+                    params = str_concat(params, str_concat(type_name, " self"));
+                } else {
+                    c = tr_advance(c);
+                    c = tr_advance(c);
+                    let pk = tr_kind(c); let pn = tr_lexeme(c);
+                    c = tr_advance(c);
+                    params = str_concat(params, str_concat(type_to_c(pk, pn), str_concat(" ", pname)));
+                }
+                first = 0;
+            }
+            c = tr_advance(c);
+
+            let ret_c = "void";
+            if (!tr_at_end(c) && tr_kind(c) == TK_ARROW()) {
+                c = tr_advance(c);
+                let rk = tr_kind(c); let rn = tr_lexeme(c);
+                ret_c = type_to_c(rk, rn); c = tr_advance(c);
+            }
+
+            let mangled = str_concat("kr_", str_concat(type_name, str_concat("_", fname)));
+            tr_emit_line(c, str_concat(ret_c, str_concat(" ", str_concat(mangled, str_concat("(", str_concat(params, ");"))))));
+            c = skip_brace_block(c);
+        } else { c = tr_advance(c); }
+    }
+    if (!tr_at_end(c)) { c = tr_advance(c); }
+    return c;
+}
+
 fn skip_brace_block(tr: Translator) -> Translator {
     let c: Translator = tr;
     if (tr_at_end(c) || tr_kind(c) != TK_LBRACE()) { return c; }
@@ -306,7 +377,7 @@ fn skip_brace_block(tr: Translator) -> Translator {
 fn translate_program(tr: Translator) -> Translator {
     let c: Translator = tr;
 
-    // Sub-pass 1: emit ALL struct definitions first
+    // Sub-pass 1: emit ALL struct/enum definitions first
     while (!tr_at_end(c)) {
         let k = tr_kind(c);
         if (k == TK_EOF()) { break; }
@@ -316,16 +387,23 @@ fn translate_program(tr: Translator) -> Translator {
         } else {
             if (k == TK_KW_PUB()) {
                 c = tr_advance(c);
-                if (tr_kind(c) == TK_KW_STRUCT()) { c = translate_struct(c); }
-                else { c = tr_advance(c); }
+                let k2 = tr_kind(c);
+                if (k2 == TK_KW_STRUCT()) { c = translate_struct(c); }
+                else {
+                    if (k2 == TK_KW_ENUM()) { c = translate_enum(c); }
+                    else { c = tr_advance(c); }
+                }
             } else {
                 if (k == TK_KW_STRUCT()) { c = translate_struct(c); }
-                else { c = tr_advance(c); }
+                else {
+                    if (k == TK_KW_ENUM()) { c = translate_enum(c); }
+                    else { c = tr_advance(c); }
+                }
             }
         }
     }
 
-    // Sub-pass 2: emit ALL function bodies
+    // Sub-pass 2: emit ALL function bodies (+ impl blocks)
     c = tr_reset_pos(c);
     while (!tr_at_end(c)) {
         let k = tr_kind(c);
@@ -336,16 +414,23 @@ fn translate_program(tr: Translator) -> Translator {
         } else {
             if (k == TK_KW_PUB()) {
                 c = tr_advance(c);
-                if (tr_kind(c) == TK_KW_FN()) { c = translate_fn(c); }
+                let k2 = tr_kind(c);
+                if (k2 == TK_KW_FN()) { c = translate_fn(c); }
                 else {
-                    if (tr_kind(c) == TK_KW_STRUCT()) { c = skip_brace_block(tr_advance(tr_advance(c))); }
-                    else { c = tr_advance(c); }
+                    if (k2 == TK_KW_STRUCT() || k2 == TK_KW_ENUM()) { c = skip_brace_block(tr_advance(tr_advance(c))); }
+                    else {
+                        if (k2 == TK_KW_IMPL()) { c = translate_impl(c); }
+                        else { c = tr_advance(c); }
+                    }
                 }
             } else {
                 if (k == TK_KW_FN()) { c = translate_fn(c); }
                 else {
-                    if (k == TK_KW_STRUCT()) { c = skip_brace_block(tr_advance(tr_advance(c))); }
-                    else { c = tr_advance(c); }
+                    if (k == TK_KW_STRUCT() || k == TK_KW_ENUM()) { c = skip_brace_block(tr_advance(tr_advance(c))); }
+                    else {
+                        if (k == TK_KW_IMPL()) { c = translate_impl(c); }
+                        else { c = tr_advance(c); }
+                    }
                 }
             }
         }
@@ -359,6 +444,101 @@ fn translate_top_level(tr: Translator) -> Translator {
     if (k == TK_KW_FN()) { return translate_fn(tr); }
     if (k == TK_KW_STRUCT()) { return translate_struct(tr); }
     return tr_advance(tr);
+}
+
+// ---------------------------------------------------------------------------
+// Impl block → free functions with TypeName_ prefix
+// ---------------------------------------------------------------------------
+
+fn translate_impl(tr: Translator) -> Translator {
+    let c: Translator = tr_advance(tr);
+    let type_name = tr_lexeme(c);
+    c = tr_advance(c);
+    c = tr_advance(c);
+
+    while (!tr_at_end(c) && tr_kind(c) != TK_RBRACE()) {
+        // Skip pub if present
+        if (tr_kind(c) == TK_KW_PUB()) { c = tr_advance(c); }
+        if (tr_kind(c) == TK_KW_FN()) {
+            c = translate_impl_fn(c, type_name);
+        } else { c = tr_advance(c); }
+    }
+    if (!tr_at_end(c)) { c = tr_advance(c); }
+    return c;
+}
+
+fn translate_impl_fn(tr: Translator, type_name: string) -> Translator {
+    let c: Translator = tr_advance(tr);
+    let fname = tr_lexeme(c);
+    c = tr_advance(c);
+    c = tr_advance(c);
+
+    let params = "";
+    let first = 1;
+    while (!tr_at_end(c) && tr_kind(c) != TK_RPAREN()) {
+        if (first == 0) { params = str_concat(params, ", "); c = tr_advance(c); }
+        let pname = tr_lexeme(c);
+        if (pname == "self") {
+            c = tr_advance(c);
+            params = str_concat(params, str_concat(type_name, " self"));
+        } else {
+            c = tr_advance(c);
+            c = tr_advance(c);
+            let ptype_kind = tr_kind(c);
+            let ptype_name = tr_lexeme(c);
+            c = tr_advance(c);
+            params = str_concat(params, str_concat(type_to_c(ptype_kind, ptype_name), str_concat(" ", pname)));
+        }
+        first = 0;
+    }
+    c = tr_advance(c);
+
+    let ret_c = "void";
+    if (!tr_at_end(c) && tr_kind(c) == TK_ARROW()) {
+        c = tr_advance(c);
+        let rk = tr_kind(c); let rn = tr_lexeme(c);
+        ret_c = type_to_c(rk, rn); c = tr_advance(c);
+    }
+
+    let mangled = str_concat("kr_", str_concat(type_name, str_concat("_", fname)));
+    tr_emit(c, str_concat(ret_c, str_concat(" ", str_concat(mangled, str_concat("(", str_concat(params, ") {\n"))))));
+
+    c = tr_advance(c);
+    c = tr_indent(c);
+    c = translate_block_body(c);
+    c = tr_dedent(c);
+    tr_emit_line(c, "}");
+    tr_emit(c, "\n");
+    return c;
+}
+
+// ---------------------------------------------------------------------------
+// Enum declaration → typedef + #define constants
+// ---------------------------------------------------------------------------
+
+fn translate_enum(tr: Translator) -> Translator {
+    let c: Translator = tr_advance(tr);
+    let name = tr_lexeme(c);
+    c = tr_advance(c);
+    c = tr_advance(c);
+
+    tr_emit_line(c, str_concat("typedef int64_t ", str_concat(name, ";")));
+    let idx = 0;
+    while (!tr_at_end(c) && tr_kind(c) != TK_RBRACE()) {
+        let variant = tr_lexeme(c); c = tr_advance(c);
+        tr_emit_line(c, str_concat("#define ", str_concat(name, str_concat("_", str_concat(variant, str_concat(" ", fmt_int(idx)))))));
+        idx = idx + 1;
+        // Skip optional payload (Type) and comma
+        if (!tr_at_end(c) && tr_kind(c) == TK_LPAREN()) {
+            c = tr_advance(c);
+            while (!tr_at_end(c) && tr_kind(c) != TK_RPAREN()) { c = tr_advance(c); }
+            c = tr_advance(c);
+        }
+        if (!tr_at_end(c) && tr_kind(c) == TK_COMMA()) { c = tr_advance(c); }
+    }
+    if (!tr_at_end(c)) { c = tr_advance(c); }
+    tr_emit(c, "\n");
+    return c;
 }
 
 // ---------------------------------------------------------------------------
@@ -439,13 +619,26 @@ fn translate_block_body(tr: Translator) -> Translator {
 // Statement
 // ---------------------------------------------------------------------------
 
+fn skip_to_sync(tr: Translator) -> Translator {
+    let c: Translator = tr;
+    while (!tr_at_end(c)) {
+        let k = tr_kind(c);
+        if (k == TK_SEMICOLON()) { return tr_advance(c); }
+        if (k == TK_RBRACE()) { return c; }
+        c = tr_advance(c);
+    }
+    return c;
+}
+
 fn translate_statement(tr: Translator) -> Translator {
     let k = tr_kind(tr);
+    if (k == TK_SEMICOLON()) { return tr_advance(tr); }
     if (k == TK_KW_LET() || k == TK_KW_CONST()) { return translate_var_decl(tr); }
     if (k == TK_KW_RETURN()) { return translate_return(tr); }
     if (k == TK_KW_IF()) { return translate_if(tr); }
     if (k == TK_KW_WHILE()) { return translate_while(tr); }
     if (k == TK_KW_FOR()) { return translate_for(tr); }
+    if (k == TK_KW_MATCH()) { return translate_match(tr); }
     if (k == TK_KW_BREAK()) {
         tr_emit_line(tr, "break;");
         let c: Translator = tr_advance(tr);
@@ -458,6 +651,7 @@ fn translate_statement(tr: Translator) -> Translator {
         if (!tr_at_end(c) && tr_kind(c) == TK_SEMICOLON()) { c = tr_advance(c); }
         return c;
     }
+    if (k == TK_EOF() || k == TK_RBRACE()) { return tr; }
     return translate_expr_stmt(tr);
 }
 
@@ -581,12 +775,19 @@ fn translate_while(tr: Translator) -> Translator {
 fn translate_for(tr: Translator) -> Translator {
     let c: Translator = tr_advance(tr);
     c = tr_advance(c);
-    tr_emit_indent(c);
-    tr_emit(c, "for (");
 
     if (tr_kind(c) == TK_KW_LET()) {
         c = tr_advance(c);
         let vname = tr_lexeme(c); c = tr_advance(c);
+
+        // Check for 'in' keyword → for-in loop
+        if (!tr_at_end(c) && tr_kind(c) == TK_KW_IN()) {
+            c = tr_advance(c);
+            return translate_for_in(c, vname);
+        }
+
+        tr_emit_indent(c);
+        tr_emit(c, "for (");
         let c_type = "int64_t";
         if (!tr_at_end(c) && tr_kind(c) == TK_COLON()) {
             c = tr_advance(c);
@@ -596,7 +797,11 @@ fn translate_for(tr: Translator) -> Translator {
         c = tr_advance(c);
         tr_emit(c, str_concat(c_type, str_concat(" ", str_concat(vname, " = "))));
         c = translate_expr(c);
-    } else { c = translate_expr(c); }
+    } else {
+        tr_emit_indent(c);
+        tr_emit(c, "for (");
+        c = translate_expr(c);
+    }
     c = tr_advance(c);
     tr_emit(c, "; ");
 
@@ -607,13 +812,153 @@ fn translate_for(tr: Translator) -> Translator {
     // Increment: may be assignment like i = i + 1
     c = translate_expr(c);
     let ik = tr_kind(c);
-    if (ik == TK_OP_ASSIGN() || ik == TK_OP_PLUS_ASSIGN() || ik == TK_OP_MINUS_ASSIGN() || ik == TK_OP_STAR_ASSIGN()) {
+    if (ik == TK_OP_ASSIGN() || ik == TK_OP_PLUS_ASSIGN() || ik == TK_OP_MINUS_ASSIGN()
+        || ik == TK_OP_STAR_ASSIGN() || ik == TK_OP_SLASH_ASSIGN() || ik == TK_OP_PERCENT_ASSIGN()) {
         let op_lex = tr_lexeme(c);
         tr_emit(c, str_concat(" ", str_concat(op_lex, " ")));
         c = tr_advance(c);
         c = translate_expr(c);
     }
     c = tr_advance(c);
+    tr_emit(c, ") {\n");
+
+    c = tr_advance(c);
+    c = tr_indent(c);
+    c = translate_block_body(c);
+    c = tr_dedent(c);
+    tr_emit_line(c, "}");
+    return c;
+}
+
+// ---------------------------------------------------------------------------
+// Match statement → if / else if chains
+// ---------------------------------------------------------------------------
+
+fn translate_match(tr: Translator) -> Translator {
+    return translate_match_simple(tr);
+}
+
+fn translate_match_simple(tr: Translator) -> Translator {
+    let c: Translator = tr_advance(tr);
+
+    // Skip '('
+    if (!tr_at_end(c) && tr_kind(c) == TK_LPAREN()) { c = tr_advance(c); }
+
+    // Capture subject as raw lexeme string (handles identifiers and simple exprs)
+    let subject = tr_lexeme(c);
+    c = tr_advance(c);
+
+    // If subject was a function call or member access, capture more
+    // For now, handle simple identifiers — most common pattern
+    if (!tr_at_end(c) && tr_kind(c) == TK_DOT()) {
+        subject = str_concat(subject, ".");
+        c = tr_advance(c);
+        subject = str_concat(subject, tr_lexeme(c));
+        c = tr_advance(c);
+    }
+
+    // Skip ')'
+    if (!tr_at_end(c) && tr_kind(c) == TK_RPAREN()) { c = tr_advance(c); }
+    // Skip '{'
+    if (!tr_at_end(c) && tr_kind(c) == TK_LBRACE()) { c = tr_advance(c); }
+
+    let arm_idx = 0;
+    while (!tr_at_end(c) && tr_kind(c) != TK_RBRACE()) {
+        let k = tr_kind(c);
+
+        // Wildcard: _ -> { ... }
+        if (k == TK_IDENTIFIER() && tr_lexeme(c) == "_") {
+            c = tr_advance(c);
+            // Skip ->
+            if (!tr_at_end(c) && tr_kind(c) == TK_ARROW()) { c = tr_advance(c); }
+            if (arm_idx > 0) { tr_emit_line(c, "else {"); }
+            else { tr_emit_indent(c); tr_emit(c, "{\n"); }
+            c = tr_advance(c);
+            c = tr_indent(c);
+            c = translate_block_body(c);
+            c = tr_dedent(c);
+            tr_emit_line(c, "}");
+            arm_idx = arm_idx + 1;
+        } else {
+            // Pattern: value or EnumName::Variant
+            tr_emit_indent(c);
+            if (arm_idx > 0) { tr_emit(c, "else "); }
+            tr_emit(c, str_concat("if (", str_concat(subject, " == ")));
+
+            // Capture pattern value
+            if (k == TK_IDENTIFIER()) {
+                let pat_name = tr_lexeme(c); c = tr_advance(c);
+                // Check for :: (enum variant)
+                if (!tr_at_end(c) && tr_kind(c) == TK_COLON_COLON()) {
+                    c = tr_advance(c);
+                    let variant = tr_lexeme(c); c = tr_advance(c);
+                    tr_emit(c, str_concat(pat_name, str_concat("_", variant)));
+                    // Skip optional payload binding (x)
+                    if (!tr_at_end(c) && tr_kind(c) == TK_LPAREN()) {
+                        c = tr_advance(c);
+                        while (!tr_at_end(c) && tr_kind(c) != TK_RPAREN()) { c = tr_advance(c); }
+                        c = tr_advance(c);
+                    }
+                } else {
+                    tr_emit(c, pat_name);
+                }
+            } else {
+                // Integer or string literal
+                if (k == TK_STRING_LIT()) {
+                    tr_emit(c, str_concat("\"", str_concat(tr_lexeme(c), "\"")));
+                } else {
+                    tr_emit(c, tr_lexeme(c));
+                }
+                c = tr_advance(c);
+            }
+
+            tr_emit(c, ") {\n");
+
+            // Skip ->
+            if (!tr_at_end(c) && tr_kind(c) == TK_ARROW()) { c = tr_advance(c); }
+            // Skip {
+            if (!tr_at_end(c) && tr_kind(c) == TK_LBRACE()) { c = tr_advance(c); }
+
+            c = tr_indent(c);
+            c = translate_block_body(c);
+            c = tr_dedent(c);
+            tr_emit_line(c, "}");
+            arm_idx = arm_idx + 1;
+        }
+    }
+    if (!tr_at_end(c)) { c = tr_advance(c); }
+    return c;
+}
+
+// ---------------------------------------------------------------------------
+// For-in loop → C for loop with range
+// ---------------------------------------------------------------------------
+
+fn translate_for_in(tr: Translator, vname: string) -> Translator {
+    // for (let i in start..end) { body }
+    // → for (int64_t i = start; i < end; i++) { body }
+    // At entry: c is past 'in', pointing at range start
+    let c: Translator = tr;
+    tr_emit_indent(c);
+    tr_emit(c, "for (");
+
+    // Parse range start
+    let range_start = tr_lexeme(c); c = tr_advance(c);
+
+    // Skip '..' or '..='
+    let inclusive = 0;
+    if (!tr_at_end(c) && tr_kind(c) == TK_OP_DOT_DOT_EQ()) { inclusive = 1; }
+    c = tr_advance(c);
+
+    // Parse range end
+    let range_end = tr_lexeme(c); c = tr_advance(c);
+
+    // Skip ')'
+    if (!tr_at_end(c) && tr_kind(c) == TK_RPAREN()) { c = tr_advance(c); }
+
+    let cmp = " < ";
+    if (inclusive == 1) { cmp = " <= "; }
+    tr_emit(c, str_concat("int64_t ", str_concat(vname, str_concat(" = ", str_concat(range_start, str_concat("; ", str_concat(vname, str_concat(cmp, str_concat(range_end, str_concat("; ", str_concat(vname, "++")))))))))));
     tr_emit(c, ") {\n");
 
     c = tr_advance(c);
@@ -633,7 +978,8 @@ fn translate_expr_stmt(tr: Translator) -> Translator {
     let c: Translator = translate_expr(tr);
 
     let k = tr_kind(c);
-    if (k == TK_OP_ASSIGN() || k == TK_OP_PLUS_ASSIGN() || k == TK_OP_MINUS_ASSIGN() || k == TK_OP_STAR_ASSIGN()) {
+    if (k == TK_OP_ASSIGN() || k == TK_OP_PLUS_ASSIGN() || k == TK_OP_MINUS_ASSIGN()
+        || k == TK_OP_STAR_ASSIGN() || k == TK_OP_SLASH_ASSIGN() || k == TK_OP_PERCENT_ASSIGN()) {
         let op_lex = tr_lexeme(c);
         tr_emit(c, str_concat(" ", str_concat(op_lex, " ")));
         c = tr_advance(c);
@@ -691,9 +1037,9 @@ fn translate_bit_and(tr: Translator) -> Translator {
     return c;
 }
 
-// Scan ahead from position to find == or != at paren depth 0 followed by STRING_LIT.
+// Scan ahead from position to find == or != at paren depth 0.
 // Returns: 0 = not found, 1 = found ==, 2 = found !=
-fn scan_string_eq(tr: Translator) -> int {
+fn scan_eq_ahead(tr: Translator) -> int {
     let i = tr.pos;
     let depth = 0;
     while (i < tr.count) {
@@ -702,27 +1048,25 @@ fn scan_string_eq(tr: Translator) -> int {
         if (k == TK_RPAREN()) { depth = depth - 1; }
         if (depth < 0) { return 0; }
         if (depth == 0 && (k == TK_OP_EQ() || k == TK_OP_NEQ())) {
-            let next = i + 1;
-            if (next < tr.count && vec_int_get(tr.int_data, next * 3) == TK_STRING_LIT()) {
-                if (k == TK_OP_EQ()) { return 1; }
-                return 2;
-            }
-            return 0;
+            if (k == TK_OP_EQ()) { return 1; }
+            return 2;
         }
-        if (k == TK_SEMICOLON() || k == TK_LBRACE() || k == TK_RBRACE()
+        if (depth == 0 && (k == TK_SEMICOLON() || k == TK_LBRACE() || k == TK_RBRACE()
+            || k == TK_COMMA() || k == TK_COLON()
             || k == TK_OP_AND() || k == TK_OP_OR()
-            || k == TK_OP_BIT_AND() || k == TK_OP_BIT_OR() || k == TK_OP_BIT_XOR()) { return 0; }
+            || k == TK_OP_BIT_AND() || k == TK_OP_BIT_OR() || k == TK_OP_BIT_XOR()
+            || k == TK_OP_LSHIFT() || k == TK_OP_RSHIFT())) { return 0; }
         i = i + 1;
     }
     return 0;
 }
 
 fn translate_equality(tr: Translator) -> Translator {
-    // Detect EXPR (== | !=) STRING_LIT → _kr_str_eq / _kr_str_neq
-    let eq_mode = scan_string_eq(tr);
+    // Detect EXPR (== | !=) EXPR → _KR_EQ / _KR_NEQ macro (handles strings via _Generic)
+    let eq_mode = scan_eq_ahead(tr);
     if (eq_mode > 0) {
-        if (eq_mode == 1) { tr_emit(tr, "_kr_str_eq("); }
-        else { tr_emit(tr, "_kr_str_neq("); }
+        if (eq_mode == 1) { tr_emit(tr, "_KR_EQ("); }
+        else { tr_emit(tr, "_KR_NEQ("); }
         let c: Translator = translate_comparison(tr);
         c = tr_advance(c);
         tr_emit(c, ", ");
@@ -732,24 +1076,26 @@ fn translate_equality(tr: Translator) -> Translator {
     }
 
     let c: Translator = translate_comparison(tr);
-    while (!tr_at_end(c)) {
-        let k = tr_kind(c);
-        if (k == TK_OP_EQ()) {
-            tr_emit(c, " == "); c = tr_advance(c); c = translate_comparison(c);
-        } else {
-            if (k == TK_OP_NEQ()) {
-                tr_emit(c, " != "); c = tr_advance(c); c = translate_comparison(c);
-            } else { break; }
-        }
-    }
     return c;
 }
 
 fn translate_comparison(tr: Translator) -> Translator {
-    let c: Translator = translate_addition(tr);
+    let c: Translator = translate_shift(tr);
     while (!tr_at_end(c)) {
         let k = tr_kind(c);
         if (k == TK_OP_LT() || k == TK_OP_LTE() || k == TK_OP_GT() || k == TK_OP_GTE()) {
+            tr_emit(c, str_concat(" ", str_concat(tr_lexeme(c), " ")));
+            c = tr_advance(c); c = translate_shift(c);
+        } else { break; }
+    }
+    return c;
+}
+
+fn translate_shift(tr: Translator) -> Translator {
+    let c: Translator = translate_addition(tr);
+    while (!tr_at_end(c)) {
+        let k = tr_kind(c);
+        if (k == TK_OP_LSHIFT() || k == TK_OP_RSHIFT()) {
             tr_emit(c, str_concat(" ", str_concat(tr_lexeme(c), " ")));
             c = tr_advance(c); c = translate_addition(c);
         } else { break; }
@@ -851,6 +1197,21 @@ fn translate_primary(tr: Translator) -> Translator {
     if (k == TK_IDENTIFIER()) {
         let name = tr_lexeme(tr);
         let c: Translator = tr_advance(tr);
+
+        // Enum variant: Name::Variant → Name_Variant
+        if (!tr_at_end(c) && tr_kind(c) == TK_COLON_COLON()) {
+            c = tr_advance(c);
+            let variant = tr_lexeme(c); c = tr_advance(c);
+            tr_emit(c, str_concat(name, str_concat("_", variant)));
+            // Skip optional payload constructor (value)
+            if (!tr_at_end(c) && tr_kind(c) == TK_LPAREN()) {
+                c = tr_advance(c);
+                // For now, skip payload — just emit the tag
+                while (!tr_at_end(c) && tr_kind(c) != TK_RPAREN()) { c = tr_advance(c); }
+                c = tr_advance(c);
+            }
+            return c;
+        }
 
         // Function call
         if (!tr_at_end(c) && tr_kind(c) == TK_LPAREN()) {

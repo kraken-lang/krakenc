@@ -1,0 +1,14 @@
+fn main() -> int {
+    let sum = 0;
+    for (let i in 0..5) {
+        sum = sum + i;
+    }
+    puts(str_concat("sum(0..5)=", fmt_int(sum)));
+
+    let sum2 = 0;
+    for (let j in 1..4) {
+        sum2 = sum2 + j;
+    }
+    puts(str_concat("sum(1..4)=", fmt_int(sum2)));
+    return 0;
+}

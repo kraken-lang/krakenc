@@ -1,0 +1,281 @@
+// Comprehensive krakenc translator test suite
+// Tests: structs, enums, match, for, for-in, while, if/else, functions,
+//        string comparison, bitwise ops, struct literals, impl blocks
+
+// ---------------------------------------------------------------------------
+// Structs
+// ---------------------------------------------------------------------------
+
+pub struct Point {
+    x: int;
+    y: int;
+}
+
+fn new_point(x: int, y: int) -> Point {
+    return Point { x: x, y: y };
+}
+
+// ---------------------------------------------------------------------------
+// Impl block
+// ---------------------------------------------------------------------------
+
+impl Point {
+    pub fn dist_sq(self) -> int {
+        return self.x * self.x + self.y * self.y;
+    }
+
+    pub fn add(self, other: Point) -> Point {
+        return Point { x: self.x + other.x, y: self.y + other.y };
+    }
+
+    pub fn to_string(self) -> string {
+        return str_concat("(", str_concat(fmt_int(self.x), str_concat(",", str_concat(fmt_int(self.y), ")"))));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum Direction {
+    North,
+    South,
+    East,
+    West,
+}
+
+fn dir_name(d: int) -> string {
+    match (d) {
+        Direction::North -> { return "north"; }
+        Direction::South -> { return "south"; }
+        Direction::East  -> { return "east"; }
+        Direction::West  -> { return "west"; }
+        _ -> { return "unknown"; }
+    }
+    return "unreachable";
+}
+
+// ---------------------------------------------------------------------------
+// Match with integers
+// ---------------------------------------------------------------------------
+
+fn fizzbuzz(n: int) -> string {
+    let m3 = n - (n / 3) * 3;
+    let m5 = n - (n / 5) * 5;
+    if (m3 == 0 && m5 == 0) { return "fizzbuzz"; }
+    if (m3 == 0) { return "fizz"; }
+    if (m5 == 0) { return "buzz"; }
+    return fmt_int(n);
+}
+
+fn match_int(x: int) -> int {
+    match (x) {
+        1 -> { return 10; }
+        2 -> { return 20; }
+        3 -> { return 30; }
+        _ -> { return 99; }
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// For-in loop
+// ---------------------------------------------------------------------------
+
+fn sum_range(start: int, end: int) -> int {
+    let total = 0;
+    for (let i in start..end) {
+        total = total + i;
+    }
+    return total;
+}
+
+// ---------------------------------------------------------------------------
+// While loop + string operations
+// ---------------------------------------------------------------------------
+
+fn repeat_str(s: string, n: int) -> string {
+    let result = "";
+    let i = 0;
+    while (i < n) {
+        result = str_concat(result, s);
+        i = i + 1;
+    }
+    return result;
+}
+
+// ---------------------------------------------------------------------------
+// Bitwise operators
+// ---------------------------------------------------------------------------
+
+fn has_flag(value: int, flag: int) -> bool {
+    return (value & flag) != 0;
+}
+
+fn set_flag(value: int, flag: int) -> int {
+    return value | flag;
+}
+
+fn toggle_flag(value: int, flag: int) -> int {
+    return value ^ flag;
+}
+
+// ---------------------------------------------------------------------------
+// String comparison
+// ---------------------------------------------------------------------------
+
+fn classify_word(w: string) -> string {
+    if (w == "hello") { return "greeting"; }
+    if (w == "goodbye") { return "farewell"; }
+    if (w == "") { return "empty"; }
+    return "other";
+}
+
+// ---------------------------------------------------------------------------
+// Nested control flow
+// ---------------------------------------------------------------------------
+
+fn collatz_steps(n: int) -> int {
+    let steps = 0;
+    let val = n;
+    while (val != 1) {
+        let m2 = val - (val / 2) * 2;
+        if (m2 == 0) {
+            val = val / 2;
+        } else {
+            val = val * 3 + 1;
+        }
+        steps = steps + 1;
+    }
+    return steps;
+}
+
+// ---------------------------------------------------------------------------
+// Trailing comma in struct literals
+// ---------------------------------------------------------------------------
+
+fn trailing_comma_test() -> Point {
+    return Point {
+        x: 100,
+        y: 200,
+    };
+}
+
+// ---------------------------------------------------------------------------
+// Test runner
+// ---------------------------------------------------------------------------
+
+fn assert_eq_int(label: string, expected: int, actual: int) {
+    if (expected == actual) {
+        puts(str_concat("  PASS: ", label));
+    } else {
+        puts(str_concat("  FAIL: ", str_concat(label, str_concat(" expected=", str_concat(fmt_int(expected), str_concat(" actual=", fmt_int(actual)))))));
+    }
+}
+
+fn assert_eq_str(label: string, expected: string, actual: string) {
+    if (expected == actual) {
+        puts(str_concat("  PASS: ", label));
+    } else {
+        puts(str_concat("  FAIL: ", str_concat(label, str_concat(" expected=", str_concat(expected, str_concat(" actual=", actual))))));
+    }
+}
+
+fn assert_true(label: string, value: bool) {
+    if (value) { puts(str_concat("  PASS: ", label)); }
+    else { puts(str_concat("  FAIL: ", label)); }
+}
+
+// ---------------------------------------------------------------------------
+// Main
+// ---------------------------------------------------------------------------
+
+fn main() -> int {
+    puts("=== krakenc Translator Test Suite ===");
+    puts("");
+
+    // Structs
+    puts("[Structs]");
+    let p1 = new_point(3, 4);
+    assert_eq_int("point.x", 3, p1.x);
+    assert_eq_int("point.y", 4, p1.y);
+
+    // Impl methods
+    puts("[Impl]");
+    assert_eq_int("dist_sq(3,4)", 25, Point_dist_sq(p1));
+    let p2 = new_point(1, 2);
+    let p3 = Point_add(p1, p2);
+    assert_eq_int("add.x", 4, p3.x);
+    assert_eq_int("add.y", 6, p3.y);
+    assert_eq_str("to_string", "(3,4)", Point_to_string(p1));
+
+    // Trailing comma
+    puts("[Trailing Comma]");
+    let tc = trailing_comma_test();
+    assert_eq_int("trailing.x", 100, tc.x);
+    assert_eq_int("trailing.y", 200, tc.y);
+
+    // Enums
+    puts("[Enums]");
+    assert_eq_str("dir north", "north", dir_name(Direction::North));
+    assert_eq_str("dir south", "south", dir_name(Direction::South));
+    assert_eq_str("dir east", "east", dir_name(Direction::East));
+    assert_eq_str("dir west", "west", dir_name(Direction::West));
+
+    // Match integers
+    puts("[Match]");
+    assert_eq_int("match(1)", 10, match_int(1));
+    assert_eq_int("match(2)", 20, match_int(2));
+    assert_eq_int("match(3)", 30, match_int(3));
+    assert_eq_int("match(9)", 99, match_int(9));
+
+    // For-in
+    puts("[For-in]");
+    assert_eq_int("sum(0..5)", 10, sum_range(0, 5));
+    assert_eq_int("sum(1..4)", 6, sum_range(1, 4));
+    assert_eq_int("sum(0..1)", 0, sum_range(0, 1));
+
+    // While + string
+    puts("[While + String]");
+    assert_eq_str("repeat('ab',3)", "ababab", repeat_str("ab", 3));
+    assert_eq_str("repeat('x',0)", "", repeat_str("x", 0));
+
+    // Bitwise
+    puts("[Bitwise]");
+    assert_true("has_flag(7,2)", has_flag(7, 2));
+    assert_true("!has_flag(4,2)", !has_flag(4, 2));
+    assert_eq_int("set_flag(4,2)", 6, set_flag(4, 2));
+    assert_eq_int("toggle(7,2)", 5, toggle_flag(7, 2));
+
+    // String comparison
+    puts("[String ==]");
+    assert_eq_str("classify hello", "greeting", classify_word("hello"));
+    assert_eq_str("classify goodbye", "farewell", classify_word("goodbye"));
+    assert_eq_str("classify empty", "empty", classify_word(""));
+    assert_eq_str("classify other", "other", classify_word("test"));
+
+    // FizzBuzz
+    puts("[FizzBuzz]");
+    assert_eq_str("fizzbuzz(3)", "fizz", fizzbuzz(3));
+    assert_eq_str("fizzbuzz(5)", "buzz", fizzbuzz(5));
+    assert_eq_str("fizzbuzz(15)", "fizzbuzz", fizzbuzz(15));
+    assert_eq_str("fizzbuzz(7)", "7", fizzbuzz(7));
+
+    // Nested control flow
+    puts("[Nested]");
+    assert_eq_int("collatz(1)", 0, collatz_steps(1));
+    assert_eq_int("collatz(6)", 8, collatz_steps(6));
+    assert_eq_int("collatz(27)", 111, collatz_steps(27));
+
+    // C-style for loop
+    puts("[For loop]");
+    let sum = 0;
+    for (let i: int = 0; i < 10; i = i + 1) {
+        sum = sum + i;
+    }
+    assert_eq_int("for sum(0..10)", 45, sum);
+
+    puts("");
+    puts("=== All tests complete ===");
+    return 0;
+}

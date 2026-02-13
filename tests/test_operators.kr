@@ -1,0 +1,75 @@
+// krakenc operator test suite
+// Tests: shift operators, modulo, compound assignments, bitwise NOT, unary minus
+
+fn assert_eq(label: string, expected: int, actual: int) {
+    if (expected == actual) {
+        puts(str_concat("  PASS: ", label));
+    } else {
+        puts(str_concat("  FAIL: ", str_concat(label, str_concat(" expected=", str_concat(fmt_int(expected), str_concat(" actual=", fmt_int(actual)))))));
+    }
+}
+
+fn assert_true(label: string, value: bool) {
+    if (value) { puts(str_concat("  PASS: ", label)); }
+    else { puts(str_concat("  FAIL: ", label)); }
+}
+
+fn main() -> int {
+    puts("=== krakenc Operator Tests ===");
+    puts("");
+
+    // Shift operators
+    puts("[Shift]");
+    assert_eq("1<<3", 8, 1 << 3);
+    assert_eq("16>>2", 4, 16 >> 2);
+    assert_eq("255<<8", 65280, 255 << 8);
+    assert_eq("1024>>5", 32, 1024 >> 5);
+
+    // Modulo
+    puts("[Modulo]");
+    assert_eq("10%3", 1, 10 % 3);
+    assert_eq("7%2", 1, 7 % 2);
+    assert_eq("8%4", 0, 8 % 4);
+    assert_eq("15%7", 1, 15 % 7);
+
+    // Compound assignments
+    puts("[Compound Assign]");
+    let x = 10;
+    x += 5;
+    assert_eq("x+=5", 15, x);
+    x -= 3;
+    assert_eq("x-=3", 12, x);
+    x *= 2;
+    assert_eq("x*=2", 24, x);
+    x /= 4;
+    assert_eq("x/=4", 6, x);
+    x %= 4;
+    assert_eq("x%=4", 2, x);
+
+    // Bitwise NOT
+    puts("[Bitwise NOT]");
+    let mask: int = 255;
+    assert_eq("~0", -1, ~0);
+    assert_eq("~~5", 5, ~~5);
+
+    // Unary minus
+    puts("[Unary Minus]");
+    assert_eq("-(-5)", 5, -(-5));
+    assert_eq("-(3+4)", -7, -(3 + 4));
+
+    // Combined expressions
+    puts("[Combined]");
+    assert_eq("(1<<4)|3", 19, (1 << 4) | 3);
+    assert_eq("(0xFF&0xF0)>>4", 15, (255 & 240) >> 4);
+    assert_eq("5+3*2", 11, 5 + 3 * 2);
+    assert_eq("(5+3)*2", 16, (5 + 3) * 2);
+
+    // Comparison with shift
+    puts("[Shift + Compare]");
+    assert_true("1<<3 > 5", (1 << 3) > 5);
+    assert_true("16>>2 == 4", (16 >> 2) == 4);
+
+    puts("");
+    puts("=== All operator tests complete ===");
+    return 0;
+}

@@ -1,0 +1,40 @@
+enum Color {
+    Red,
+    Green,
+    Blue,
+}
+
+fn color_name(c: int) -> string {
+    match (c) {
+        Color::Red -> { return "red"; }
+        Color::Green -> { return "green"; }
+        Color::Blue -> { return "blue"; }
+        _ -> { return "unknown"; }
+    }
+    return "unreachable";
+}
+
+fn test_match_int(x: int) -> int {
+    match (x) {
+        1 -> { return 10; }
+        2 -> { return 20; }
+        3 -> { return 30; }
+        _ -> { return 99; }
+    }
+    return 0;
+}
+
+fn main() -> int {
+    let r = Color::Red;
+    let g = Color::Green;
+    let b = Color::Blue;
+
+    puts(str_concat("red=", color_name(r)));
+    puts(str_concat("green=", color_name(g)));
+    puts(str_concat("blue=", color_name(b)));
+
+    puts(str_concat("match(1)=", fmt_int(test_match_int(1))));
+    puts(str_concat("match(2)=", fmt_int(test_match_int(2))));
+    puts(str_concat("match(5)=", fmt_int(test_match_int(5))));
+    return 0;
+}

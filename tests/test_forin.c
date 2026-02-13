@@ -91,23 +91,16 @@ void kr_vec_string_free(void* vp) { KrVecString* v = (KrVecString*)vp; free(v->d
 int64_t kr_main();
 
 int64_t kr_main() {
-    void* v = kr_vec_int_new();
-    kr_vec_int_push(v, 10);
-    kr_vec_int_push(v, 20);
-    kr_vec_int_push(v, 30);
-    __auto_type i = 0;
-    while (i < 3) {
-        kr_puts(kr_str_concat("v[", kr_str_concat(kr_fmt_int(i), kr_str_concat("]=", kr_fmt_int(kr_vec_int_get(v, i))))));
-        i = i + 1;
+    __auto_type sum = 0;
+    for (int64_t i = 0; i < 5; i++) {
+        sum = sum + i;
     }
-    void* names = kr_vec_string_new();
-    kr_vec_string_push(names, "Alice");
-    kr_vec_string_push(names, "Bob");
-    kr_vec_string_push(names, "Charlie");
-    kr_puts(kr_str_concat("len=", kr_fmt_int(kr_vec_string_len(names))));
-    kr_puts(kr_str_concat("names[1]=", kr_vec_string_get(names, 1)));
-    kr_vec_int_free(v);
-    kr_vec_string_free(names);
+    kr_puts(kr_str_concat("sum(0..5)=", kr_fmt_int(sum)));
+    __auto_type sum2 = 0;
+    for (int64_t j = 1; j < 4; j++) {
+        sum2 = sum2 + j;
+    }
+    kr_puts(kr_str_concat("sum(1..4)=", kr_fmt_int(sum2)));
     return 0;
 }
 
