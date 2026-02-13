@@ -11,6 +11,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Self-Hosting Achieved** — krakenc can now compile itself through multiple generations with byte-identical output (fixed point at gen2→gen3)
+  - Multi-file import resolution: `resolve_imports()` reads imported `.kr` files and concatenates sources before tokenization
+  - `dir_of()` helper extracts directory from file path for relative import resolution
+- **General String Equality Detection** — `scan_string_eq()` lookahead scanner detects `EXPR == STRING_LIT` patterns with paren-matching, replacing the limited `IDENTIFIER == STRING_LIT` fast path
+  - Stops at `&&`, `||`, `;`, `{`, `}` boundaries to avoid crossing expression scopes
+  - Handles function call results: `str_slice(...) == "import "` now correctly emits `_kr_str_eq()`
+- **Bitwise Operators** — added `&` (AND), `|` (OR), `^` (XOR) to expression precedence chain between logical AND and equality
+- **Trailing Comma Support** — struct literals now correctly handle trailing commas before closing `}`
+
+### Changed
+- **Two-Pass Forward Declarations** (`emit_forward_decls`) — emit ALL struct typedefs first, then ALL function prototypes; ensures struct types are declared before function signatures that reference them
+- **Two-Pass Program Translation** (`translate_program`) — emit ALL struct definitions first, then ALL function bodies; ensures struct types are complete before functions that use them by value
+- **Type Inference for Untyped Variables** — `let x = expr;` without type annotation now emits `__auto_type` (GCC/Clang extension) instead of `int64_t`, allowing correct type inference from initializer
+- **For Loop Increment** — translator now detects assignment operators (`=`, `+=`, `-=`, `*=`) in for loop increment clause
+
+### Fixed
+- Struct literal trailing comma caused `}` to be parsed as a field name, corrupting all subsequent function output
+- Forward declaration ordering: `Target` and `Diagnostic` structs used in function signatures before their typedefs appeared
+- Struct definition ordering: struct bodies emitted after functions that used them by value caused incomplete type errors
+- Bitwise AND (`&`) operator was not in the expression precedence chain, causing `node.flags & flag` to be split into separate statements
+- String equality in `resolve_imports` used pointer comparison instead of `strcmp` because the LHS was a function call result, not a simple identifier
+
 - **Token-Driven Translator** (`src/parser.kr`) — replaced AST-based parser with single-pass token-to-C translator
   - `Translator` struct with token position, output buffer, indent depth, error tracking, and source file context
   - Token access helpers: `tr_at_end`, `tr_kind`, `tr_lexeme`, `tr_line`, `tr_col`, `tr_advance`, `tr_skip`

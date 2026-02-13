@@ -1,0 +1,46 @@
+pub struct Point {
+    x: int;
+    y: int;
+}
+
+fn make_point(x: int, y: int) -> Point {
+    return Point { x: x, y: y };
+}
+
+fn distance_sq(p: Point) -> int {
+    return p.x * p.x + p.y * p.y;
+}
+
+fn count_to(n: int) -> int {
+    let sum = 0;
+    let i = 0;
+    while (i < n) {
+        sum = sum + i;
+        i = i + 1;
+    }
+    return sum;
+}
+
+fn check_keyword(s: string) -> string {
+    if (s == "fn") { return "keyword:fn"; }
+    if (s == "let") { return "keyword:let"; }
+    if (s == "if") { return "keyword:if"; }
+    return str_concat("ident:", s);
+}
+
+fn main() -> int {
+    let p: Point = make_point(3, 4);
+    puts(str_concat("dist_sq: ", fmt_int(distance_sq(p))));
+
+    puts(str_concat("sum(10): ", fmt_int(count_to(10))));
+
+    puts(check_keyword("fn"));
+    puts(check_keyword("let"));
+    puts(check_keyword("hello"));
+
+    for (let i = 0; i < 3; i = i + 1) {
+        puts(str_concat("i=", fmt_int(i)));
+    }
+
+    return 0;
+}

@@ -318,50 +318,82 @@ pub fn c_size_type(t: Target) -> string {
 // ---------------------------------------------------------------------------
 
 pub fn c_runtime_shims_posix() -> string {
-    return str_concat(
-        str_concat(
-            str_concat(
-                "void kr_puts(kr_str s) { puts(s); }\n",
-                "int64_t kr_strlen(kr_str s) { return (int64_t)strlen(s); }\n"
-            ),
-            "int64_t kr_abs(int64_t x) { return x < 0 ? -x : x; }\n"
-        ),
-        "int kr_strcmp(kr_str a, kr_str b) { return strcmp(a, b); }\n"
-    );
+    let s = "";
+    // Core I/O
+    s = str_concat(s, "void kr_puts(kr_str s) { puts(s); }\n");
+    s = str_concat(s, "int64_t kr_strlen(kr_str s) { return (int64_t)strlen(s); }\n");
+    s = str_concat(s, "int64_t kr_abs(int64_t x) { return x < 0 ? -x : x; }\n");
+    s = str_concat(s, "int kr_strcmp(kr_str a, kr_str b) { return strcmp(a, b); }\n");
+    s = str_concat(s, "static inline bool _kr_str_eq(kr_str a, kr_str b) { return strcmp(a,b)==0; }\n");
+    s = str_concat(s, "static inline bool _kr_str_neq(kr_str a, kr_str b) { return strcmp(a,b)!=0; }\n");
+    // String operations
+    s = str_concat(s, "kr_str kr_str_concat(kr_str a, kr_str b) {\n");
+    s = str_concat(s, "  size_t la = strlen(a), lb = strlen(b);\n");
+    s = str_concat(s, "  char* r = (char*)malloc(la + lb + 1);\n");
+    s = str_concat(s, "  memcpy(r, a, la); memcpy(r + la, b, lb); r[la+lb] = 0; return r;\n}\n");
+    s = str_concat(s, "int64_t kr_str_char_at(kr_str s, int64_t i) { return (int64_t)(unsigned char)s[i]; }\n");
+    s = str_concat(s, "kr_str kr_str_slice(kr_str s, int64_t start, int64_t end) {\n");
+    s = str_concat(s, "  int64_t len = end - start; char* r = (char*)malloc(len + 1);\n");
+    s = str_concat(s, "  memcpy(r, s + start, len); r[len] = 0; return r;\n}\n");
+    s = str_concat(s, "bool kr_str_ends_with(kr_str s, kr_str suffix) {\n");
+    s = str_concat(s, "  size_t ls = strlen(s), lx = strlen(suffix);\n");
+    s = str_concat(s, "  return lx <= ls && strcmp(s + ls - lx, suffix) == 0;\n}\n");
+    // Formatting
+    s = str_concat(s, "kr_str kr_fmt_int(int64_t v) {\n");
+    s = str_concat(s, "  char* r = (char*)malloc(32); snprintf(r, 32, \"%lld\", (long long)v); return r;\n}\n");
+    // Process / environment
+    s = str_concat(s, "kr_str kr_getenv(kr_str name) {\n");
+    s = str_concat(s, "  const char* v = getenv(name); return v ? v : \"\";\n}\n");
+    s = str_concat(s, "int64_t kr_system(kr_str cmd) { return (int64_t)system(cmd); }\n");
+    s = str_concat(s, "void kr_exit(int64_t code) { exit((int)code); }\n");
+    // File I/O
+    s = str_concat(s, "void* kr_fopen(kr_str path, kr_str mode) { return (void*)fopen(path, mode); }\n");
+    s = str_concat(s, "void kr_fclose(void* f) { fclose((FILE*)f); }\n");
+    s = str_concat(s, "void kr_fputs(kr_str s, void* f) { fputs(s, (FILE*)f); }\n");
+    s = str_concat(s, "kr_str kr_file_read_string(kr_str path) {\n");
+    s = str_concat(s, "  FILE* f = fopen(path, \"rb\"); if(!f) return \"\";\n");
+    s = str_concat(s, "  fseek(f, 0, SEEK_END); long sz = ftell(f); fseek(f, 0, SEEK_SET);\n");
+    s = str_concat(s, "  char* buf = (char*)malloc(sz + 1); fread(buf, 1, sz, f); buf[sz] = 0;\n");
+    s = str_concat(s, "  fclose(f); return buf;\n}\n");
+    // VecInt — dynamic array of int64_t
+    s = str_concat(s, "typedef struct { int64_t* data; int64_t len; int64_t cap; } KrVecInt;\n");
+    s = str_concat(s, "void* kr_vec_int_new() {\n");
+    s = str_concat(s, "  KrVecInt* v = (KrVecInt*)malloc(sizeof(KrVecInt));\n");
+    s = str_concat(s, "  v->data = (int64_t*)malloc(16 * sizeof(int64_t)); v->len = 0; v->cap = 16; return v;\n}\n");
+    s = str_concat(s, "void kr_vec_int_push(void* vp, int64_t val) {\n");
+    s = str_concat(s, "  KrVecInt* v = (KrVecInt*)vp;\n");
+    s = str_concat(s, "  if(v->len >= v->cap) { v->cap *= 2; v->data = (int64_t*)realloc(v->data, v->cap * sizeof(int64_t)); }\n");
+    s = str_concat(s, "  v->data[v->len++] = val;\n}\n");
+    s = str_concat(s, "int64_t kr_vec_int_get(void* vp, int64_t i) { return ((KrVecInt*)vp)->data[i]; }\n");
+    s = str_concat(s, "void kr_vec_int_set(void* vp, int64_t i, int64_t val) { ((KrVecInt*)vp)->data[i] = val; }\n");
+    s = str_concat(s, "int64_t kr_vec_int_len(void* vp) { return ((KrVecInt*)vp)->len; }\n");
+    s = str_concat(s, "void kr_vec_int_free(void* vp) { KrVecInt* v = (KrVecInt*)vp; free(v->data); free(v); }\n");
+    // VecString — dynamic array of const char*
+    s = str_concat(s, "typedef struct { const char** data; int64_t len; int64_t cap; } KrVecString;\n");
+    s = str_concat(s, "void* kr_vec_string_new() {\n");
+    s = str_concat(s, "  KrVecString* v = (KrVecString*)malloc(sizeof(KrVecString));\n");
+    s = str_concat(s, "  v->data = (const char**)malloc(16 * sizeof(const char*)); v->len = 0; v->cap = 16; return v;\n}\n");
+    s = str_concat(s, "void kr_vec_string_push(void* vp, kr_str val) {\n");
+    s = str_concat(s, "  KrVecString* v = (KrVecString*)vp;\n");
+    s = str_concat(s, "  if(v->len >= v->cap) { v->cap *= 2; v->data = (const char**)realloc(v->data, v->cap * sizeof(const char*)); }\n");
+    s = str_concat(s, "  v->data[v->len++] = val;\n}\n");
+    s = str_concat(s, "kr_str kr_vec_string_get(void* vp, int64_t i) { return ((KrVecString*)vp)->data[i]; }\n");
+    s = str_concat(s, "void kr_vec_string_set(void* vp, int64_t i, kr_str val) { ((KrVecString*)vp)->data[i] = val; }\n");
+    s = str_concat(s, "int64_t kr_vec_string_len(void* vp) { return ((KrVecString*)vp)->len; }\n");
+    s = str_concat(s, "void kr_vec_string_free(void* vp) { KrVecString* v = (KrVecString*)vp; free(v->data); free(v); }\n");
+    return s;
 }
 
 pub fn c_runtime_shims_windows() -> string {
-    return str_concat(
-        str_concat(
-            str_concat(
-                str_concat(
-                    str_concat(
-                        "void kr_puts(kr_str s) { puts(s); }\n",
-                        "int64_t kr_strlen(kr_str s) { return (int64_t)strlen(s); }\n"
-                    ),
-                    "int64_t kr_abs(int64_t x) { return x < 0 ? -x : x; }\n"
-                ),
-                "int kr_strcmp(kr_str a, kr_str b) { return strcmp(a, b); }\n"
-            ),
-            // Windows-specific shims for POSIX compatibility
-            "#define kr_snprintf _snprintf\n"
-        ),
-        "#define kr_strdup _strdup\n"
-    );
+    let s = c_runtime_shims_posix();
+    s = str_concat(s, "#define kr_snprintf _snprintf\n");
+    s = str_concat(s, "#define kr_strdup _strdup\n");
+    return s;
 }
 
 pub fn c_runtime_shims_wasi() -> string {
-    // WASI has limited I/O; some functions need stubs
-    return str_concat(
-        str_concat(
-            str_concat(
-                "void kr_puts(kr_str s) { puts(s); }\n",
-                "int64_t kr_strlen(kr_str s) { return (int64_t)strlen(s); }\n"
-            ),
-            "int64_t kr_abs(int64_t x) { return x < 0 ? -x : x; }\n"
-        ),
-        "int kr_strcmp(kr_str a, kr_str b) { return strcmp(a, b); }\n"
-    );
+    // WASI uses the same shims; limited I/O stubs can be added later
+    return c_runtime_shims_posix();
 }
 
 pub fn c_runtime_shims_for_target(t: Target) -> string {

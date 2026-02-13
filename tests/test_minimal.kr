@@ -1,0 +1,4 @@
+fn main() -> int {
+    puts("hello from krakenc");
+    return 0;
+}

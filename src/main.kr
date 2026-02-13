@@ -25,7 +25,7 @@ import platform;
 // Version
 // ---------------------------------------------------------------------------
 
-fn COMPILER_VERSION() -> string { return "0.10.0-beta"; }
+fn COMPILER_VERSION() -> string { return "0.9.3"; }
 fn COMPILER_NAME() -> string    { return "krakenc"; }
 
 // ---------------------------------------------------------------------------
@@ -72,6 +72,59 @@ fn print_help() -> void {
     puts("");
     puts("Target shortcuts: linux, macos, windows, freebsd, wasm");
     puts("");
+}
+
+// ---------------------------------------------------------------------------
+// Import resolution — multi-file source concatenation
+// ---------------------------------------------------------------------------
+
+// Extract directory from a file path (everything up to and including the last '/')
+fn dir_of(path: string) -> string {
+    let len = strlen(path);
+    let i = len - 1;
+    while (i >= 0) {
+        if (str_char_at(path, i) == 47) {
+            return str_slice(path, 0, i + 1);
+        }
+        i = i - 1;
+    }
+    return "";
+}
+
+// Resolve imports: scan source for 'import <name>;' lines, read each file,
+// and return the concatenated source (imports first, then original source).
+fn resolve_imports(source: string, source_dir: string) -> string {
+    let result = "";
+    let len = strlen(source);
+    let i = 0;
+    while (i < len) {
+        // Look for 'import ' at current position (after newline or start)
+        if (i == 0 || str_char_at(source, i - 1) == 10) {
+            // Skip whitespace
+            let j = i;
+            while (j < len && (str_char_at(source, j) == 32 || str_char_at(source, j) == 9)) {
+                j = j + 1;
+            }
+            // Check for "import "
+            if (j + 7 <= len && str_slice(source, j, j + 7) == "import ") {
+                let k = j + 7;
+                // Read module name
+                while (k < len && str_char_at(source, k) != 59 && str_char_at(source, k) != 10) {
+                    k = k + 1;
+                }
+                let mod_name = str_slice(source, j + 7, k);
+                let mod_path = str_concat(source_dir, str_concat(mod_name, ".kr"));
+                let mod_source = file_read_string(mod_path);
+                if (mod_source != "") {
+                    result = str_concat(result, str_concat(mod_source, "\n"));
+                }
+            }
+        }
+        i = i + 1;
+    }
+    // Append the original source after all imports
+    result = str_concat(result, source);
+    return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -176,6 +229,9 @@ fn main() -> int {
             puts(str_concat("error: could not read file: ", source_file));
             return 1;
         }
+        // Resolve imports: read imported files and prepend their contents
+        let src_dir = dir_of(source_file);
+        source = resolve_imports(source, src_dir);
     } else {
         // Built-in test program for development
         source_file = "test.kr";

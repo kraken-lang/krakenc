@@ -1,0 +1,24 @@
+fn main() -> int {
+    let v: VecInt = vec_int_new();
+    vec_int_push(v, 10);
+    vec_int_push(v, 20);
+    vec_int_push(v, 30);
+
+    let i = 0;
+    while (i < 3) {
+        puts(str_concat("v[", str_concat(fmt_int(i), str_concat("]=", fmt_int(vec_int_get(v, i))))));
+        i = i + 1;
+    }
+
+    let names: VecString = vec_string_new();
+    vec_string_push(names, "Alice");
+    vec_string_push(names, "Bob");
+    vec_string_push(names, "Charlie");
+
+    puts(str_concat("len=", fmt_int(vec_string_len(names))));
+    puts(str_concat("names[1]=", vec_string_get(names, 1)));
+
+    vec_int_free(v);
+    vec_string_free(names);
+    return 0;
+}

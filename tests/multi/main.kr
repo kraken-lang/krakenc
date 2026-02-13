@@ -1,0 +1,9 @@
+module main;
+
+import math;
+
+fn main() -> int {
+    puts(str_concat("square(5)=", fmt_int(square(5))));
+    puts(str_concat("cube(3)=", fmt_int(cube(3))));
+    return 0;
+}
