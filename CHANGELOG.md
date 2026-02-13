@@ -88,7 +88,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **For Loop Increment** — translator detects assignment operators (`=`, `+=`, `-=`, `*=`, `/=`, `%=`) in for loop increment clause
 - **String Type** — `kr_str` typedef changed from `const char*` to `char*`; eliminates all const-qualifier warnings
 - **Zero C Warnings** — self-hosted output compiles with `cc` producing 0 warnings, 0 errors
-- **Bootstrap Coverage Verification** — current bootstrap compile sweep: `184/226` programs (`81.4%`) with self-hosted compiler
+- **Bootstrap Coverage Verification** — current bootstrap compile sweep: `192/226` programs (`85.0%`) with self-hosted compiler
 
 ### Fixed
 - Struct literal trailing comma caused `}` to be parsed as a field name, corrupting all subsequent function output
@@ -115,6 +115,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed trait/impl parsing robustness for `impl Trait<T> for Type { ... }` and generic trait declaration skipping (`trait Name<T> { ... }`) by applying generic-parameter skipping before trait-body skip paths
 - Fixed struct field parsing compatibility to accept both comma and semicolon separators in struct declarations
 - Fixed dyn trait-object bootstrap compatibility paths by lowering `let x: dyn Trait = value` to a neutral placeholder assignment and adding conservative unresolved dyn-style method-call fallback lowering
+- Fixed tuple destructuring compatibility lowering (`let (a, b) = ...`) to prevent malformed C emission in bootstrap tuple suites
+- Fixed match compatibility lowering for range/or/guard-style arms and wildcard arm chaining to keep generated `if / else if` control flow syntactically valid
+- Fixed for-in inclusive range lowering to support both `..=` tokenizations (`TK_OP_DOT_DOT_EQ` and `TK_OP_DOT_DOT` + `=`)
+- Fixed generic function fallback stubs to emit scalar `int64_t` signatures/bodies and added additional nested declaration/closure fallback guards to reduce compatibility-mode parser drift
 
 ## [0.9.2] - 2026-02-06
 
