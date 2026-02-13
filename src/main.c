@@ -7,6 +7,9 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <unistd.h>
+#include <math.h>
+#include <time.h>
+#include <ctype.h>
 
 typedef int64_t kr_int;
 typedef double kr_float;
@@ -86,6 +89,201 @@ kr_str kr_vec_string_get(void* vp, int64_t i) { return ((KrVecString*)vp)->data[
 void kr_vec_string_set(void* vp, int64_t i, kr_str val) { ((KrVecString*)vp)->data[i] = val; }
 int64_t kr_vec_string_len(void* vp) { return ((KrVecString*)vp)->len; }
 void kr_vec_string_free(void* vp) { KrVecString* v = (KrVecString*)vp; free(v->data); free(v); }
+int64_t kr_vec_int_pop(void* vp) { KrVecInt* v = (KrVecInt*)vp; return v->data[--v->len]; }
+void kr_vec_int_clear(void* vp) { ((KrVecInt*)vp)->len = 0; }
+int64_t kr_vec_int_capacity(void* vp) { return ((KrVecInt*)vp)->cap; }
+void kr_vec_int_reserve(void* vp, int64_t n) {
+  KrVecInt* v = (KrVecInt*)vp; if(n>v->cap){v->cap=n;v->data=(int64_t*)realloc(v->data,n*sizeof(int64_t));}
+}
+void* kr_vec_int_with_capacity(int64_t n) {
+  KrVecInt* v=(KrVecInt*)malloc(sizeof(KrVecInt));v->data=(int64_t*)malloc(n*sizeof(int64_t));v->len=0;v->cap=n;return v;
+}
+void kr_vec_int_insert(void* vp, int64_t i, int64_t val) {
+  KrVecInt* v=(KrVecInt*)vp; kr_vec_int_push(vp,0); memmove(&v->data[i+1],&v->data[i],(v->len-i-1)*sizeof(int64_t)); v->data[i]=val;
+}
+int64_t kr_vec_int_remove(void* vp, int64_t i) {
+  KrVecInt* v=(KrVecInt*)vp; int64_t val=v->data[i]; memmove(&v->data[i],&v->data[i+1],(v->len-i-1)*sizeof(int64_t)); v->len--; return val;
+}
+int64_t kr_vec_int_swap_remove(void* vp, int64_t i) { KrVecInt* v=(KrVecInt*)vp; int64_t val=v->data[i]; v->data[i]=v->data[--v->len]; return val; }
+void kr_vec_int_shrink_to_fit(void* vp) { KrVecInt* v=(KrVecInt*)vp; if(v->len<v->cap){v->cap=v->len?v->len:1;v->data=(int64_t*)realloc(v->data,v->cap*sizeof(int64_t));} }
+kr_str kr_vec_string_pop(void* vp) { KrVecString* v = (KrVecString*)vp; return v->data[--v->len]; }
+void kr_vec_string_clear(void* vp) { ((KrVecString*)vp)->len = 0; }
+int64_t kr_vec_string_capacity(void* vp) { return ((KrVecString*)vp)->cap; }
+void kr_vec_string_reserve(void* vp, int64_t n) {
+  KrVecString* v = (KrVecString*)vp; if(n>v->cap){v->cap=n;v->data=(char**)realloc(v->data,n*sizeof(char*));}
+}
+void* kr_vec_string_with_capacity(int64_t n) {
+  KrVecString* v=(KrVecString*)malloc(sizeof(KrVecString));v->data=(char**)malloc(n*sizeof(char*));v->len=0;v->cap=n;return v;
+}
+void kr_vec_string_shrink_to_fit(void* vp) { KrVecString* v=(KrVecString*)vp; if(v->len<v->cap){v->cap=v->len?v->len:1;v->data=(char**)realloc(v->data,v->cap*sizeof(char*));} }
+kr_str kr_vec_string_swap_remove(void* vp, int64_t i) { KrVecString* v=(KrVecString*)vp; kr_str val=v->data[i]; v->data[i]=v->data[--v->len]; return val; }
+typedef struct { void** data; int64_t len; int64_t cap; } KrVecBytes;
+void* kr_vec_bytes_new() { KrVecBytes* v=(KrVecBytes*)malloc(sizeof(KrVecBytes)); v->data=(void**)malloc(16*sizeof(void*)); v->len=0; v->cap=16; return v; }
+void kr_vec_bytes_push(void* vp, void* val) { KrVecBytes* v=(KrVecBytes*)vp; if(v->len>=v->cap){v->cap*=2;v->data=(void**)realloc(v->data,v->cap*sizeof(void*));} v->data[v->len++]=val; }
+void* kr_vec_bytes_get(void* vp, int64_t i) { return ((KrVecBytes*)vp)->data[i]; }
+void kr_vec_bytes_set(void* vp, int64_t i, void* val) { ((KrVecBytes*)vp)->data[i]=val; }
+int64_t kr_vec_bytes_len(void* vp) { return ((KrVecBytes*)vp)->len; }
+void kr_vec_bytes_free(void* vp) { KrVecBytes* v=(KrVecBytes*)vp; free(v->data); free(v); }
+void* kr_vec_bytes_pop(void* vp) { KrVecBytes* v=(KrVecBytes*)vp; return v->data[--v->len]; }
+void kr_vec_bytes_clear(void* vp) { ((KrVecBytes*)vp)->len=0; }
+int64_t kr_vec_bytes_capacity(void* vp) { return ((KrVecBytes*)vp)->cap; }
+void kr_vec_bytes_reserve(void* vp, int64_t n) { KrVecBytes* v=(KrVecBytes*)vp; if(n>v->cap){v->cap=n;v->data=(void**)realloc(v->data,n*sizeof(void*));} }
+void* kr_vec_bytes_with_capacity(int64_t n) { KrVecBytes* v=(KrVecBytes*)malloc(sizeof(KrVecBytes)); v->data=(void**)malloc(n*sizeof(void*)); v->len=0; v->cap=n; return v; }
+void kr_vec_bytes_shrink_to_fit(void* vp) { KrVecBytes* v=(KrVecBytes*)vp; if(v->len<v->cap){v->cap=v->len?v->len:1;v->data=(void**)realloc(v->data,v->cap*sizeof(void*));} }
+void* kr_vec_bytes_swap_remove(void* vp, int64_t i) { KrVecBytes* v=(KrVecBytes*)vp; void* val=v->data[i]; v->data[i]=v->data[--v->len]; return val; }
+typedef struct { char** keys; int64_t* vals; int64_t cap; int64_t len; } KrMapSI;
+static uint64_t _kr_hash_str(const char* s) { uint64_t h=5381; while(*s) h=h*33+(*s++); return h; }
+void* kr_map_string_int_new() {
+  KrMapSI* m=(KrMapSI*)malloc(sizeof(KrMapSI)); m->cap=64; m->len=0;
+  m->keys=(char**)calloc(64,sizeof(char*)); m->vals=(int64_t*)calloc(64,sizeof(int64_t)); return m;
+}
+void kr_map_string_int_set(void* mp, kr_str key, int64_t val) {
+  KrMapSI* m=(KrMapSI*)mp; uint64_t h=_kr_hash_str(key)%m->cap;
+  while(m->keys[h]){if(strcmp(m->keys[h],key)==0){m->vals[h]=val;return;} h=(h+1)%m->cap;}
+  m->keys[h]=strdup(key); m->vals[h]=val; m->len++;
+}
+int64_t kr_map_string_int_get(void* mp, kr_str key) {
+  KrMapSI* m=(KrMapSI*)mp; uint64_t h=_kr_hash_str(key)%m->cap;
+  while(m->keys[h]){if(strcmp(m->keys[h],key)==0) return m->vals[h]; h=(h+1)%m->cap;} return 0;
+}
+int64_t kr_map_string_int_has(void* mp, kr_str key) {
+  KrMapSI* m=(KrMapSI*)mp; uint64_t h=_kr_hash_str(key)%m->cap;
+  while(m->keys[h]){if(strcmp(m->keys[h],key)==0) return 1; h=(h+1)%m->cap;} return 0;
+}
+int64_t kr_map_string_int_len(void* mp) { return ((KrMapSI*)mp)->len; }
+void kr_map_string_int_delete(void* mp, kr_str key) {
+  KrMapSI* m=(KrMapSI*)mp; uint64_t h=_kr_hash_str(key)%m->cap;
+  while(m->keys[h]){if(strcmp(m->keys[h],key)==0){free(m->keys[h]);m->keys[h]=NULL;m->len--;return;} h=(h+1)%m->cap;}
+}
+void kr_map_string_int_clear(void* mp) { KrMapSI* m=(KrMapSI*)mp; for(int64_t i=0;i<m->cap;i++){if(m->keys[i])free(m->keys[i]);m->keys[i]=NULL;} m->len=0; }
+void kr_map_string_int_free(void* mp) { KrMapSI* m=(KrMapSI*)mp; for(int64_t i=0;i<m->cap;i++)if(m->keys[i])free(m->keys[i]); free(m->keys);free(m->vals);free(m); }
+void* kr_map_string_int_keys(void* mp) { KrMapSI* m=(KrMapSI*)mp; void* v=kr_vec_string_new(); for(int64_t i=0;i<m->cap;i++)if(m->keys[i])kr_vec_string_push(v,m->keys[i]); return v; }
+void* kr_map_string_int_values(void* mp) { KrMapSI* m=(KrMapSI*)mp; void* v=kr_vec_int_new(); for(int64_t i=0;i<m->cap;i++)if(m->keys[i])kr_vec_int_push(v,m->vals[i]); return v; }
+typedef struct { char** keys; char** vals; int64_t cap; int64_t len; } KrMapSS;
+void* kr_map_string_string_new() {
+  KrMapSS* m=(KrMapSS*)malloc(sizeof(KrMapSS)); m->cap=64; m->len=0;
+  m->keys=(char**)calloc(64,sizeof(char*)); m->vals=(char**)calloc(64,sizeof(char*)); return m;
+}
+void kr_map_string_string_set(void* mp, kr_str key, kr_str val) {
+  KrMapSS* m=(KrMapSS*)mp; uint64_t h=_kr_hash_str(key)%m->cap;
+  while(m->keys[h]){if(strcmp(m->keys[h],key)==0){free(m->vals[h]);m->vals[h]=strdup(val);return;} h=(h+1)%m->cap;}
+  m->keys[h]=strdup(key); m->vals[h]=strdup(val); m->len++;
+}
+kr_str kr_map_string_string_get(void* mp, kr_str key) {
+  KrMapSS* m=(KrMapSS*)mp; uint64_t h=_kr_hash_str(key)%m->cap;
+  while(m->keys[h]){if(strcmp(m->keys[h],key)==0) return m->vals[h]; h=(h+1)%m->cap;} return "";
+}
+int64_t kr_map_string_string_has(void* mp, kr_str key) {
+  KrMapSS* m=(KrMapSS*)mp; uint64_t h=_kr_hash_str(key)%m->cap;
+  while(m->keys[h]){if(strcmp(m->keys[h],key)==0) return 1; h=(h+1)%m->cap;} return 0;
+}
+int64_t kr_map_string_string_len(void* mp) { return ((KrMapSS*)mp)->len; }
+void kr_map_string_string_delete(void* mp, kr_str key) {
+  KrMapSS* m=(KrMapSS*)mp; uint64_t h=_kr_hash_str(key)%m->cap;
+  while(m->keys[h]){if(strcmp(m->keys[h],key)==0){free(m->keys[h]);free(m->vals[h]);m->keys[h]=NULL;m->vals[h]=NULL;m->len--;return;} h=(h+1)%m->cap;}
+}
+void kr_map_string_string_clear(void* mp) { KrMapSS* m=(KrMapSS*)mp; for(int64_t i=0;i<m->cap;i++){if(m->keys[i]){free(m->keys[i]);free(m->vals[i]);m->keys[i]=NULL;m->vals[i]=NULL;}} m->len=0; }
+void kr_map_string_string_free(void* mp) { KrMapSS* m=(KrMapSS*)mp; for(int64_t i=0;i<m->cap;i++){if(m->keys[i]){free(m->keys[i]);free(m->vals[i]);}} free(m->keys);free(m->vals);free(m); }
+void* kr_map_string_string_keys(void* mp) { KrMapSS* m=(KrMapSS*)mp; void* v=kr_vec_string_new(); for(int64_t i=0;i<m->cap;i++)if(m->keys[i])kr_vec_string_push(v,m->keys[i]); return v; }
+void* kr_map_string_string_values(void* mp) { KrMapSS* m=(KrMapSS*)mp; void* v=kr_vec_string_new(); for(int64_t i=0;i<m->cap;i++)if(m->keys[i])kr_vec_string_push(v,m->vals[i]); return v; }
+kr_str kr_fmt_float(double v) { char* r=(char*)malloc(64); snprintf(r,64,"%g",v); return r; }
+kr_str kr_fmt_bool(int64_t v) { return v ? "true" : "false"; }
+kr_str kr_fmt_hex(int64_t v) { char* r=(char*)malloc(32); snprintf(r,32,"0x%llx",(unsigned long long)v); return r; }
+#define kr_printf(...) printf(__VA_ARGS__)
+void kr_putchar(int64_t c) { putchar((int)c); }
+int64_t kr_getchar() { return (int64_t)getchar(); }
+void* kr_malloc(int64_t sz) { return malloc((size_t)sz); }
+void kr_free(void* p) { free(p); }
+void* kr_realloc(void* p, int64_t sz) { return realloc(p,(size_t)sz); }
+int64_t kr_str_eq(kr_str a, kr_str b) { return strcmp(a,b)==0; }
+int64_t kr_str_ne(kr_str a, kr_str b) { return strcmp(a,b)!=0; }
+int64_t kr_str_len(kr_str s) { return (int64_t)strlen(s); }
+int64_t kr_str_contains(kr_str s, kr_str sub) { return strstr(s,sub)!=NULL; }
+int64_t kr_str_starts_with(kr_str s, kr_str pfx) { return strncmp(s,pfx,strlen(pfx))==0; }
+int64_t kr_str_index_of(kr_str s, kr_str sub) { char* p=strstr(s,sub); return p?(int64_t)(p-s):-1; }
+kr_str kr_str_replace(kr_str s, kr_str old, kr_str rep) {
+  size_t ol=strlen(old),rl=strlen(rep),sl=strlen(s); char* r=(char*)malloc(sl*2+1); char* w=r;
+  while(*s){char* p=strstr(s,old);if(!p){strcpy(w,s);break;}memcpy(w,s,p-s);w+=p-s;memcpy(w,rep,rl);w+=rl;s=p+ol;}*w=0;return r;
+}
+kr_str kr_str_to_lower(kr_str s) { size_t n=strlen(s); char* r=(char*)malloc(n+1); for(size_t i=0;i<=n;i++)r[i]=tolower((unsigned char)s[i]); return r; }
+kr_str kr_str_to_upper(kr_str s) { size_t n=strlen(s); char* r=(char*)malloc(n+1); for(size_t i=0;i<=n;i++)r[i]=toupper((unsigned char)s[i]); return r; }
+kr_str kr_str_trim(kr_str s) { while(*s==' '||*s=='\t'||*s=='\n'||*s=='\r')s++; size_t n=strlen(s); while(n>0&&(s[n-1]==' '||s[n-1]=='\t'||s[n-1]=='\n'||s[n-1]=='\r'))n--; char* r=(char*)malloc(n+1); memcpy(r,s,n); r[n]=0; return r; }
+kr_str kr_strdup(kr_str s) { return strdup(s); }
+kr_str kr_from_cstr(void* p) { return p ? (kr_str)p : ""; }
+void* kr_cstr(kr_str s) { return (void*)s; }
+int64_t kr_str_char_count(kr_str s) { return (int64_t)strlen(s); }
+kr_str kr_str_from_char_code(int64_t c) { char* r=(char*)malloc(2); r[0]=(char)c; r[1]=0; return r; }
+kr_str kr_str_join(void* vp, kr_str sep) {
+  KrVecString* v=(KrVecString*)vp; if(!v->len) return ""; size_t total=0,sl=strlen(sep);
+  for(int64_t i=0;i<v->len;i++) total+=strlen(v->data[i]); total+=(v->len-1)*sl;
+  char* r=(char*)malloc(total+1); char* w=r;
+  for(int64_t i=0;i<v->len;i++){if(i>0){memcpy(w,sep,sl);w+=sl;}size_t n=strlen(v->data[i]);memcpy(w,v->data[i],n);w+=n;} *w=0; return r;
+}
+void* kr_str_split(kr_str s, kr_str sep) {
+  void* v=kr_vec_string_new(); size_t sl=strlen(sep);
+  while(*s){char* p=strstr(s,sep);if(!p){kr_vec_string_push(v,strdup(s));break;}
+  char* chunk=(char*)malloc(p-s+1);memcpy(chunk,s,p-s);chunk[p-s]=0;kr_vec_string_push(v,chunk);s=p+sl;} return v;
+}
+int64_t kr_rand() { return (int64_t)rand(); }
+void kr_srand(int64_t seed) { srand((unsigned)seed); }
+double kr_sqrt(double x) { return sqrt(x); }
+double kr_pow(double x, double y) { return pow(x,y); }
+double kr_floor(double x) { return floor(x); }
+double kr_ceil(double x) { return ceil(x); }
+double kr_round(double x) { return round(x); }
+double kr_sin(double x) { return sin(x); }
+double kr_cos(double x) { return cos(x); }
+double kr_tan(double x) { return tan(x); }
+double kr_log(double x) { return log(x); }
+double kr_log10(double x) { return log10(x); }
+double kr_exp(double x) { return exp(x); }
+double kr_fabs(double x) { return fabs(x); }
+double kr_fmod(double x, double y) { return fmod(x,y); }
+double kr_atan2(double y, double x) { return atan2(y,x); }
+double kr_asin(double x) { return asin(x); }
+double kr_acos(double x) { return acos(x); }
+double kr_atan(double x) { return atan(x); }
+double kr_sinh(double x) { return sinh(x); }
+double kr_cosh(double x) { return cosh(x); }
+double kr_tanh(double x) { return tanh(x); }
+static int _kr_test_count=0, _kr_test_pass=0, _kr_test_fail=0;
+static inline void _kr_default_test_section(kr_str name) { printf("--- %s ---\n", name); }
+static inline void _kr_default_test_pass(kr_str msg) { _kr_test_count++; _kr_test_pass++; printf("  PASS: %s\n", msg); }
+static inline void _kr_default_test_fail(kr_str msg) { _kr_test_count++; _kr_test_fail++; printf("  FAIL: %s\n", msg); }
+static inline void _kr_default_test_skip(kr_str msg) { printf("  SKIP: %s\n", msg); }
+static inline void _kr_default_assert(int64_t cond) { if(!cond){printf("ASSERTION FAILED\n");exit(1);} }
+static inline void _kr_default_assert_eq(int64_t a, int64_t b) {
+  _kr_test_count++; if(a==b){_kr_test_pass++;}else{_kr_test_fail++;printf("  ASSERT_EQ FAILED: %lld != %lld\n",(long long)a,(long long)b);}
+}
+static inline void _kr_default_assert_ne(int64_t a, int64_t b) {
+  _kr_test_count++; if(a!=b){_kr_test_pass++;}else{_kr_test_fail++;printf("  ASSERT_NE FAILED: %lld == %lld\n",(long long)a,(long long)b);}
+}
+#define kr_test_section _kr_default_test_section
+#define kr_test_pass _kr_default_test_pass
+#define kr_test_fail _kr_default_test_fail
+#define kr_test_skip _kr_default_test_skip
+#define kr_assert _kr_default_assert
+#define kr_assert_eq _kr_default_assert_eq
+#define kr_assert_ne _kr_default_assert_ne
+void* kr_mutex_create() { return malloc(64); }
+void kr_mutex_destroy(void* m) { free(m); }
+void kr_mutex_lock(void* m) { (void)m; }
+void kr_mutex_unlock(void* m) { (void)m; }
+void* kr_thread_spawn(void* fn) { (void)fn; return NULL; }
+void kr_thread_join(void* h) { (void)h; }
+void kr_sleep_ms(int64_t ms) { usleep((unsigned)(ms*1000)); }
+int64_t kr_time() { return (int64_t)time(NULL); }
+int64_t kr_isalpha(int64_t c) { return isalpha((int)c); }
+int64_t kr_isdigit(int64_t c) { return isdigit((int)c); }
+int64_t kr_isalnum(int64_t c) { return isalnum((int)c); }
+int64_t kr_isupper(int64_t c) { return isupper((int)c); }
+int64_t kr_islower(int64_t c) { return islower((int)c); }
+int64_t kr_isspace(int64_t c) { return isspace((int)c); }
+int64_t kr_tolower(int64_t c) { return (int64_t)tolower((int)c); }
+int64_t kr_toupper(int64_t c) { return (int64_t)toupper((int)c); }
+int64_t kr_atoi(kr_str s) { return (int64_t)atoi(s); }
+double kr_atof(kr_str s) { return atof(s); }
+void kr_abort() { abort(); }
 
 /* Forward declarations */
 typedef struct SourceLocation SourceLocation;
@@ -334,6 +532,7 @@ void kr_tr_emit_indent(Translator tr);
 void kr_tr_emit_line(Translator tr, kr_str s);
 kr_str kr_type_to_c(int64_t kind, kr_str name);
 kr_str kr_type_to_c_value(int64_t kind);
+kr_str kr_sanitize_c_name(kr_str name);
 TranslateResult kr_translate(void* int_data, void* lexemes, int64_t token_count, kr_str file, Target target, void* out);
 Translator kr_emit_forward_decls(Translator tr);
 Translator kr_emit_fn_prototype(Translator tr);
@@ -343,6 +542,8 @@ Translator kr_translate_program(Translator tr);
 Translator kr_translate_top_level(Translator tr);
 Translator kr_translate_impl(Translator tr);
 Translator kr_translate_impl_fn(Translator tr, kr_str type_name);
+Translator kr_translate_type_alias(Translator tr);
+Translator kr_translate_const_decl(Translator tr);
 Translator kr_translate_enum(Translator tr);
 Translator kr_translate_struct(Translator tr);
 Translator kr_translate_fn(Translator tr);
@@ -2182,6 +2383,52 @@ kr_str kr_type_to_c_value(int64_t kind) {
     return "NULL";
 }
 
+kr_str kr_sanitize_c_name(kr_str name) {
+    if (_KR_EQ(name, "int")) {
+        return "int_val";
+    }
+    if (_KR_EQ(name, "float")) {
+        return "float_val";
+    }
+    if (_KR_EQ(name, "double")) {
+        return "double_val";
+    }
+    if (_KR_EQ(name, "char")) {
+        return "char_val";
+    }
+    if (_KR_EQ(name, "void")) {
+        return "void_val";
+    }
+    if (_KR_EQ(name, "long")) {
+        return "long_val";
+    }
+    if (_KR_EQ(name, "short")) {
+        return "short_val";
+    }
+    if (_KR_EQ(name, "auto")) {
+        return "auto_val";
+    }
+    if (_KR_EQ(name, "register")) {
+        return "register_val";
+    }
+    if (_KR_EQ(name, "extern")) {
+        return "extern_val";
+    }
+    if (_KR_EQ(name, "static")) {
+        return "static_val";
+    }
+    if (_KR_EQ(name, "const")) {
+        return "const_val";
+    }
+    if (_KR_EQ(name, "signed")) {
+        return "signed_val";
+    }
+    if (_KR_EQ(name, "unsigned")) {
+        return "unsigned_val";
+    }
+    return name;
+}
+
 TranslateResult kr_translate(void* int_data, void* lexemes, int64_t token_count, kr_str file, Target target, void* out) {
     Translator tr = kr_new_translator(token_count, file, int_data, lexemes, out);
     kr_tr_emit(tr, kr_emit_c_preamble(target));
@@ -2255,7 +2502,23 @@ Translator kr_emit_forward_decls(Translator tr) {
                     c = kr_emit_impl_prototypes(c);
                 }
                 else {
-                    c = kr_tr_advance(c);
+                    if (_KR_EQ(k2, kr_TK_KW_TRAIT()) || _KR_EQ(k2, kr_TK_KW_STRUCT()) || _KR_EQ(k2, kr_TK_KW_ENUM())) {
+                        c = kr_tr_advance(c);
+                        c = kr_skip_brace_block(kr_tr_advance(c));
+                    }
+                    else {
+                        if (_KR_EQ(k2, kr_TK_KW_TYPE()) || _KR_EQ(k2, kr_TK_KW_CONST())) {
+                            while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_SEMICOLON())) {
+                                c = kr_tr_advance(c);
+                            }
+                            if (!kr_tr_at_end(c)) {
+                                c = kr_tr_advance(c);
+                            }
+                        }
+                        else {
+                            c = kr_tr_advance(c);
+                        }
+                    }
                 }
             }
         }
@@ -2268,7 +2531,23 @@ Translator kr_emit_forward_decls(Translator tr) {
                     c = kr_emit_impl_prototypes(c);
                 }
                 else {
-                    c = kr_tr_advance(c);
+                    if (_KR_EQ(k, kr_TK_KW_TRAIT()) || _KR_EQ(k, kr_TK_KW_STRUCT()) || _KR_EQ(k, kr_TK_KW_ENUM())) {
+                        c = kr_tr_advance(c);
+                        c = kr_skip_brace_block(kr_tr_advance(c));
+                    }
+                    else {
+                        if (_KR_EQ(k, kr_TK_KW_TYPE()) || _KR_EQ(k, kr_TK_KW_CONST())) {
+                            while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_SEMICOLON())) {
+                                c = kr_tr_advance(c);
+                            }
+                            if (!kr_tr_at_end(c)) {
+                                c = kr_tr_advance(c);
+                            }
+                        }
+                        else {
+                            c = kr_tr_advance(c);
+                        }
+                    }
                 }
             }
         }
@@ -2280,6 +2559,10 @@ Translator kr_emit_forward_decls(Translator tr) {
 Translator kr_emit_fn_prototype(Translator tr) {
     Translator c = kr_tr_advance(tr);
     __auto_type fname = kr_tr_lexeme(c);
+    __auto_type mangled_check = kr_str_concat("kr_", fname);
+    if (_KR_EQ(fname, "test_section") || _KR_EQ(fname, "test_pass") || _KR_EQ(fname, "test_fail") || _KR_EQ(fname, "test_skip") || _KR_EQ(fname, "assert") || _KR_EQ(fname, "assert_eq") || _KR_EQ(fname, "assert_ne")) {
+        kr_tr_emit_line(c, kr_str_concat("#undef ", mangled_check));
+    }
     c = kr_tr_advance(c);
     c = kr_tr_advance(c);
     __auto_type params = "";
@@ -2295,7 +2578,7 @@ Translator kr_emit_fn_prototype(Translator tr) {
         __auto_type ptype_kind = kr_tr_kind(c);
         __auto_type ptype_name = kr_tr_lexeme(c);
         c = kr_tr_advance(c);
-        params = kr_str_concat(params, kr_str_concat(kr_type_to_c(ptype_kind, ptype_name), kr_str_concat(" ", pname)));
+        params = kr_str_concat(params, kr_str_concat(kr_type_to_c(ptype_kind, ptype_name), kr_str_concat(" ", kr_sanitize_c_name(pname))));
         first = 0;
     }
     c = kr_tr_advance(c);
@@ -2345,7 +2628,7 @@ Translator kr_emit_impl_prototypes(Translator tr) {
                     __auto_type pk = kr_tr_kind(c);
                     __auto_type pn = kr_tr_lexeme(c);
                     c = kr_tr_advance(c);
-                    params = kr_str_concat(params, kr_str_concat(kr_type_to_c(pk, pn), kr_str_concat(" ", pname)));
+                    params = kr_str_concat(params, kr_str_concat(kr_type_to_c(pk, pn), kr_str_concat(" ", kr_sanitize_c_name(pname))));
                 }
                 first = 0;
             }
@@ -2418,7 +2701,23 @@ Translator kr_translate_program(Translator tr) {
                         c = kr_translate_enum(c);
                     }
                     else {
-                        c = kr_tr_advance(c);
+                        if (_KR_EQ(k2, kr_TK_KW_TYPE())) {
+                            c = kr_translate_type_alias(c);
+                        }
+                        else {
+                            if (_KR_EQ(k2, kr_TK_KW_CONST())) {
+                                c = kr_translate_const_decl(c);
+                            }
+                            else {
+                                if (_KR_EQ(k2, kr_TK_KW_TRAIT())) {
+                                    c = kr_tr_advance(c);
+                                    c = kr_skip_brace_block(kr_tr_advance(c));
+                                }
+                                else {
+                                    c = kr_tr_advance(c);
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -2431,7 +2730,23 @@ Translator kr_translate_program(Translator tr) {
                         c = kr_translate_enum(c);
                     }
                     else {
-                        c = kr_tr_advance(c);
+                        if (_KR_EQ(k, kr_TK_KW_TYPE())) {
+                            c = kr_translate_type_alias(c);
+                        }
+                        else {
+                            if (_KR_EQ(k, kr_TK_KW_CONST())) {
+                                c = kr_translate_const_decl(c);
+                            }
+                            else {
+                                if (_KR_EQ(k, kr_TK_KW_TRAIT())) {
+                                    c = kr_tr_advance(c);
+                                    c = kr_skip_brace_block(kr_tr_advance(c));
+                                }
+                                else {
+                                    c = kr_tr_advance(c);
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -2458,7 +2773,7 @@ Translator kr_translate_program(Translator tr) {
                     c = kr_translate_fn(c);
                 }
                 else {
-                    if (_KR_EQ(k2, kr_TK_KW_STRUCT()) || _KR_EQ(k2, kr_TK_KW_ENUM())) {
+                    if (_KR_EQ(k2, kr_TK_KW_STRUCT()) || _KR_EQ(k2, kr_TK_KW_ENUM()) || _KR_EQ(k2, kr_TK_KW_TRAIT())) {
                         c = kr_skip_brace_block(kr_tr_advance(kr_tr_advance(c)));
                     }
                     else {
@@ -2466,7 +2781,17 @@ Translator kr_translate_program(Translator tr) {
                             c = kr_translate_impl(c);
                         }
                         else {
-                            c = kr_tr_advance(c);
+                            if (_KR_EQ(k2, kr_TK_KW_TYPE()) || _KR_EQ(k2, kr_TK_KW_CONST())) {
+                                while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_SEMICOLON())) {
+                                    c = kr_tr_advance(c);
+                                }
+                                if (!kr_tr_at_end(c)) {
+                                    c = kr_tr_advance(c);
+                                }
+                            }
+                            else {
+                                c = kr_tr_advance(c);
+                            }
                         }
                     }
                 }
@@ -2476,7 +2801,7 @@ Translator kr_translate_program(Translator tr) {
                     c = kr_translate_fn(c);
                 }
                 else {
-                    if (_KR_EQ(k, kr_TK_KW_STRUCT()) || _KR_EQ(k, kr_TK_KW_ENUM())) {
+                    if (_KR_EQ(k, kr_TK_KW_STRUCT()) || _KR_EQ(k, kr_TK_KW_ENUM()) || _KR_EQ(k, kr_TK_KW_TRAIT())) {
                         c = kr_skip_brace_block(kr_tr_advance(kr_tr_advance(c)));
                     }
                     else {
@@ -2484,7 +2809,17 @@ Translator kr_translate_program(Translator tr) {
                             c = kr_translate_impl(c);
                         }
                         else {
-                            c = kr_tr_advance(c);
+                            if (_KR_EQ(k, kr_TK_KW_TYPE()) || _KR_EQ(k, kr_TK_KW_CONST())) {
+                                while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_SEMICOLON())) {
+                                    c = kr_tr_advance(c);
+                                }
+                                if (!kr_tr_at_end(c)) {
+                                    c = kr_tr_advance(c);
+                                }
+                            }
+                            else {
+                                c = kr_tr_advance(c);
+                            }
                         }
                     }
                 }
@@ -2550,7 +2885,7 @@ Translator kr_translate_impl_fn(Translator tr, kr_str type_name) {
             __auto_type ptype_kind = kr_tr_kind(c);
             __auto_type ptype_name = kr_tr_lexeme(c);
             c = kr_tr_advance(c);
-            params = kr_str_concat(params, kr_str_concat(kr_type_to_c(ptype_kind, ptype_name), kr_str_concat(" ", pname)));
+            params = kr_str_concat(params, kr_str_concat(kr_type_to_c(ptype_kind, ptype_name), kr_str_concat(" ", kr_sanitize_c_name(pname))));
         }
         first = 0;
     }
@@ -2571,6 +2906,47 @@ Translator kr_translate_impl_fn(Translator tr, kr_str type_name) {
     c = kr_tr_dedent(c);
     kr_tr_emit_line(c, "}");
     kr_tr_emit(c, "\n");
+    return c;
+}
+
+Translator kr_translate_type_alias(Translator tr) {
+    Translator c = kr_tr_advance(tr);
+    __auto_type alias_name = kr_tr_lexeme(c);
+    c = kr_tr_advance(c);
+    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_OP_ASSIGN())) {
+        c = kr_tr_advance(c);
+    }
+    __auto_type tk = kr_tr_kind(c);
+    __auto_type tn = kr_tr_lexeme(c);
+    __auto_type c_type = kr_type_to_c(tk, tn);
+    c = kr_tr_advance(c);
+    kr_tr_emit_line(c, kr_str_concat("typedef ", kr_str_concat(c_type, kr_str_concat(" ", kr_str_concat(alias_name, ";")))));
+    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_SEMICOLON())) {
+        c = kr_tr_advance(c);
+    }
+    return c;
+}
+
+Translator kr_translate_const_decl(Translator tr) {
+    Translator c = kr_tr_advance(tr);
+    __auto_type cname = kr_tr_lexeme(c);
+    c = kr_tr_advance(c);
+    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_COLON())) {
+        c = kr_tr_advance(c);
+        c = kr_tr_advance(c);
+    }
+    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_OP_ASSIGN())) {
+        c = kr_tr_advance(c);
+    }
+    __auto_type val = "";
+    while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_SEMICOLON())) {
+        val = kr_str_concat(val, kr_tr_lexeme(c));
+        c = kr_tr_advance(c);
+    }
+    kr_tr_emit_line(c, kr_str_concat("#define kr_", kr_str_concat(cname, kr_str_concat(" ", val))));
+    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_SEMICOLON())) {
+        c = kr_tr_advance(c);
+    }
     return c;
 }
 
@@ -2646,7 +3022,7 @@ Translator kr_translate_fn(Translator tr) {
         __auto_type pk = kr_tr_kind(c);
         __auto_type pn = kr_tr_lexeme(c);
         c = kr_tr_advance(c);
-        params = kr_str_concat(params, kr_str_concat(kr_type_to_c(pk, pn), kr_str_concat(" ", pname)));
+        params = kr_str_concat(params, kr_str_concat(kr_type_to_c(pk, pn), kr_str_concat(" ", kr_sanitize_c_name(pname))));
         first = 0;
     }
     c = kr_tr_advance(c);
@@ -2875,6 +3251,14 @@ Translator kr_translate_for(Translator tr) {
         c = kr_translate_expr(c);
     }
     else {
+        if (_KR_EQ(kr_tr_kind(c), kr_TK_IDENTIFIER())) {
+            __auto_type vname2 = kr_tr_lexeme(c);
+            Translator c2 = kr_tr_advance(c);
+            if (!kr_tr_at_end(c2) && _KR_EQ(kr_tr_kind(c2), kr_TK_KW_IN())) {
+                c = kr_tr_advance(c2);
+                return kr_translate_for_in(c, vname2);
+            }
+        }
         kr_tr_emit_indent(c);
         kr_tr_emit(c, "for (");
         c = kr_translate_expr(c);
@@ -3878,7 +4262,7 @@ kr_str kr_cc_cross_flags(Target t) {
 }
 
 kr_str kr_c_includes_posix() {
-    return kr_str_concat(kr_str_concat(kr_str_concat(kr_str_concat(kr_str_concat("#include <stdio.h>\n", "#include <stdlib.h>\n"), "#include <string.h>\n"), "#include <stdint.h>\n"), "#include <stdbool.h>\n"), "#include <unistd.h>\n");
+    return kr_str_concat(kr_str_concat(kr_str_concat(kr_str_concat(kr_str_concat("#include <stdio.h>\n", "#include <stdlib.h>\n"), "#include <string.h>\n"), "#include <stdint.h>\n"), "#include <stdbool.h>\n"), kr_str_concat(kr_str_concat("#include <unistd.h>\n", "#include <math.h>\n"), kr_str_concat("#include <time.h>\n", "#include <ctype.h>\n")));
 }
 
 kr_str kr_c_includes_windows() {
@@ -3974,6 +4358,180 @@ kr_str kr_c_runtime_shims_posix() {
     s = kr_str_concat(s, "void kr_vec_string_set(void* vp, int64_t i, kr_str val) { ((KrVecString*)vp)->data[i] = val; }\n");
     s = kr_str_concat(s, "int64_t kr_vec_string_len(void* vp) { return ((KrVecString*)vp)->len; }\n");
     s = kr_str_concat(s, "void kr_vec_string_free(void* vp) { KrVecString* v = (KrVecString*)vp; free(v->data); free(v); }\n");
+    s = kr_str_concat(s, "int64_t kr_vec_int_pop(void* vp) { KrVecInt* v = (KrVecInt*)vp; return v->data[--v->len]; }\n");
+    s = kr_str_concat(s, "void kr_vec_int_clear(void* vp) { ((KrVecInt*)vp)->len = 0; }\n");
+    s = kr_str_concat(s, "int64_t kr_vec_int_capacity(void* vp) { return ((KrVecInt*)vp)->cap; }\n");
+    s = kr_str_concat(s, "void kr_vec_int_reserve(void* vp, int64_t n) {\n");
+    s = kr_str_concat(s, "  KrVecInt* v = (KrVecInt*)vp; if(n>v->cap){v->cap=n;v->data=(int64_t*)realloc(v->data,n*sizeof(int64_t));}\n}\n");
+    s = kr_str_concat(s, "void* kr_vec_int_with_capacity(int64_t n) {\n");
+    s = kr_str_concat(s, "  KrVecInt* v=(KrVecInt*)malloc(sizeof(KrVecInt));v->data=(int64_t*)malloc(n*sizeof(int64_t));v->len=0;v->cap=n;return v;\n}\n");
+    s = kr_str_concat(s, "void kr_vec_int_insert(void* vp, int64_t i, int64_t val) {\n");
+    s = kr_str_concat(s, "  KrVecInt* v=(KrVecInt*)vp; kr_vec_int_push(vp,0); memmove(&v->data[i+1],&v->data[i],(v->len-i-1)*sizeof(int64_t)); v->data[i]=val;\n}\n");
+    s = kr_str_concat(s, "int64_t kr_vec_int_remove(void* vp, int64_t i) {\n");
+    s = kr_str_concat(s, "  KrVecInt* v=(KrVecInt*)vp; int64_t val=v->data[i]; memmove(&v->data[i],&v->data[i+1],(v->len-i-1)*sizeof(int64_t)); v->len--; return val;\n}\n");
+    s = kr_str_concat(s, "int64_t kr_vec_int_swap_remove(void* vp, int64_t i) { KrVecInt* v=(KrVecInt*)vp; int64_t val=v->data[i]; v->data[i]=v->data[--v->len]; return val; }\n");
+    s = kr_str_concat(s, "void kr_vec_int_shrink_to_fit(void* vp) { KrVecInt* v=(KrVecInt*)vp; if(v->len<v->cap){v->cap=v->len?v->len:1;v->data=(int64_t*)realloc(v->data,v->cap*sizeof(int64_t));} }\n");
+    s = kr_str_concat(s, "kr_str kr_vec_string_pop(void* vp) { KrVecString* v = (KrVecString*)vp; return v->data[--v->len]; }\n");
+    s = kr_str_concat(s, "void kr_vec_string_clear(void* vp) { ((KrVecString*)vp)->len = 0; }\n");
+    s = kr_str_concat(s, "int64_t kr_vec_string_capacity(void* vp) { return ((KrVecString*)vp)->cap; }\n");
+    s = kr_str_concat(s, "void kr_vec_string_reserve(void* vp, int64_t n) {\n");
+    s = kr_str_concat(s, "  KrVecString* v = (KrVecString*)vp; if(n>v->cap){v->cap=n;v->data=(char**)realloc(v->data,n*sizeof(char*));}\n}\n");
+    s = kr_str_concat(s, "void* kr_vec_string_with_capacity(int64_t n) {\n");
+    s = kr_str_concat(s, "  KrVecString* v=(KrVecString*)malloc(sizeof(KrVecString));v->data=(char**)malloc(n*sizeof(char*));v->len=0;v->cap=n;return v;\n}\n");
+    s = kr_str_concat(s, "void kr_vec_string_shrink_to_fit(void* vp) { KrVecString* v=(KrVecString*)vp; if(v->len<v->cap){v->cap=v->len?v->len:1;v->data=(char**)realloc(v->data,v->cap*sizeof(char*));} }\n");
+    s = kr_str_concat(s, "kr_str kr_vec_string_swap_remove(void* vp, int64_t i) { KrVecString* v=(KrVecString*)vp; kr_str val=v->data[i]; v->data[i]=v->data[--v->len]; return val; }\n");
+    s = kr_str_concat(s, "typedef struct { void** data; int64_t len; int64_t cap; } KrVecBytes;\n");
+    s = kr_str_concat(s, "void* kr_vec_bytes_new() { KrVecBytes* v=(KrVecBytes*)malloc(sizeof(KrVecBytes)); v->data=(void**)malloc(16*sizeof(void*)); v->len=0; v->cap=16; return v; }\n");
+    s = kr_str_concat(s, "void kr_vec_bytes_push(void* vp, void* val) { KrVecBytes* v=(KrVecBytes*)vp; if(v->len>=v->cap){v->cap*=2;v->data=(void**)realloc(v->data,v->cap*sizeof(void*));} v->data[v->len++]=val; }\n");
+    s = kr_str_concat(s, "void* kr_vec_bytes_get(void* vp, int64_t i) { return ((KrVecBytes*)vp)->data[i]; }\n");
+    s = kr_str_concat(s, "void kr_vec_bytes_set(void* vp, int64_t i, void* val) { ((KrVecBytes*)vp)->data[i]=val; }\n");
+    s = kr_str_concat(s, "int64_t kr_vec_bytes_len(void* vp) { return ((KrVecBytes*)vp)->len; }\n");
+    s = kr_str_concat(s, "void kr_vec_bytes_free(void* vp) { KrVecBytes* v=(KrVecBytes*)vp; free(v->data); free(v); }\n");
+    s = kr_str_concat(s, "void* kr_vec_bytes_pop(void* vp) { KrVecBytes* v=(KrVecBytes*)vp; return v->data[--v->len]; }\n");
+    s = kr_str_concat(s, "void kr_vec_bytes_clear(void* vp) { ((KrVecBytes*)vp)->len=0; }\n");
+    s = kr_str_concat(s, "int64_t kr_vec_bytes_capacity(void* vp) { return ((KrVecBytes*)vp)->cap; }\n");
+    s = kr_str_concat(s, "void kr_vec_bytes_reserve(void* vp, int64_t n) { KrVecBytes* v=(KrVecBytes*)vp; if(n>v->cap){v->cap=n;v->data=(void**)realloc(v->data,n*sizeof(void*));} }\n");
+    s = kr_str_concat(s, "void* kr_vec_bytes_with_capacity(int64_t n) { KrVecBytes* v=(KrVecBytes*)malloc(sizeof(KrVecBytes)); v->data=(void**)malloc(n*sizeof(void*)); v->len=0; v->cap=n; return v; }\n");
+    s = kr_str_concat(s, "void kr_vec_bytes_shrink_to_fit(void* vp) { KrVecBytes* v=(KrVecBytes*)vp; if(v->len<v->cap){v->cap=v->len?v->len:1;v->data=(void**)realloc(v->data,v->cap*sizeof(void*));} }\n");
+    s = kr_str_concat(s, "void* kr_vec_bytes_swap_remove(void* vp, int64_t i) { KrVecBytes* v=(KrVecBytes*)vp; void* val=v->data[i]; v->data[i]=v->data[--v->len]; return val; }\n");
+    s = kr_str_concat(s, "typedef struct { char** keys; int64_t* vals; int64_t cap; int64_t len; } KrMapSI;\n");
+    s = kr_str_concat(s, "static uint64_t _kr_hash_str(const char* s) { uint64_t h=5381; while(*s) h=h*33+(*s++); return h; }\n");
+    s = kr_str_concat(s, "void* kr_map_string_int_new() {\n");
+    s = kr_str_concat(s, "  KrMapSI* m=(KrMapSI*)malloc(sizeof(KrMapSI)); m->cap=64; m->len=0;\n");
+    s = kr_str_concat(s, "  m->keys=(char**)calloc(64,sizeof(char*)); m->vals=(int64_t*)calloc(64,sizeof(int64_t)); return m;\n}\n");
+    s = kr_str_concat(s, "void kr_map_string_int_set(void* mp, kr_str key, int64_t val) {\n");
+    s = kr_str_concat(s, "  KrMapSI* m=(KrMapSI*)mp; uint64_t h=_kr_hash_str(key)%m->cap;\n");
+    s = kr_str_concat(s, "  while(m->keys[h]){if(strcmp(m->keys[h],key)==0){m->vals[h]=val;return;} h=(h+1)%m->cap;}\n");
+    s = kr_str_concat(s, "  m->keys[h]=strdup(key); m->vals[h]=val; m->len++;\n}\n");
+    s = kr_str_concat(s, "int64_t kr_map_string_int_get(void* mp, kr_str key) {\n");
+    s = kr_str_concat(s, "  KrMapSI* m=(KrMapSI*)mp; uint64_t h=_kr_hash_str(key)%m->cap;\n");
+    s = kr_str_concat(s, "  while(m->keys[h]){if(strcmp(m->keys[h],key)==0) return m->vals[h]; h=(h+1)%m->cap;} return 0;\n}\n");
+    s = kr_str_concat(s, "int64_t kr_map_string_int_has(void* mp, kr_str key) {\n");
+    s = kr_str_concat(s, "  KrMapSI* m=(KrMapSI*)mp; uint64_t h=_kr_hash_str(key)%m->cap;\n");
+    s = kr_str_concat(s, "  while(m->keys[h]){if(strcmp(m->keys[h],key)==0) return 1; h=(h+1)%m->cap;} return 0;\n}\n");
+    s = kr_str_concat(s, "int64_t kr_map_string_int_len(void* mp) { return ((KrMapSI*)mp)->len; }\n");
+    s = kr_str_concat(s, "void kr_map_string_int_delete(void* mp, kr_str key) {\n");
+    s = kr_str_concat(s, "  KrMapSI* m=(KrMapSI*)mp; uint64_t h=_kr_hash_str(key)%m->cap;\n");
+    s = kr_str_concat(s, "  while(m->keys[h]){if(strcmp(m->keys[h],key)==0){free(m->keys[h]);m->keys[h]=NULL;m->len--;return;} h=(h+1)%m->cap;}\n}\n");
+    s = kr_str_concat(s, "void kr_map_string_int_clear(void* mp) { KrMapSI* m=(KrMapSI*)mp; for(int64_t i=0;i<m->cap;i++){if(m->keys[i])free(m->keys[i]);m->keys[i]=NULL;} m->len=0; }\n");
+    s = kr_str_concat(s, "void kr_map_string_int_free(void* mp) { KrMapSI* m=(KrMapSI*)mp; for(int64_t i=0;i<m->cap;i++)if(m->keys[i])free(m->keys[i]); free(m->keys);free(m->vals);free(m); }\n");
+    s = kr_str_concat(s, "void* kr_map_string_int_keys(void* mp) { KrMapSI* m=(KrMapSI*)mp; void* v=kr_vec_string_new(); for(int64_t i=0;i<m->cap;i++)if(m->keys[i])kr_vec_string_push(v,m->keys[i]); return v; }\n");
+    s = kr_str_concat(s, "void* kr_map_string_int_values(void* mp) { KrMapSI* m=(KrMapSI*)mp; void* v=kr_vec_int_new(); for(int64_t i=0;i<m->cap;i++)if(m->keys[i])kr_vec_int_push(v,m->vals[i]); return v; }\n");
+    s = kr_str_concat(s, "typedef struct { char** keys; char** vals; int64_t cap; int64_t len; } KrMapSS;\n");
+    s = kr_str_concat(s, "void* kr_map_string_string_new() {\n");
+    s = kr_str_concat(s, "  KrMapSS* m=(KrMapSS*)malloc(sizeof(KrMapSS)); m->cap=64; m->len=0;\n");
+    s = kr_str_concat(s, "  m->keys=(char**)calloc(64,sizeof(char*)); m->vals=(char**)calloc(64,sizeof(char*)); return m;\n}\n");
+    s = kr_str_concat(s, "void kr_map_string_string_set(void* mp, kr_str key, kr_str val) {\n");
+    s = kr_str_concat(s, "  KrMapSS* m=(KrMapSS*)mp; uint64_t h=_kr_hash_str(key)%m->cap;\n");
+    s = kr_str_concat(s, "  while(m->keys[h]){if(strcmp(m->keys[h],key)==0){free(m->vals[h]);m->vals[h]=strdup(val);return;} h=(h+1)%m->cap;}\n");
+    s = kr_str_concat(s, "  m->keys[h]=strdup(key); m->vals[h]=strdup(val); m->len++;\n}\n");
+    s = kr_str_concat(s, "kr_str kr_map_string_string_get(void* mp, kr_str key) {\n");
+    s = kr_str_concat(s, "  KrMapSS* m=(KrMapSS*)mp; uint64_t h=_kr_hash_str(key)%m->cap;\n");
+    s = kr_str_concat(s, "  while(m->keys[h]){if(strcmp(m->keys[h],key)==0) return m->vals[h]; h=(h+1)%m->cap;} return \"\";\n}\n");
+    s = kr_str_concat(s, "int64_t kr_map_string_string_has(void* mp, kr_str key) {\n");
+    s = kr_str_concat(s, "  KrMapSS* m=(KrMapSS*)mp; uint64_t h=_kr_hash_str(key)%m->cap;\n");
+    s = kr_str_concat(s, "  while(m->keys[h]){if(strcmp(m->keys[h],key)==0) return 1; h=(h+1)%m->cap;} return 0;\n}\n");
+    s = kr_str_concat(s, "int64_t kr_map_string_string_len(void* mp) { return ((KrMapSS*)mp)->len; }\n");
+    s = kr_str_concat(s, "void kr_map_string_string_delete(void* mp, kr_str key) {\n");
+    s = kr_str_concat(s, "  KrMapSS* m=(KrMapSS*)mp; uint64_t h=_kr_hash_str(key)%m->cap;\n");
+    s = kr_str_concat(s, "  while(m->keys[h]){if(strcmp(m->keys[h],key)==0){free(m->keys[h]);free(m->vals[h]);m->keys[h]=NULL;m->vals[h]=NULL;m->len--;return;} h=(h+1)%m->cap;}\n}\n");
+    s = kr_str_concat(s, "void kr_map_string_string_clear(void* mp) { KrMapSS* m=(KrMapSS*)mp; for(int64_t i=0;i<m->cap;i++){if(m->keys[i]){free(m->keys[i]);free(m->vals[i]);m->keys[i]=NULL;m->vals[i]=NULL;}} m->len=0; }\n");
+    s = kr_str_concat(s, "void kr_map_string_string_free(void* mp) { KrMapSS* m=(KrMapSS*)mp; for(int64_t i=0;i<m->cap;i++){if(m->keys[i]){free(m->keys[i]);free(m->vals[i]);}} free(m->keys);free(m->vals);free(m); }\n");
+    s = kr_str_concat(s, "void* kr_map_string_string_keys(void* mp) { KrMapSS* m=(KrMapSS*)mp; void* v=kr_vec_string_new(); for(int64_t i=0;i<m->cap;i++)if(m->keys[i])kr_vec_string_push(v,m->keys[i]); return v; }\n");
+    s = kr_str_concat(s, "void* kr_map_string_string_values(void* mp) { KrMapSS* m=(KrMapSS*)mp; void* v=kr_vec_string_new(); for(int64_t i=0;i<m->cap;i++)if(m->keys[i])kr_vec_string_push(v,m->vals[i]); return v; }\n");
+    s = kr_str_concat(s, "kr_str kr_fmt_float(double v) { char* r=(char*)malloc(64); snprintf(r,64,\"%g\",v); return r; }\n");
+    s = kr_str_concat(s, "kr_str kr_fmt_bool(int64_t v) { return v ? \"true\" : \"false\"; }\n");
+    s = kr_str_concat(s, "kr_str kr_fmt_hex(int64_t v) { char* r=(char*)malloc(32); snprintf(r,32,\"0x%llx\",(unsigned long long)v); return r; }\n");
+    s = kr_str_concat(s, "#define kr_printf(...) printf(__VA_ARGS__)\n");
+    s = kr_str_concat(s, "void kr_putchar(int64_t c) { putchar((int)c); }\n");
+    s = kr_str_concat(s, "int64_t kr_getchar() { return (int64_t)getchar(); }\n");
+    s = kr_str_concat(s, "void* kr_malloc(int64_t sz) { return malloc((size_t)sz); }\n");
+    s = kr_str_concat(s, "void kr_free(void* p) { free(p); }\n");
+    s = kr_str_concat(s, "void* kr_realloc(void* p, int64_t sz) { return realloc(p,(size_t)sz); }\n");
+    s = kr_str_concat(s, "int64_t kr_str_eq(kr_str a, kr_str b) { return strcmp(a,b)==0; }\n");
+    s = kr_str_concat(s, "int64_t kr_str_ne(kr_str a, kr_str b) { return strcmp(a,b)!=0; }\n");
+    s = kr_str_concat(s, "int64_t kr_str_len(kr_str s) { return (int64_t)strlen(s); }\n");
+    s = kr_str_concat(s, "int64_t kr_str_contains(kr_str s, kr_str sub) { return strstr(s,sub)!=NULL; }\n");
+    s = kr_str_concat(s, "int64_t kr_str_starts_with(kr_str s, kr_str pfx) { return strncmp(s,pfx,strlen(pfx))==0; }\n");
+    s = kr_str_concat(s, "int64_t kr_str_index_of(kr_str s, kr_str sub) { char* p=strstr(s,sub); return p?(int64_t)(p-s):-1; }\n");
+    s = kr_str_concat(s, "kr_str kr_str_replace(kr_str s, kr_str old, kr_str rep) {\n");
+    s = kr_str_concat(s, "  size_t ol=strlen(old),rl=strlen(rep),sl=strlen(s); char* r=(char*)malloc(sl*2+1); char* w=r;\n");
+    s = kr_str_concat(s, "  while(*s){char* p=strstr(s,old);if(!p){strcpy(w,s);break;}memcpy(w,s,p-s);w+=p-s;memcpy(w,rep,rl);w+=rl;s=p+ol;}*w=0;return r;\n}\n");
+    s = kr_str_concat(s, "kr_str kr_str_to_lower(kr_str s) { size_t n=strlen(s); char* r=(char*)malloc(n+1); for(size_t i=0;i<=n;i++)r[i]=tolower((unsigned char)s[i]); return r; }\n");
+    s = kr_str_concat(s, "kr_str kr_str_to_upper(kr_str s) { size_t n=strlen(s); char* r=(char*)malloc(n+1); for(size_t i=0;i<=n;i++)r[i]=toupper((unsigned char)s[i]); return r; }\n");
+    s = kr_str_concat(s, "kr_str kr_str_trim(kr_str s) { while(*s==' '||*s=='\\t'||*s=='\\n'||*s=='\\r')s++; size_t n=strlen(s); while(n>0&&(s[n-1]==' '||s[n-1]=='\\t'||s[n-1]=='\\n'||s[n-1]=='\\r'))n--; char* r=(char*)malloc(n+1); memcpy(r,s,n); r[n]=0; return r; }\n");
+    s = kr_str_concat(s, "kr_str kr_strdup(kr_str s) { return strdup(s); }\n");
+    s = kr_str_concat(s, "kr_str kr_from_cstr(void* p) { return p ? (kr_str)p : \"\"; }\n");
+    s = kr_str_concat(s, "void* kr_cstr(kr_str s) { return (void*)s; }\n");
+    s = kr_str_concat(s, "int64_t kr_str_char_count(kr_str s) { return (int64_t)strlen(s); }\n");
+    s = kr_str_concat(s, "kr_str kr_str_from_char_code(int64_t c) { char* r=(char*)malloc(2); r[0]=(char)c; r[1]=0; return r; }\n");
+    s = kr_str_concat(s, "kr_str kr_str_join(void* vp, kr_str sep) {\n");
+    s = kr_str_concat(s, "  KrVecString* v=(KrVecString*)vp; if(!v->len) return \"\"; size_t total=0,sl=strlen(sep);\n");
+    s = kr_str_concat(s, "  for(int64_t i=0;i<v->len;i++) total+=strlen(v->data[i]); total+=(v->len-1)*sl;\n");
+    s = kr_str_concat(s, "  char* r=(char*)malloc(total+1); char* w=r;\n");
+    s = kr_str_concat(s, "  for(int64_t i=0;i<v->len;i++){if(i>0){memcpy(w,sep,sl);w+=sl;}size_t n=strlen(v->data[i]);memcpy(w,v->data[i],n);w+=n;} *w=0; return r;\n}\n");
+    s = kr_str_concat(s, "void* kr_str_split(kr_str s, kr_str sep) {\n");
+    s = kr_str_concat(s, "  void* v=kr_vec_string_new(); size_t sl=strlen(sep);\n");
+    s = kr_str_concat(s, "  while(*s){char* p=strstr(s,sep);if(!p){kr_vec_string_push(v,strdup(s));break;}\n");
+    s = kr_str_concat(s, "  char* chunk=(char*)malloc(p-s+1);memcpy(chunk,s,p-s);chunk[p-s]=0;kr_vec_string_push(v,chunk);s=p+sl;} return v;\n}\n");
+    s = kr_str_concat(s, "int64_t kr_rand() { return (int64_t)rand(); }\n");
+    s = kr_str_concat(s, "void kr_srand(int64_t seed) { srand((unsigned)seed); }\n");
+    s = kr_str_concat(s, "double kr_sqrt(double x) { return sqrt(x); }\n");
+    s = kr_str_concat(s, "double kr_pow(double x, double y) { return pow(x,y); }\n");
+    s = kr_str_concat(s, "double kr_floor(double x) { return floor(x); }\n");
+    s = kr_str_concat(s, "double kr_ceil(double x) { return ceil(x); }\n");
+    s = kr_str_concat(s, "double kr_round(double x) { return round(x); }\n");
+    s = kr_str_concat(s, "double kr_sin(double x) { return sin(x); }\n");
+    s = kr_str_concat(s, "double kr_cos(double x) { return cos(x); }\n");
+    s = kr_str_concat(s, "double kr_tan(double x) { return tan(x); }\n");
+    s = kr_str_concat(s, "double kr_log(double x) { return log(x); }\n");
+    s = kr_str_concat(s, "double kr_log10(double x) { return log10(x); }\n");
+    s = kr_str_concat(s, "double kr_exp(double x) { return exp(x); }\n");
+    s = kr_str_concat(s, "double kr_fabs(double x) { return fabs(x); }\n");
+    s = kr_str_concat(s, "double kr_fmod(double x, double y) { return fmod(x,y); }\n");
+    s = kr_str_concat(s, "double kr_atan2(double y, double x) { return atan2(y,x); }\n");
+    s = kr_str_concat(s, "double kr_asin(double x) { return asin(x); }\n");
+    s = kr_str_concat(s, "double kr_acos(double x) { return acos(x); }\n");
+    s = kr_str_concat(s, "double kr_atan(double x) { return atan(x); }\n");
+    s = kr_str_concat(s, "double kr_sinh(double x) { return sinh(x); }\n");
+    s = kr_str_concat(s, "double kr_cosh(double x) { return cosh(x); }\n");
+    s = kr_str_concat(s, "double kr_tanh(double x) { return tanh(x); }\n");
+    s = kr_str_concat(s, "static int _kr_test_count=0, _kr_test_pass=0, _kr_test_fail=0;\n");
+    s = kr_str_concat(s, "static inline void _kr_default_test_section(kr_str name) { printf(\"--- %s ---\\n\", name); }\n");
+    s = kr_str_concat(s, "static inline void _kr_default_test_pass(kr_str msg) { _kr_test_count++; _kr_test_pass++; printf(\"  PASS: %s\\n\", msg); }\n");
+    s = kr_str_concat(s, "static inline void _kr_default_test_fail(kr_str msg) { _kr_test_count++; _kr_test_fail++; printf(\"  FAIL: %s\\n\", msg); }\n");
+    s = kr_str_concat(s, "static inline void _kr_default_test_skip(kr_str msg) { printf(\"  SKIP: %s\\n\", msg); }\n");
+    s = kr_str_concat(s, "static inline void _kr_default_assert(int64_t cond) { if(!cond){printf(\"ASSERTION FAILED\\n\");exit(1);} }\n");
+    s = kr_str_concat(s, "static inline void _kr_default_assert_eq(int64_t a, int64_t b) {\n");
+    s = kr_str_concat(s, "  _kr_test_count++; if(a==b){_kr_test_pass++;}else{_kr_test_fail++;printf(\"  ASSERT_EQ FAILED: %lld != %lld\\n\",(long long)a,(long long)b);}\n}\n");
+    s = kr_str_concat(s, "static inline void _kr_default_assert_ne(int64_t a, int64_t b) {\n");
+    s = kr_str_concat(s, "  _kr_test_count++; if(a!=b){_kr_test_pass++;}else{_kr_test_fail++;printf(\"  ASSERT_NE FAILED: %lld == %lld\\n\",(long long)a,(long long)b);}\n}\n");
+    s = kr_str_concat(s, "#define kr_test_section _kr_default_test_section\n");
+    s = kr_str_concat(s, "#define kr_test_pass _kr_default_test_pass\n");
+    s = kr_str_concat(s, "#define kr_test_fail _kr_default_test_fail\n");
+    s = kr_str_concat(s, "#define kr_test_skip _kr_default_test_skip\n");
+    s = kr_str_concat(s, "#define kr_assert _kr_default_assert\n");
+    s = kr_str_concat(s, "#define kr_assert_eq _kr_default_assert_eq\n");
+    s = kr_str_concat(s, "#define kr_assert_ne _kr_default_assert_ne\n");
+    s = kr_str_concat(s, "void* kr_mutex_create() { return malloc(64); }\n");
+    s = kr_str_concat(s, "void kr_mutex_destroy(void* m) { free(m); }\n");
+    s = kr_str_concat(s, "void kr_mutex_lock(void* m) { (void)m; }\n");
+    s = kr_str_concat(s, "void kr_mutex_unlock(void* m) { (void)m; }\n");
+    s = kr_str_concat(s, "void* kr_thread_spawn(void* fn) { (void)fn; return NULL; }\n");
+    s = kr_str_concat(s, "void kr_thread_join(void* h) { (void)h; }\n");
+    s = kr_str_concat(s, "void kr_sleep_ms(int64_t ms) { usleep((unsigned)(ms*1000)); }\n");
+    s = kr_str_concat(s, "int64_t kr_time() { return (int64_t)time(NULL); }\n");
+    s = kr_str_concat(s, "int64_t kr_isalpha(int64_t c) { return isalpha((int)c); }\n");
+    s = kr_str_concat(s, "int64_t kr_isdigit(int64_t c) { return isdigit((int)c); }\n");
+    s = kr_str_concat(s, "int64_t kr_isalnum(int64_t c) { return isalnum((int)c); }\n");
+    s = kr_str_concat(s, "int64_t kr_isupper(int64_t c) { return isupper((int)c); }\n");
+    s = kr_str_concat(s, "int64_t kr_islower(int64_t c) { return islower((int)c); }\n");
+    s = kr_str_concat(s, "int64_t kr_isspace(int64_t c) { return isspace((int)c); }\n");
+    s = kr_str_concat(s, "int64_t kr_tolower(int64_t c) { return (int64_t)tolower((int)c); }\n");
+    s = kr_str_concat(s, "int64_t kr_toupper(int64_t c) { return (int64_t)toupper((int)c); }\n");
+    s = kr_str_concat(s, "int64_t kr_atoi(kr_str s) { return (int64_t)atoi(s); }\n");
+    s = kr_str_concat(s, "double kr_atof(kr_str s) { return atof(s); }\n");
+    s = kr_str_concat(s, "void kr_abort() { abort(); }\n");
     return s;
 }
 

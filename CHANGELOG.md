@@ -36,8 +36,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Match Statements** — `match (expr) { pattern -> { body } }` → C if/else-if chains
   - Integer literal patterns, enum variant patterns (`Color::Red`), wildcard (`_`) as else
   - Optional payload binding syntax parsed and skipped
-- **For-In Loops** — `for (let i in 0..n) { }` → C `for (int64_t i = 0; i < n; i++)`
+- **For-In Loops** — `for (let i in 0..n) { }` and `for (i in 0..n) { }` → C `for (int64_t i = 0; i < n; i++)`
   - Supports `..` (exclusive) and `..=` (inclusive) range operators
+  - Works with or without `let` keyword in the loop variable declaration
 - **Impl Blocks** — `impl TypeName { fn method(self) { } }` → free functions with `kr_TypeName_method` prefix
   - `self` parameter translated to pass-by-value struct parameter
   - Forward declaration prototypes emitted via `emit_impl_prototypes`
@@ -55,6 +56,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `test_operators.kr` — 23 tests: shift, modulo, compound assignments, bitwise NOT, unary minus, combined expressions
   - `test_stress.kr` — 42 tests: deep nesting, complex expressions, multi-return, BigStruct, enums+match, digit count, reverse int, sum of squares, factorial, complex booleans, VecString join
 - **Automated Test Runner** — `run_tests.sh` script compiles and runs all test files, verifies self-hosting fixed point
+- **Comprehensive C Runtime Shims** (`src/platform.kr`) — 100+ stdlib function shims in the C preamble
+  - VecInt/VecString/VecBytes: full API (new, push, pop, get, set, len, free, clear, reserve, capacity, insert, remove, swap_remove, shrink_to_fit, with_capacity)
+  - MapStringInt/MapStringString: open-addressing hash maps (new, set, get, has, delete, len, keys, values, clear, free)
+  - String operations: str_eq, str_ne, str_len, str_contains, str_starts_with, str_index_of, str_replace, str_to_lower, str_to_upper, str_trim, str_join, str_split, str_from_char_code, strdup, from_cstr
+  - Math: sqrt, pow, floor, ceil, round, sin, cos, tan, log, log10, exp, fabs, fmod, atan2, asin, acos, atan, sinh, cosh, tanh, rand, srand
+  - Formatting: fmt_float, fmt_bool, fmt_hex
+  - I/O: printf (variadic macro), putchar, getchar
+  - Memory: malloc, free, realloc
+  - Char classification: isalpha, isdigit, isalnum, isupper, islower, isspace, tolower, toupper
+  - Concurrency stubs: mutex_create/destroy/lock/unlock, thread_spawn/join, sleep_ms
+  - Test framework: test_section, test_pass, test_fail, test_skip, assert, assert_eq, assert_ne (macro-based with user-override support)
+  - Misc: time, atoi, atof, abort
+- **Trait Declarations** — `trait Foo { ... }` blocks are now skipped cleanly in all translation passes
+- **Type Aliases** — `type Name = Type;` → C `typedef` declaration
+- **Const Declarations** — `const NAME: type = value;` → C `#define kr_NAME value`
+- **C Keyword Sanitization** — `sanitize_c_name()` renames parameters named `int`, `float`, `double`, `char`, `void`, `const`, etc. to `int_val`, `float_val`, etc.
+- **Test Macro Override Pattern** — preamble test functions use `_kr_default_*` with `#define` aliases; `emit_fn_prototype` emits targeted `#undef` when user defines a conflicting function name
 
 ### Changed
 - **Lexer** (`src/lexer.kr`) — refactored `tokenize()` to use `VecInt`/`VecString` output parameters; added `push_token()` and `advance_n()` helpers
