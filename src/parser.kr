@@ -165,6 +165,19 @@ fn type_to_c_value(kind: int) -> string {
     return "NULL";
 }
 
+fn skip_generic_params(tr: Translator) -> Translator {
+    let c: Translator = tr;
+    if (tr_at_end(c) || tr_kind(c) != TK_OP_LT()) { return c; }
+    c = tr_advance(c);
+    let depth = 1;
+    while (!tr_at_end(c) && depth > 0) {
+        if (tr_kind(c) == TK_OP_LT()) { depth = depth + 1; }
+        if (tr_kind(c) == TK_OP_GT()) { depth = depth - 1; }
+        c = tr_advance(c);
+    }
+    return c;
+}
+
 fn sanitize_c_name(name: string) -> string {
     if (name == "int")    { return "int_val"; }
     if (name == "float")  { return "float_val"; }
@@ -212,7 +225,8 @@ pub fn translate(int_data: VecInt, lexemes: VecString, token_count: int, file: s
 
     // Emit C main() entry point wrapper
     tr_emit(tr, "\nint main(int argc, char* argv[]) {\n");
-    tr_emit(tr, "    return (int)kr_main();\n");
+    tr_emit(tr, "    kr_main();\n");
+    tr_emit(tr, "    return 0;\n");
     tr_emit(tr, "}\n");
 
     return TranslateResult { errors: tr.errors, success: tr.errors == 0 };
@@ -236,13 +250,13 @@ fn emit_forward_decls(tr: Translator) -> Translator {
                 c = tr_advance(c);
                 let name = tr_lexeme(c);
                 tr_emit_line(c, str_concat(str_concat("typedef struct ", name), str_concat(" ", str_concat(name, ";"))));
-                c = tr_advance(c);
+                c = tr_advance(c); c = skip_generic_params(c);
             } else {
                 if (k2 == TK_KW_ENUM()) {
                     c = tr_advance(c);
                     let name = tr_lexeme(c);
                     tr_emit_line(c, str_concat("typedef int64_t ", str_concat(name, ";")));
-                    c = tr_advance(c);
+                    c = tr_advance(c); c = skip_generic_params(c);
                 } else { c = tr_advance(c); }
             }
         } else {
@@ -250,13 +264,13 @@ fn emit_forward_decls(tr: Translator) -> Translator {
                 c = tr_advance(c);
                 let name = tr_lexeme(c);
                 tr_emit_line(c, str_concat(str_concat("typedef struct ", name), str_concat(" ", str_concat(name, ";"))));
-                c = tr_advance(c);
+                c = tr_advance(c); c = skip_generic_params(c);
             } else {
                 if (k == TK_KW_ENUM()) {
                     c = tr_advance(c);
                     let name = tr_lexeme(c);
                     tr_emit_line(c, str_concat("typedef int64_t ", str_concat(name, ";")));
-                    c = tr_advance(c);
+                    c = tr_advance(c); c = skip_generic_params(c);
                 } else { c = tr_advance(c); }
             }
         }
@@ -316,6 +330,7 @@ fn emit_fn_prototype(tr: Translator) -> Translator {
         tr_emit_line(c, str_concat("#undef ", mangled_check));
     }
     c = tr_advance(c);
+    c = skip_generic_params(c);
     c = tr_advance(c);
 
     let params = "";
@@ -328,6 +343,7 @@ fn emit_fn_prototype(tr: Translator) -> Translator {
         let ptype_kind = tr_kind(c);
         let ptype_name = tr_lexeme(c);
         c = tr_advance(c);
+        c = skip_generic_params(c);
         params = str_concat(params, str_concat(type_to_c(ptype_kind, ptype_name), str_concat(" ", sanitize_c_name(pname))));
         first = 0;
     }
@@ -340,6 +356,7 @@ fn emit_fn_prototype(tr: Translator) -> Translator {
         let rn = tr_lexeme(c);
         ret_c = type_to_c(rk, rn);
         c = tr_advance(c);
+        c = skip_generic_params(c);
     }
 
     let mangled = str_concat("kr_", fname);
@@ -663,12 +680,14 @@ fn translate_struct(tr: Translator) -> Translator {
     let c: Translator = tr_advance(tr);
     let name = tr_lexeme(c);
     c = tr_advance(c);
+    c = skip_generic_params(c);
     c = tr_advance(c);
 
     tr_emit_line(c, str_concat("struct ", str_concat(name, " {")));
     while (!tr_at_end(c) && tr_kind(c) != TK_RBRACE()) {
         let fname = tr_lexeme(c); c = tr_advance(c); c = tr_advance(c);
         let fk = tr_kind(c); let fn_name = tr_lexeme(c); c = tr_advance(c);
+        c = skip_generic_params(c);
         tr_emit_line(c, str_concat(type_to_c(fk, fn_name), str_concat(" ", str_concat(fname, ";"))));
         if (!tr_at_end(c) && tr_kind(c) == TK_SEMICOLON()) { c = tr_advance(c); }
     }
@@ -684,7 +703,9 @@ fn translate_struct(tr: Translator) -> Translator {
 
 fn translate_fn(tr: Translator) -> Translator {
     let c: Translator = tr_advance(tr);
-    let fname = tr_lexeme(c); c = tr_advance(c); c = tr_advance(c);
+    let fname = tr_lexeme(c); c = tr_advance(c);
+    c = skip_generic_params(c);
+    c = tr_advance(c);
 
     let params = "";
     let first = 1;
@@ -692,6 +713,7 @@ fn translate_fn(tr: Translator) -> Translator {
         if (first == 0) { params = str_concat(params, ", "); c = tr_advance(c); }
         let pname = tr_lexeme(c); c = tr_advance(c); c = tr_advance(c);
         let pk = tr_kind(c); let pn = tr_lexeme(c); c = tr_advance(c);
+        c = skip_generic_params(c);
         params = str_concat(params, str_concat(type_to_c(pk, pn), str_concat(" ", sanitize_c_name(pname))));
         first = 0;
     }
@@ -702,6 +724,7 @@ fn translate_fn(tr: Translator) -> Translator {
         c = tr_advance(c);
         let rk = tr_kind(c); let rn = tr_lexeme(c);
         ret_c = type_to_c(rk, rn); c = tr_advance(c);
+        c = skip_generic_params(c);
     }
 
     let mangled = str_concat("kr_", fname);
@@ -1258,6 +1281,8 @@ fn translate_unary(tr: Translator) -> Translator {
     if (k == TK_OP_NOT()) { tr_emit(tr, "!"); return translate_unary(tr_advance(tr)); }
     if (k == TK_OP_MINUS()) { tr_emit(tr, "-"); return translate_unary(tr_advance(tr)); }
     if (k == TK_OP_BIT_NOT()) { tr_emit(tr, "~"); return translate_unary(tr_advance(tr)); }
+    if (k == TK_OP_BIT_AND()) { tr_emit(tr, "&"); return translate_unary(tr_advance(tr)); }
+    if (k == TK_OP_STAR()) { tr_emit(tr, "*"); return translate_unary(tr_advance(tr)); }
     return translate_postfix(tr);
 }
 
@@ -1317,6 +1342,20 @@ fn translate_primary(tr: Translator) -> Translator {
         return c;
     }
 
+    // Array literal: [expr, expr, ...] → (int64_t[]){expr, expr, ...}
+    if (k == TK_LBRACKET()) {
+        let c: Translator = tr_advance(tr);
+        tr_emit(c, "(int64_t[]){");
+        let af = 1;
+        while (!tr_at_end(c) && tr_kind(c) != TK_RBRACKET()) {
+            if (af == 0) { tr_emit(c, ", "); c = tr_advance(c); }
+            c = translate_expr(c); af = 0;
+        }
+        if (!tr_at_end(c)) { c = tr_advance(c); }
+        tr_emit(c, "}");
+        return c;
+    }
+
     if (k == TK_IDENTIFIER()) {
         let name = tr_lexeme(tr);
         let c: Translator = tr_advance(tr);
@@ -1334,6 +1373,11 @@ fn translate_primary(tr: Translator) -> Translator {
                 c = tr_advance(c);
             }
             return c;
+        }
+
+        // Turbofish: name<Type>( → skip generic params
+        if (!tr_at_end(c) && tr_kind(c) == TK_OP_LT()) {
+            c = skip_generic_params(c);
         }
 
         // Function call

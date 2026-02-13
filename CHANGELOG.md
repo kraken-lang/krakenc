@@ -73,6 +73,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Const Declarations** — `const NAME: type = value;` → C `#define kr_NAME value`
 - **C Keyword Sanitization** — `sanitize_c_name()` renames parameters named `int`, `float`, `double`, `char`, `void`, `const`, etc. to `int_val`, `float_val`, etc.
 - **Test Macro Override Pattern** — preamble test functions use `_kr_default_*` with `#define` aliases; `emit_fn_prototype` emits targeted `#undef` when user defines a conflicting function name
+- **Array Literals** — `[1, 2, 3]` → C compound literal `(int64_t[]){1, 2, 3}`
+- **Pointer Operators** — `&x` (address-of) and `*ptr` (dereference) as unary prefix operators
+- **Additional C Runtime Shims** — file I/O (fgets, fwrite, fread, feof, ferror, fflush, fgetc, fputc, fseek, ftell, rewind), memory ops (memcmp, memcpy, memmove, memset), string search (strstr, strchr, strncpy, strcat, strcpy, strncmp, strtok), UTF-8 validation, async block_on stub, sprintf/sscanf/snprintf macros, rand_int/rand_float/rand_bytes, math convenience (math_abs/min/max/sqrt/floor/ceil/round/sin/cos/tan/pow), logging (log_debug/info/warn/error/set_level), bench_start/bench_end, channel/condvar/pool/executor/cancel_token stubs, println, fopen/fclose, mutex_new/free
 
 ### Changed
 - **Lexer** (`src/lexer.kr`) — refactored `tokenize()` to use `VecInt`/`VecString` output parameters; added `push_token()` and `advance_n()` helpers
