@@ -153,6 +153,8 @@ fn type_to_c(kind: int, name: string) -> string {
         if (strcmp(name, "VecInt") == 0)    { return "void*"; }
         if (strcmp(name, "VecString") == 0) { return "void*"; }
         if (strcmp(name, "VecBytes") == 0)  { return "void*"; }
+        if (strcmp(name, "Vec") == 0)       { return "void*"; }
+        if (strcmp(name, "Map") == 0)       { return "void*"; }
         if (strcmp(name, "MapStringInt") == 0)    { return "void*"; }
         if (strcmp(name, "MapStringString") == 0) { return "void*"; }
         // User-defined struct — pass by value (typedef'd name)
@@ -326,10 +328,18 @@ fn emit_forward_decls(tr: Translator) -> Translator {
                     if (k2 == TK_KW_TRAIT() || k2 == TK_KW_STRUCT() || k2 == TK_KW_ENUM()) {
                         c = tr_advance(c); c = skip_brace_block(tr_advance(c));
                     } else {
-                        if (k2 == TK_KW_TYPE() || k2 == TK_KW_CONST()) {
-                            while (!tr_at_end(c) && tr_kind(c) != TK_SEMICOLON()) { c = tr_advance(c); }
-                            if (!tr_at_end(c)) { c = tr_advance(c); }
-                        } else { c = tr_advance(c); }
+                        if (k2 == TK_KW_TYPE()) {
+                            c = translate_type_alias(c);
+                        } else {
+                            if (k2 == TK_KW_CONST()) {
+                                let c2: Translator = tr_advance(c);
+                                if (!tr_at_end(c2) && tr_kind(c2) == TK_KW_FN()) {
+                                    c = emit_fn_prototype(c2);
+                                } else {
+                                    c = translate_const_decl(c);
+                                }
+                            } else { c = tr_advance(c); }
+                        }
                     }
                 }
             }
@@ -342,10 +352,18 @@ fn emit_forward_decls(tr: Translator) -> Translator {
                     if (k == TK_KW_TRAIT() || k == TK_KW_STRUCT() || k == TK_KW_ENUM()) {
                         c = tr_advance(c); c = skip_brace_block(tr_advance(c));
                     } else {
-                        if (k == TK_KW_TYPE() || k == TK_KW_CONST()) {
-                            while (!tr_at_end(c) && tr_kind(c) != TK_SEMICOLON()) { c = tr_advance(c); }
-                            if (!tr_at_end(c)) { c = tr_advance(c); }
-                        } else { c = tr_advance(c); }
+                        if (k == TK_KW_TYPE()) {
+                            c = translate_type_alias(c);
+                        } else {
+                            if (k == TK_KW_CONST()) {
+                                let c2: Translator = tr_advance(c);
+                                if (!tr_at_end(c2) && tr_kind(c2) == TK_KW_FN()) {
+                                    c = emit_fn_prototype(c2);
+                                } else {
+                                    c = translate_const_decl(c);
+                                }
+                            } else { c = tr_advance(c); }
+                        }
                     }
                 }
             }
@@ -487,7 +505,14 @@ fn translate_program(tr: Translator) -> Translator {
                     else {
                         if (k2 == TK_KW_TYPE()) { c = translate_type_alias(c); }
                         else {
-                            if (k2 == TK_KW_CONST()) { c = translate_const_decl(c); }
+                            if (k2 == TK_KW_CONST()) {
+                                let c2: Translator = tr_advance(c);
+                                if (!tr_at_end(c2) && tr_kind(c2) == TK_KW_FN()) {
+                                    c = tr_advance(c);
+                                } else {
+                                    c = translate_const_decl(c);
+                                }
+                            }
                             else {
                                 if (k2 == TK_KW_TRAIT()) { c = tr_advance(c); c = skip_brace_block(tr_advance(c)); }
                                 else { c = tr_advance(c); }
@@ -502,7 +527,14 @@ fn translate_program(tr: Translator) -> Translator {
                     else {
                         if (k == TK_KW_TYPE()) { c = translate_type_alias(c); }
                         else {
-                            if (k == TK_KW_CONST()) { c = translate_const_decl(c); }
+                            if (k == TK_KW_CONST()) {
+                                let c2: Translator = tr_advance(c);
+                                if (!tr_at_end(c2) && tr_kind(c2) == TK_KW_FN()) {
+                                    c = tr_advance(c);
+                                } else {
+                                    c = translate_const_decl(c);
+                                }
+                            }
                             else {
                                 if (k == TK_KW_TRAIT()) { c = tr_advance(c); c = skip_brace_block(tr_advance(c)); }
                                 else { c = tr_advance(c); }
@@ -532,10 +564,18 @@ fn translate_program(tr: Translator) -> Translator {
                     else {
                         if (k2 == TK_KW_IMPL()) { c = translate_impl(c); }
                         else {
-                            if (k2 == TK_KW_TYPE() || k2 == TK_KW_CONST()) {
-                                while (!tr_at_end(c) && tr_kind(c) != TK_SEMICOLON()) { c = tr_advance(c); }
-                                if (!tr_at_end(c)) { c = tr_advance(c); }
-                            } else { c = tr_advance(c); }
+                            if (k2 == TK_KW_TYPE()) {
+                                c = translate_type_alias(c);
+                            } else {
+                                if (k2 == TK_KW_CONST()) {
+                                    let c2: Translator = tr_advance(c);
+                                    if (!tr_at_end(c2) && tr_kind(c2) == TK_KW_FN()) {
+                                        c = translate_fn(c2);
+                                    } else {
+                                        c = translate_const_decl(c);
+                                    }
+                                } else { c = tr_advance(c); }
+                            }
                         }
                     }
                 }
@@ -546,10 +586,18 @@ fn translate_program(tr: Translator) -> Translator {
                     else {
                         if (k == TK_KW_IMPL()) { c = translate_impl(c); }
                         else {
-                            if (k == TK_KW_TYPE() || k == TK_KW_CONST()) {
-                                while (!tr_at_end(c) && tr_kind(c) != TK_SEMICOLON()) { c = tr_advance(c); }
-                                if (!tr_at_end(c)) { c = tr_advance(c); }
-                            } else { c = tr_advance(c); }
+                            if (k == TK_KW_TYPE()) {
+                                c = translate_type_alias(c);
+                            } else {
+                                if (k == TK_KW_CONST()) {
+                                    let c2: Translator = tr_advance(c);
+                                    if (!tr_at_end(c2) && tr_kind(c2) == TK_KW_FN()) {
+                                        c = translate_fn(c2);
+                                    } else {
+                                        c = translate_const_decl(c);
+                                    }
+                                } else { c = tr_advance(c); }
+                            }
                         }
                     }
                 }
@@ -647,6 +695,7 @@ fn translate_type_alias(tr: Translator) -> Translator {
     let tn = tr_lexeme(c);
     let c_type = type_to_c(tk, tn);
     c = tr_advance(c);
+    c = skip_generic_params(c);
     tr_emit_line(c, str_concat("typedef ", str_concat(c_type, str_concat(" ", str_concat(alias_name, ";")))));
     if (!tr_at_end(c) && tr_kind(c) == TK_SEMICOLON()) { c = tr_advance(c); }
     return c;
@@ -841,6 +890,7 @@ fn translate_var_decl(tr: Translator) -> Translator {
         c = tr_advance(c);
         let tk = tr_kind(c); let tn = tr_lexeme(c);
         c_type = type_to_c(tk, tn); c = tr_advance(c);
+        c = skip_generic_params(c);
         has_type = 1;
     }
 
@@ -1394,15 +1444,32 @@ fn translate_primary(tr: Translator) -> Translator {
         let c: Translator = tr_advance(tr);
         c = maybe_skip_turbofish(c);
 
-        // Enum variant: Name::Variant → Name_Variant
+        // Name::member(...)
+        // - lower-case member with call syntax => associated function: kr_Name_member(...)
+        // - otherwise => enum variant constant: Name_Member
         if (!tr_at_end(c) && tr_kind(c) == TK_COLON_COLON()) {
             c = tr_advance(c);
-            let variant = tr_lexeme(c); c = tr_advance(c);
-            tr_emit(c, str_concat(name, str_concat("_", variant)));
-            // Skip optional payload constructor (value)
+            let member = tr_lexeme(c); c = tr_advance(c);
+
+            if (!tr_at_end(c) && tr_kind(c) == TK_LPAREN() && strlen(member) > 0) {
+                let ch0 = str_char_at(member, 0);
+                if (ch0 >= 97 && ch0 <= 122) {
+                    c = tr_advance(c);
+                    tr_emit(c, str_concat("kr_", str_concat(name, str_concat("_", str_concat(member, "(")))));
+                    let fa = 1;
+                    while (!tr_at_end(c) && tr_kind(c) != TK_RPAREN()) {
+                        if (fa == 0) { tr_emit(c, ", "); c = tr_advance(c); }
+                        c = translate_expr(c); fa = 0;
+                    }
+                    c = tr_advance(c);
+                    tr_emit(c, ")");
+                    return c;
+                }
+            }
+
+            tr_emit(c, str_concat(name, str_concat("_", member)));
             if (!tr_at_end(c) && tr_kind(c) == TK_LPAREN()) {
                 c = tr_advance(c);
-                // For now, skip payload — just emit the tag
                 while (!tr_at_end(c) && tr_kind(c) != TK_RPAREN()) { c = tr_advance(c); }
                 c = tr_advance(c);
             }

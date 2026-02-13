@@ -88,6 +88,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **For Loop Increment** — translator detects assignment operators (`=`, `+=`, `-=`, `*=`, `/=`, `%=`) in for loop increment clause
 - **String Type** — `kr_str` typedef changed from `const char*` to `char*`; eliminates all const-qualifier warnings
 - **Zero C Warnings** — self-hosted output compiles with `cc` producing 0 warnings, 0 errors
+- **Bootstrap Coverage Verification** — current bootstrap compile sweep: `147/226` programs (`65.0%`) with self-hosted compiler
 
 ### Fixed
 - Struct literal trailing comma caused `}` to be parsed as a field name, corrupting all subsequent function output
@@ -101,6 +102,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `KrVecString` internal storage changed from `const char**` to `char**` to match `kr_str` typedef
 - Fixed self-hosting regression caused by over-broad generic/prefix parsing interactions; restored clean fixed-point generation
 - Fixed `kr_main` missing-definition linker failures after translator regression by tightening generic-expression handling in primary-expression parsing
+- Fixed associated-function call lowering: `Type::method(...)` now emits `kr_Type_method(...)`, while enum-style variant access still emits `Type_Variant`
+- Fixed generic container type annotations by erasing `Vec`/`Map` base identifiers to `void*` in `type_to_c`, preventing undeclared C type emissions for `Vec<T>` / `Map<K,V>`
+- Fixed top-level `const fn` routing so const-qualified functions are emitted through function prototype/body paths (instead of malformed `#define` output)
 
 ## [0.9.2] - 2026-02-06
 
