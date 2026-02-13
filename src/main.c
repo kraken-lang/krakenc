@@ -598,6 +598,12 @@ Parameter kr_new_param(kr_str name, int64_t type_kind, kr_str type_name);
 Field kr_new_field(kr_str name, int64_t type_kind, kr_str type_name);
 MatchArm kr_new_match_arm(int64_t pattern_kind, kr_str pattern_value);
 kr_str kr_node_kind_name(int64_t kind);
+bool kr_block_has_unsafe_like(Translator tr);
+bool kr_block_has_turbofish_like(Translator tr);
+bool kr_block_has_try_like(Translator tr);
+bool kr_block_has_self_init_let(Translator tr);
+Translator kr_translate_union(Translator tr);
+bool kr_block_has_tuple_like(Translator tr);
 Translator kr_new_translator(int64_t token_count, kr_str file, void* id, void* lex, void* o);
 bool kr_tr_at_end(Translator tr);
 int64_t kr_tr_kind(Translator tr);
@@ -623,8 +629,11 @@ bool kr_block_has_nested_fn(Translator tr);
 Translator kr_skip_fn_type_sig(Translator tr);
 Translator kr_maybe_skip_turbofish(Translator tr);
 kr_str kr_sanitize_c_name(kr_str name);
+kr_str kr_mangle_top_level_fn_name(kr_str name);
 bool kr_is_local_fn_var(Translator tr, kr_str name);
 kr_str kr_lookup_local_var_type_name(Translator tr, kr_str var_name);
+bool kr_is_generic_top_level_fn_name(Translator tr, kr_str fn_name);
+bool kr_is_local_generic_call_var(Translator tr, kr_str name);
 bool kr_is_top_level_fn_name(Translator tr, kr_str name);
 TranslateResult kr_translate(void* int_data, void* lexemes, int64_t token_count, kr_str file, Target target, void* out);
 Translator kr_emit_forward_decls(Translator tr);
@@ -2329,6 +2338,200 @@ kr_str kr_node_kind_name(int64_t kind) {
     return "unknown";
 }
 
+bool kr_block_has_unsafe_like(Translator tr) {
+    if (kr_tr_at_end(tr) || _KR_NEQ(kr_tr_kind(tr), kr_TK_LBRACE())) {
+        return false;
+    }
+    __auto_type i = tr.pos + 1;
+    __auto_type depth = 1;
+    while (i < tr.count && depth > 0) {
+        __auto_type k = kr_vec_int_get(tr.int_data, i * 3);
+        if (_KR_EQ(k, kr_TK_LBRACE())) {
+            depth = depth + 1;
+        }
+        if (_KR_EQ(k, kr_TK_RBRACE())) {
+            depth = depth - 1;
+        }
+        if (depth > 0 && _KR_EQ(kr_vec_string_get(tr.lexemes, i), "unsafe")) {
+            return true;
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
+bool kr_block_has_turbofish_like(Translator tr) {
+    if (kr_tr_at_end(tr) || _KR_NEQ(kr_tr_kind(tr), kr_TK_LBRACE())) {
+        return false;
+    }
+    __auto_type i = tr.pos + 1;
+    __auto_type depth = 1;
+    while (i + 1 < tr.count && depth > 0) {
+        __auto_type k = kr_vec_int_get(tr.int_data, i * 3);
+        if (_KR_EQ(k, kr_TK_LBRACE())) {
+            depth = depth + 1;
+        }
+        if (_KR_EQ(k, kr_TK_RBRACE())) {
+            depth = depth - 1;
+        }
+        if (depth > 0 && _KR_EQ(k, kr_TK_COLON_COLON()) && _KR_EQ(kr_vec_int_get(tr.int_data, (i + 1) * 3), kr_TK_OP_LT())) {
+            return true;
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
+bool kr_block_has_try_like(Translator tr) {
+    if (kr_tr_at_end(tr) || _KR_NEQ(kr_tr_kind(tr), kr_TK_LBRACE())) {
+        return false;
+    }
+    __auto_type i = tr.pos + 1;
+    __auto_type depth = 1;
+    while (i < tr.count && depth > 0) {
+        __auto_type k = kr_vec_int_get(tr.int_data, i * 3);
+        if (_KR_EQ(k, kr_TK_LBRACE())) {
+            depth = depth + 1;
+        }
+        if (_KR_EQ(k, kr_TK_RBRACE())) {
+            depth = depth - 1;
+        }
+        if (depth > 0 && (_KR_EQ(k, kr_TK_QUESTION()) || _KR_EQ(kr_vec_string_get(tr.lexemes, i), "?"))) {
+            return true;
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
+bool kr_block_has_self_init_let(Translator tr) {
+    if (kr_tr_at_end(tr) || _KR_NEQ(kr_tr_kind(tr), kr_TK_LBRACE())) {
+        return false;
+    }
+    __auto_type i = tr.pos + 1;
+    __auto_type depth = 1;
+    while (i + 3 < tr.count && depth > 0) {
+        __auto_type k = kr_vec_int_get(tr.int_data, i * 3);
+        if (_KR_EQ(k, kr_TK_LBRACE())) {
+            depth = depth + 1;
+        }
+        if (_KR_EQ(k, kr_TK_RBRACE())) {
+            depth = depth - 1;
+        }
+        if (depth > 0 && _KR_EQ(k, kr_TK_KW_LET())) {
+            __auto_type n1 = i + 1;
+            __auto_type n2 = i + 2;
+            __auto_type n3 = i + 3;
+            if (n3 < tr.count) {
+                if (_KR_EQ(kr_vec_int_get(tr.int_data, n1 * 3), kr_TK_IDENTIFIER()) && _KR_EQ(kr_vec_int_get(tr.int_data, n2 * 3), kr_TK_OP_ASSIGN()) && _KR_EQ(kr_vec_int_get(tr.int_data, n3 * 3), kr_TK_IDENTIFIER())) {
+                    if (_KR_EQ(kr_vec_string_get(tr.lexemes, n1), kr_vec_string_get(tr.lexemes, n3))) {
+                        return true;
+                    }
+                }
+            }
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
+Translator kr_translate_union(Translator tr) {
+    Translator c = kr_tr_advance(tr);
+    __auto_type name = kr_tr_lexeme(c);
+    c = kr_tr_advance(c);
+    c = kr_skip_generic_params(c);
+    c = kr_tr_advance(c);
+    kr_tr_emit_line(c, kr_str_concat("union ", kr_str_concat(name, " {")));
+    while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RBRACE())) {
+        __auto_type fname = kr_tr_lexeme(c);
+        c = kr_tr_advance(c);
+        if (kr_tr_at_end(c)) {
+            break;
+        }
+        if (_KR_NEQ(kr_tr_kind(c), kr_TK_COLON())) {
+            if (_KR_EQ(kr_tr_kind(c), kr_TK_RBRACE())) {
+                break;
+            }
+            c = kr_tr_advance(c);
+            continue;
+        }
+        c = kr_tr_advance(c);
+        __auto_type fk = kr_tr_kind(c);
+        __auto_type fn_name = kr_tr_lexeme(c);
+        c = kr_tr_advance(c);
+        if (_KR_EQ(fk, kr_TK_OP_STAR()) && !kr_tr_at_end(c)) {
+            c = kr_tr_advance(c);
+        }
+        c = kr_skip_array_type_suffix(c, fk);
+        c = kr_skip_generic_params(c);
+        __auto_type fc = kr_type_to_c(fk, fn_name);
+        if (_KR_EQ(fk, kr_TK_IDENTIFIER())) {
+            fc = "int64_t";
+        }
+        if (_KR_EQ(fk, kr_TK_KW_FN())) {
+            fc = "void*";
+            c = kr_skip_fn_type_sig(c);
+        }
+        kr_tr_emit_line(c, kr_str_concat(fc, kr_str_concat(" ", kr_str_concat(fname, ";"))));
+        if (!kr_tr_at_end(c) && (_KR_EQ(kr_tr_kind(c), kr_TK_SEMICOLON()) || _KR_EQ(kr_tr_kind(c), kr_TK_COMMA()))) {
+            c = kr_tr_advance(c);
+        }
+    }
+    c = kr_tr_advance(c);
+    kr_tr_emit_line(c, "};");
+    kr_tr_emit(c, "\n");
+    return c;
+}
+
+bool kr_block_has_tuple_like(Translator tr) {
+    if (kr_tr_at_end(tr) || _KR_NEQ(kr_tr_kind(tr), kr_TK_LBRACE())) {
+        return false;
+    }
+    __auto_type i = tr.pos + 1;
+    __auto_type depth = 1;
+    while (i < tr.count && depth > 0) {
+        __auto_type k = kr_vec_int_get(tr.int_data, i * 3);
+        if (_KR_EQ(k, kr_TK_LBRACE())) {
+            depth = depth + 1;
+        }
+        if (_KR_EQ(k, kr_TK_RBRACE())) {
+            depth = depth - 1;
+        }
+        if (depth > 0 && _KR_EQ(k, kr_TK_DOT())) {
+            __auto_type j = i + 1;
+            if (j < tr.count && _KR_EQ(kr_vec_int_get(tr.int_data, j * 3), kr_TK_INT_LIT())) {
+                return true;
+            }
+        }
+        if (depth > 0 && _KR_EQ(k, kr_TK_LPAREN())) {
+            __auto_type j2 = i + 1;
+            __auto_type pdepth = 1;
+            __auto_type has_comma = 0;
+            while (j2 < tr.count && pdepth > 0) {
+                __auto_type k2 = kr_vec_int_get(tr.int_data, j2 * 3);
+                if (_KR_EQ(k2, kr_TK_LPAREN())) {
+                    pdepth = pdepth + 1;
+                }
+                if (_KR_EQ(k2, kr_TK_RPAREN())) {
+                    pdepth = pdepth - 1;
+                }
+                if (_KR_EQ(pdepth, 1) && _KR_EQ(k2, kr_TK_COMMA())) {
+                    has_comma = 1;
+                }
+                j2 = j2 + 1;
+            }
+            if (_KR_EQ(has_comma, 1) && j2 < tr.count) {
+                __auto_type ak = kr_vec_int_get(tr.int_data, j2 * 3);
+                if (_KR_EQ(ak, kr_TK_OP_ASSIGN()) || _KR_EQ(ak, kr_TK_OP_PLUS_ASSIGN()) || _KR_EQ(ak, kr_TK_OP_MINUS_ASSIGN()) || _KR_EQ(ak, kr_TK_OP_STAR_ASSIGN()) || _KR_EQ(ak, kr_TK_OP_SLASH_ASSIGN()) || _KR_EQ(ak, kr_TK_OP_PERCENT_ASSIGN())) {
+                    return true;
+                }
+            }
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
 Translator kr_new_translator(int64_t token_count, kr_str file, void* id, void* lex, void* o) {
     return (Translator){.pos = 0, .count = token_count, .indent = 0, .errors = 0, .file = file, .int_data = id, .lexemes = lex, .out = o};
 }
@@ -2589,7 +2792,7 @@ bool kr_block_has_nested_type_decl(Translator tr) {
         if (_KR_EQ(k, kr_TK_RBRACE())) {
             depth = depth - 1;
         }
-        if (depth > 0 && (_KR_EQ(k, kr_TK_KW_STRUCT()) || _KR_EQ(k, kr_TK_KW_ENUM()) || _KR_EQ(k, kr_TK_KW_TRAIT()) || _KR_EQ(k, kr_TK_KW_IMPL()) || _KR_EQ(k, kr_TK_KW_TYPE()))) {
+        if (depth > 0 && (_KR_EQ(k, kr_TK_KW_STRUCT()) || _KR_EQ(k, kr_TK_KW_UNION()) || _KR_EQ(k, kr_TK_KW_ENUM()) || _KR_EQ(k, kr_TK_KW_TRAIT()) || _KR_EQ(k, kr_TK_KW_IMPL()) || _KR_EQ(k, kr_TK_KW_TYPE()))) {
             return true;
         }
         i = i + 1;
@@ -2717,6 +2920,13 @@ kr_str kr_sanitize_c_name(kr_str name) {
         return "unsigned_val";
     }
     return name;
+}
+
+kr_str kr_mangle_top_level_fn_name(kr_str name) {
+    if (_KR_EQ(name, "log")) {
+        return "kr_user_log";
+    }
+    return kr_str_concat("kr_", name);
 }
 
 bool kr_is_local_fn_var(Translator tr, kr_str name) {
@@ -2868,6 +3078,111 @@ kr_str kr_lookup_local_var_type_name(Translator tr, kr_str var_name) {
     return "";
 }
 
+bool kr_is_generic_top_level_fn_name(Translator tr, kr_str fn_name) {
+    __auto_type i = 0;
+    while (i + 2 < tr.count) {
+        if (_KR_EQ(kr_vec_int_get(tr.int_data, i * 3), kr_TK_KW_FN())) {
+            __auto_type i1 = i + 1;
+            if (_KR_EQ(kr_vec_int_get(tr.int_data, i1 * 3), kr_TK_IDENTIFIER()) && _KR_EQ(kr_vec_string_get(tr.lexemes, i1), fn_name)) {
+                __auto_type i2 = i1 + 1;
+                if (i2 < tr.count && _KR_EQ(kr_vec_int_get(tr.int_data, i2 * 3), kr_TK_OP_LT())) {
+                    return true;
+                }
+                return false;
+            }
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
+bool kr_is_local_generic_call_var(Translator tr, kr_str name) {
+    __auto_type i = tr.pos - 1;
+    __auto_type depth = 0;
+    while (i >= 0) {
+        __auto_type k = kr_vec_int_get(tr.int_data, i * 3);
+        if (_KR_EQ(k, kr_TK_RBRACE())) {
+            depth = depth + 1;
+        }
+        if (_KR_EQ(k, kr_TK_LBRACE())) {
+            if (_KR_EQ(depth, 0)) {
+                break;
+            }
+            depth = depth - 1;
+        }
+        i = i - 1;
+    }
+    __auto_type start = i + 1;
+    __auto_type j = start;
+    while (j < tr.pos) {
+        if (_KR_EQ(kr_vec_int_get(tr.int_data, j * 3), kr_TK_KW_LET())) {
+            __auto_type j1 = j + 1;
+            if (j1 < tr.pos && _KR_EQ(kr_vec_string_get(tr.lexemes, j1), name)) {
+                __auto_type p = j1 + 1;
+                if (p < tr.pos && _KR_EQ(kr_vec_int_get(tr.int_data, p * 3), kr_TK_COLON())) {
+                    p = p + 1;
+                    __auto_type pd = 0;
+                    __auto_type bd = 0;
+                    __auto_type sd = 0;
+                    while (p < tr.pos) {
+                        __auto_type kk = kr_vec_int_get(tr.int_data, p * 3);
+                        if (_KR_EQ(kk, kr_TK_LPAREN())) {
+                            pd = pd + 1;
+                        }
+                        if (_KR_EQ(kk, kr_TK_RPAREN()) && pd > 0) {
+                            pd = pd - 1;
+                        }
+                        if (_KR_EQ(kk, kr_TK_LBRACE())) {
+                            bd = bd + 1;
+                        }
+                        if (_KR_EQ(kk, kr_TK_RBRACE()) && bd > 0) {
+                            bd = bd - 1;
+                        }
+                        if (_KR_EQ(kk, kr_TK_LBRACKET())) {
+                            sd = sd + 1;
+                        }
+                        if (_KR_EQ(kk, kr_TK_RBRACKET()) && sd > 0) {
+                            sd = sd - 1;
+                        }
+                        if (_KR_EQ(pd, 0) && _KR_EQ(bd, 0) && _KR_EQ(sd, 0) && _KR_EQ(kk, kr_TK_OP_ASSIGN())) {
+                            break;
+                        }
+                        p = p + 1;
+                    }
+                }
+                if (p < tr.pos && _KR_EQ(kr_vec_int_get(tr.int_data, p * 3), kr_TK_OP_ASSIGN())) {
+                    __auto_type rhs = p + 1;
+                    if (rhs < tr.pos && _KR_EQ(kr_vec_int_get(tr.int_data, rhs * 3), kr_TK_IDENTIFIER())) {
+                        __auto_type rhs_call = rhs + 1;
+                        if (rhs_call < tr.pos && _KR_EQ(kr_vec_int_get(tr.int_data, rhs_call * 3), kr_TK_OP_LT())) {
+                            __auto_type gd = 1;
+                            rhs_call = rhs_call + 1;
+                            while (rhs_call < tr.pos && gd > 0) {
+                                __auto_type gk = kr_vec_int_get(tr.int_data, rhs_call * 3);
+                                if (_KR_EQ(gk, kr_TK_OP_LT())) {
+                                    gd = gd + 1;
+                                }
+                                if (_KR_EQ(gk, kr_TK_OP_GT())) {
+                                    gd = gd - 1;
+                                }
+                                rhs_call = rhs_call + 1;
+                            }
+                        }
+                        if (rhs_call < tr.pos && _KR_EQ(kr_vec_int_get(tr.int_data, rhs_call * 3), kr_TK_LPAREN())) {
+                            __auto_type callee = kr_vec_string_get(tr.lexemes, rhs);
+                            if (kr_is_generic_top_level_fn_name(tr, callee)) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        j = j + 1;
+    }
+    return false;
+}
+
 bool kr_is_top_level_fn_name(Translator tr, kr_str name) {
     __auto_type i = 0;
     while (i + 1 < tr.count) {
@@ -2915,15 +3230,24 @@ Translator kr_emit_forward_decls(Translator tr) {
                 c = kr_skip_generic_params(c);
             }
             else {
-                if (_KR_EQ(k2, kr_TK_KW_ENUM())) {
+                if (_KR_EQ(k2, kr_TK_KW_UNION())) {
                     c = kr_tr_advance(c);
                     __auto_type name = kr_tr_lexeme(c);
-                    kr_tr_emit_line(c, kr_str_concat("typedef int64_t ", kr_str_concat(name, ";")));
+                    kr_tr_emit_line(c, kr_str_concat(kr_str_concat("typedef union ", name), kr_str_concat(" ", kr_str_concat(name, ";"))));
                     c = kr_tr_advance(c);
                     c = kr_skip_generic_params(c);
                 }
                 else {
-                    c = kr_tr_advance(c);
+                    if (_KR_EQ(k2, kr_TK_KW_ENUM())) {
+                        c = kr_tr_advance(c);
+                        __auto_type name = kr_tr_lexeme(c);
+                        kr_tr_emit_line(c, kr_str_concat("typedef int64_t ", kr_str_concat(name, ";")));
+                        c = kr_tr_advance(c);
+                        c = kr_skip_generic_params(c);
+                    }
+                    else {
+                        c = kr_tr_advance(c);
+                    }
                 }
             }
         }
@@ -2936,15 +3260,24 @@ Translator kr_emit_forward_decls(Translator tr) {
                 c = kr_skip_generic_params(c);
             }
             else {
-                if (_KR_EQ(k, kr_TK_KW_ENUM())) {
+                if (_KR_EQ(k, kr_TK_KW_UNION())) {
                     c = kr_tr_advance(c);
                     __auto_type name = kr_tr_lexeme(c);
-                    kr_tr_emit_line(c, kr_str_concat("typedef int64_t ", kr_str_concat(name, ";")));
+                    kr_tr_emit_line(c, kr_str_concat(kr_str_concat("typedef union ", name), kr_str_concat(" ", kr_str_concat(name, ";"))));
                     c = kr_tr_advance(c);
                     c = kr_skip_generic_params(c);
                 }
                 else {
-                    c = kr_tr_advance(c);
+                    if (_KR_EQ(k, kr_TK_KW_ENUM())) {
+                        c = kr_tr_advance(c);
+                        __auto_type name = kr_tr_lexeme(c);
+                        kr_tr_emit_line(c, kr_str_concat("typedef int64_t ", kr_str_concat(name, ";")));
+                        c = kr_tr_advance(c);
+                        c = kr_skip_generic_params(c);
+                    }
+                    else {
+                        c = kr_tr_advance(c);
+                    }
                 }
             }
         }
@@ -2972,7 +3305,7 @@ Translator kr_emit_forward_decls(Translator tr) {
                         c = kr_skip_brace_block(c);
                     }
                     else {
-                        if (_KR_EQ(k2, kr_TK_KW_STRUCT()) || _KR_EQ(k2, kr_TK_KW_ENUM())) {
+                        if (_KR_EQ(k2, kr_TK_KW_STRUCT()) || _KR_EQ(k2, kr_TK_KW_UNION()) || _KR_EQ(k2, kr_TK_KW_ENUM())) {
                             c = kr_tr_advance(c);
                             c = kr_skip_brace_block(kr_tr_advance(c));
                         }
@@ -3026,7 +3359,7 @@ Translator kr_emit_forward_decls(Translator tr) {
                             c = kr_skip_brace_block(c);
                         }
                         else {
-                            if (_KR_EQ(k, kr_TK_KW_STRUCT()) || _KR_EQ(k, kr_TK_KW_ENUM())) {
+                            if (_KR_EQ(k, kr_TK_KW_STRUCT()) || _KR_EQ(k, kr_TK_KW_UNION()) || _KR_EQ(k, kr_TK_KW_ENUM())) {
                                 c = kr_tr_advance(c);
                                 c = kr_skip_brace_block(kr_tr_advance(c));
                             }
@@ -3062,8 +3395,8 @@ Translator kr_emit_forward_decls(Translator tr) {
 Translator kr_emit_fn_prototype(Translator tr) {
     Translator c = kr_tr_advance(tr);
     __auto_type fname = kr_tr_lexeme(c);
-    __auto_type mangled_check = kr_str_concat("kr_", fname);
-    if (_KR_EQ(fname, "test_section") || _KR_EQ(fname, "test_pass") || _KR_EQ(fname, "test_fail") || _KR_EQ(fname, "test_skip") || _KR_EQ(fname, "assert") || _KR_EQ(fname, "assert_eq") || _KR_EQ(fname, "assert_ne")) {
+    __auto_type mangled_check = kr_mangle_top_level_fn_name(fname);
+    if (_KR_EQ(fname, "test_section") || _KR_EQ(fname, "test_pass") || _KR_EQ(fname, "test_fail") || _KR_EQ(fname, "test_skip") || _KR_EQ(fname, "assert") || _KR_EQ(fname, "assert_eq") || _KR_EQ(fname, "assert_ne") || _KR_EQ(fname, "printf")) {
         kr_tr_emit_line(c, kr_str_concat("#undef ", mangled_check));
     }
     c = kr_tr_advance(c);
@@ -3099,7 +3432,7 @@ Translator kr_emit_fn_prototype(Translator tr) {
                 c = kr_skip_fn_type_sig(c);
             }
         }
-        __auto_type mangled_generic = kr_str_concat("kr_", fname);
+        __auto_type mangled_generic = kr_mangle_top_level_fn_name(fname);
         kr_tr_emit_line(c, kr_str_concat("int64_t ", kr_str_concat(mangled_generic, "();")));
         c = kr_skip_brace_block(c);
         return c;
@@ -3112,12 +3445,29 @@ Translator kr_emit_fn_prototype(Translator tr) {
             params = kr_str_concat(params, ", ");
             c = kr_tr_advance(c);
         }
+        __auto_type p0 = kr_tr_lexeme(c);
+        if (_KR_EQ(p0, "...") || _KR_EQ(p0, "..")) {
+            params = kr_str_concat(params, "...");
+            while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_COMMA()) && _KR_NEQ(kr_tr_kind(c), kr_TK_RPAREN())) {
+                c = kr_tr_advance(c);
+            }
+            first = 0;
+            continue;
+        }
         __auto_type pname = kr_tr_lexeme(c);
         c = kr_tr_advance(c);
         c = kr_tr_advance(c);
         __auto_type ptype_kind = kr_tr_kind(c);
         __auto_type ptype_name = kr_tr_lexeme(c);
         c = kr_tr_advance(c);
+        if (_KR_EQ(ptype_kind, kr_TK_OP_STAR())) {
+            while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_COMMA()) && _KR_NEQ(kr_tr_kind(c), kr_TK_RPAREN())) {
+                c = kr_tr_advance(c);
+            }
+            params = kr_str_concat(params, kr_str_concat("void* ", kr_sanitize_c_name(pname)));
+            first = 0;
+            continue;
+        }
         if (_KR_EQ(ptype_name, "dyn") && !kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_IDENTIFIER())) {
             c = kr_tr_advance(c);
         }
@@ -3126,7 +3476,11 @@ Translator kr_emit_fn_prototype(Translator tr) {
         if (_KR_EQ(ptype_kind, kr_TK_KW_FN())) {
             c = kr_skip_fn_type_sig(c);
         }
-        params = kr_str_concat(params, kr_str_concat(kr_type_to_c(ptype_kind, ptype_name), kr_str_concat(" ", kr_sanitize_c_name(pname))));
+        __auto_type pc = kr_type_to_c(ptype_kind, ptype_name);
+        if (_KR_EQ(ptype_kind, kr_TK_LBRACKET())) {
+            pc = "int64_t*";
+        }
+        params = kr_str_concat(params, kr_str_concat(pc, kr_str_concat(" ", kr_sanitize_c_name(pname))));
         first = 0;
     }
     c = kr_tr_advance(c);
@@ -3146,7 +3500,7 @@ Translator kr_emit_fn_prototype(Translator tr) {
             c = kr_skip_fn_type_sig(c);
         }
     }
-    __auto_type mangled = kr_str_concat("kr_", fname);
+    __auto_type mangled = kr_mangle_top_level_fn_name(fname);
     kr_tr_emit_line(c, kr_str_concat(ret_c, kr_str_concat(" ", kr_str_concat(mangled, kr_str_concat("(", kr_str_concat(params, ");"))))));
     c = kr_skip_brace_block(c);
     return c;
@@ -3293,32 +3647,37 @@ Translator kr_translate_program(Translator tr) {
                     c = kr_translate_struct(c);
                 }
                 else {
-                    if (_KR_EQ(k2, kr_TK_KW_ENUM())) {
-                        c = kr_translate_enum(c);
+                    if (_KR_EQ(k2, kr_TK_KW_UNION())) {
+                        c = kr_translate_union(c);
                     }
                     else {
-                        if (_KR_EQ(k2, kr_TK_KW_TYPE())) {
-                            c = kr_translate_type_alias(c);
+                        if (_KR_EQ(k2, kr_TK_KW_ENUM())) {
+                            c = kr_translate_enum(c);
                         }
                         else {
-                            if (_KR_EQ(k2, kr_TK_KW_CONST())) {
-                                Translator c2 = kr_tr_advance(c);
-                                if (!kr_tr_at_end(c2) && _KR_EQ(kr_tr_kind(c2), kr_TK_KW_FN())) {
-                                    c = kr_tr_advance(c);
-                                }
-                                else {
-                                    c = kr_translate_const_decl(c);
-                                }
+                            if (_KR_EQ(k2, kr_TK_KW_TYPE())) {
+                                c = kr_translate_type_alias(c);
                             }
                             else {
-                                if (_KR_EQ(k2, kr_TK_KW_TRAIT())) {
-                                    c = kr_tr_advance(c);
-                                    c = kr_tr_advance(c);
-                                    c = kr_skip_generic_params(c);
-                                    c = kr_skip_brace_block(c);
+                                if (_KR_EQ(k2, kr_TK_KW_CONST())) {
+                                    Translator c2 = kr_tr_advance(c);
+                                    if (!kr_tr_at_end(c2) && _KR_EQ(kr_tr_kind(c2), kr_TK_KW_FN())) {
+                                        c = kr_tr_advance(c);
+                                    }
+                                    else {
+                                        c = kr_translate_const_decl(c);
+                                    }
                                 }
                                 else {
-                                    c = kr_tr_advance(c);
+                                    if (_KR_EQ(k2, kr_TK_KW_TRAIT())) {
+                                        c = kr_tr_advance(c);
+                                        c = kr_tr_advance(c);
+                                        c = kr_skip_generic_params(c);
+                                        c = kr_skip_brace_block(c);
+                                    }
+                                    else {
+                                        c = kr_tr_advance(c);
+                                    }
                                 }
                             }
                         }
@@ -3330,32 +3689,37 @@ Translator kr_translate_program(Translator tr) {
                     c = kr_translate_struct(c);
                 }
                 else {
-                    if (_KR_EQ(k, kr_TK_KW_ENUM())) {
-                        c = kr_translate_enum(c);
+                    if (_KR_EQ(k, kr_TK_KW_UNION())) {
+                        c = kr_translate_union(c);
                     }
                     else {
-                        if (_KR_EQ(k, kr_TK_KW_TYPE())) {
-                            c = kr_translate_type_alias(c);
+                        if (_KR_EQ(k, kr_TK_KW_ENUM())) {
+                            c = kr_translate_enum(c);
                         }
                         else {
-                            if (_KR_EQ(k, kr_TK_KW_CONST())) {
-                                Translator c2 = kr_tr_advance(c);
-                                if (!kr_tr_at_end(c2) && _KR_EQ(kr_tr_kind(c2), kr_TK_KW_FN())) {
-                                    c = kr_tr_advance(c);
-                                }
-                                else {
-                                    c = kr_translate_const_decl(c);
-                                }
+                            if (_KR_EQ(k, kr_TK_KW_TYPE())) {
+                                c = kr_translate_type_alias(c);
                             }
                             else {
-                                if (_KR_EQ(k, kr_TK_KW_TRAIT())) {
-                                    c = kr_tr_advance(c);
-                                    c = kr_tr_advance(c);
-                                    c = kr_skip_generic_params(c);
-                                    c = kr_skip_brace_block(c);
+                                if (_KR_EQ(k, kr_TK_KW_CONST())) {
+                                    Translator c2 = kr_tr_advance(c);
+                                    if (!kr_tr_at_end(c2) && _KR_EQ(kr_tr_kind(c2), kr_TK_KW_FN())) {
+                                        c = kr_tr_advance(c);
+                                    }
+                                    else {
+                                        c = kr_translate_const_decl(c);
+                                    }
                                 }
                                 else {
-                                    c = kr_tr_advance(c);
+                                    if (_KR_EQ(k, kr_TK_KW_TRAIT())) {
+                                        c = kr_tr_advance(c);
+                                        c = kr_tr_advance(c);
+                                        c = kr_skip_generic_params(c);
+                                        c = kr_skip_brace_block(c);
+                                    }
+                                    else {
+                                        c = kr_tr_advance(c);
+                                    }
                                 }
                             }
                         }
@@ -3401,7 +3765,7 @@ Translator kr_translate_program(Translator tr) {
                         c = kr_skip_brace_block(c);
                     }
                     else {
-                        if (_KR_EQ(k2, kr_TK_KW_STRUCT()) || _KR_EQ(k2, kr_TK_KW_ENUM())) {
+                        if (_KR_EQ(k2, kr_TK_KW_STRUCT()) || _KR_EQ(k2, kr_TK_KW_UNION()) || _KR_EQ(k2, kr_TK_KW_ENUM())) {
                             c = kr_skip_brace_block(kr_tr_advance(kr_tr_advance(c)));
                         }
                         else {
@@ -3443,7 +3807,7 @@ Translator kr_translate_program(Translator tr) {
                         c = kr_skip_brace_block(c);
                     }
                     else {
-                        if (_KR_EQ(k, kr_TK_KW_STRUCT()) || _KR_EQ(k, kr_TK_KW_ENUM())) {
+                        if (_KR_EQ(k, kr_TK_KW_STRUCT()) || _KR_EQ(k, kr_TK_KW_UNION()) || _KR_EQ(k, kr_TK_KW_ENUM())) {
                             c = kr_skip_brace_block(kr_tr_advance(kr_tr_advance(c)));
                         }
                         else {
@@ -3485,6 +3849,9 @@ Translator kr_translate_top_level(Translator tr) {
     }
     if (_KR_EQ(k, kr_TK_KW_STRUCT())) {
         return kr_translate_struct(tr);
+    }
+    if (_KR_EQ(k, kr_TK_KW_UNION())) {
+        return kr_translate_union(tr);
     }
     return kr_tr_advance(tr);
 }
@@ -3678,13 +4045,42 @@ Translator kr_translate_struct(Translator tr) {
     while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RBRACE())) {
         __auto_type fname = kr_tr_lexeme(c);
         c = kr_tr_advance(c);
+        if (kr_tr_at_end(c)) {
+            break;
+        }
+        if (_KR_NEQ(kr_tr_kind(c), kr_TK_COLON())) {
+            if (_KR_EQ(kr_tr_kind(c), kr_TK_RBRACE())) {
+                break;
+            }
+            c = kr_tr_advance(c);
+            continue;
+        }
         c = kr_tr_advance(c);
         __auto_type fk = kr_tr_kind(c);
         __auto_type fn_name = kr_tr_lexeme(c);
         c = kr_tr_advance(c);
+        if (_KR_EQ(fk, kr_TK_OP_STAR()) && !kr_tr_at_end(c)) {
+            c = kr_tr_advance(c);
+        }
         c = kr_skip_array_type_suffix(c, fk);
         c = kr_skip_generic_params(c);
-        kr_tr_emit_line(c, kr_str_concat(kr_type_to_c(fk, fn_name), kr_str_concat(" ", kr_str_concat(fname, ";"))));
+        __auto_type fc = kr_type_to_c(fk, fn_name);
+        if (_KR_EQ(fk, kr_TK_IDENTIFIER()) && kr_strlen(fn_name) > 0) {
+            __auto_type ch0 = kr_str_char_at(fn_name, 0);
+            if (ch0 >= 65 && ch0 <= 90) {
+                if (_KR_EQ(kr_strlen(fn_name), 1)) {
+                    fc = "int64_t";
+                }
+                else {
+                    fc = "void*";
+                }
+            }
+        }
+        if (_KR_EQ(fk, kr_TK_KW_FN())) {
+            fc = "void*";
+            c = kr_skip_fn_type_sig(c);
+        }
+        kr_tr_emit_line(c, kr_str_concat(fc, kr_str_concat(" ", kr_str_concat(fname, ";"))));
         if (!kr_tr_at_end(c) && (_KR_EQ(kr_tr_kind(c), kr_TK_SEMICOLON()) || _KR_EQ(kr_tr_kind(c), kr_TK_COMMA()))) {
             c = kr_tr_advance(c);
         }
@@ -3731,7 +4127,7 @@ Translator kr_translate_fn(Translator tr) {
                 c = kr_skip_fn_type_sig(c);
             }
         }
-        __auto_type mangled_stub = kr_str_concat("kr_", fname);
+        __auto_type mangled_stub = kr_mangle_top_level_fn_name(fname);
         kr_tr_emit_line(c, kr_str_concat("int64_t ", kr_str_concat(mangled_stub, "() {")));
         c = kr_tr_indent(c);
         kr_tr_emit_line(c, "return 0;");
@@ -3750,12 +4146,29 @@ Translator kr_translate_fn(Translator tr) {
             params = kr_str_concat(params, ", ");
             c = kr_tr_advance(c);
         }
+        __auto_type p0 = kr_tr_lexeme(c);
+        if (_KR_EQ(p0, "...") || _KR_EQ(p0, "..")) {
+            params = kr_str_concat(params, "...");
+            while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_COMMA()) && _KR_NEQ(kr_tr_kind(c), kr_TK_RPAREN())) {
+                c = kr_tr_advance(c);
+            }
+            first = 0;
+            continue;
+        }
         __auto_type pname = kr_tr_lexeme(c);
         c = kr_tr_advance(c);
         c = kr_tr_advance(c);
         __auto_type pk = kr_tr_kind(c);
         __auto_type pn = kr_tr_lexeme(c);
         c = kr_tr_advance(c);
+        if (_KR_EQ(pk, kr_TK_OP_STAR())) {
+            while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_COMMA()) && _KR_NEQ(kr_tr_kind(c), kr_TK_RPAREN())) {
+                c = kr_tr_advance(c);
+            }
+            params = kr_str_concat(params, kr_str_concat("void* ", kr_sanitize_c_name(pname)));
+            first = 0;
+            continue;
+        }
         if (_KR_EQ(pn, "dyn") && !kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_IDENTIFIER())) {
             c = kr_tr_advance(c);
         }
@@ -3765,7 +4178,11 @@ Translator kr_translate_fn(Translator tr) {
             has_fn_param = 1;
             c = kr_skip_fn_type_sig(c);
         }
-        params = kr_str_concat(params, kr_str_concat(kr_type_to_c(pk, pn), kr_str_concat(" ", kr_sanitize_c_name(pname))));
+        __auto_type pc = kr_type_to_c(pk, pn);
+        if (_KR_EQ(pk, kr_TK_LBRACKET())) {
+            pc = "int64_t*";
+        }
+        params = kr_str_concat(params, kr_str_concat(pc, kr_str_concat(" ", kr_sanitize_c_name(pname))));
         first = 0;
     }
     c = kr_tr_advance(c);
@@ -3785,7 +4202,7 @@ Translator kr_translate_fn(Translator tr) {
             c = kr_skip_fn_type_sig(c);
         }
     }
-    __auto_type mangled = kr_str_concat("kr_", fname);
+    __auto_type mangled = kr_mangle_top_level_fn_name(fname);
     kr_tr_emit(c, kr_str_concat(ret_c, kr_str_concat(" ", kr_str_concat(mangled, kr_str_concat("(", kr_str_concat(params, ") {\n"))))));
     if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_LBRACE()) && (kr_block_has_nested_fn(c) || kr_block_has_nested_type_decl(c))) {
         Translator body_start = c;
@@ -3853,7 +4270,7 @@ Translator kr_translate_fn(Translator tr) {
         c = kr_skip_brace_block(body_start);
         return c;
     }
-    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_LBRACE()) && kr_block_has_closure_like(c)) {
+    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_LBRACE()) && (kr_block_has_closure_like(c) || kr_block_has_tuple_like(c) || kr_block_has_unsafe_like(c) || kr_block_has_turbofish_like(c) || kr_block_has_try_like(c) || kr_block_has_self_init_let(c))) {
         Translator body_start = c;
         c = kr_tr_advance(c);
         c = kr_tr_indent(c);
@@ -3925,6 +4342,27 @@ Translator kr_translate_statement(Translator tr) {
     __auto_type k = kr_tr_kind(tr);
     if (_KR_EQ(k, kr_TK_SEMICOLON())) {
         return kr_tr_advance(tr);
+    }
+    if (_KR_EQ(k, kr_TK_IDENTIFIER()) && _KR_EQ(kr_tr_lexeme(tr), "static_assert")) {
+        Translator c = kr_tr_advance(tr);
+        if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_LPAREN())) {
+            __auto_type pd = 1;
+            c = kr_tr_advance(c);
+            while (!kr_tr_at_end(c) && pd > 0) {
+                if (_KR_EQ(kr_tr_kind(c), kr_TK_LPAREN())) {
+                    pd = pd + 1;
+                }
+                if (_KR_EQ(kr_tr_kind(c), kr_TK_RPAREN())) {
+                    pd = pd - 1;
+                }
+                c = kr_tr_advance(c);
+            }
+        }
+        kr_tr_emit_line(c, "0;");
+        if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_SEMICOLON())) {
+            c = kr_tr_advance(c);
+        }
+        return c;
     }
     if (_KR_EQ(k, kr_TK_KW_LET()) || _KR_EQ(k, kr_TK_KW_CONST())) {
         return kr_translate_var_decl(tr);
@@ -4085,6 +4523,9 @@ Translator kr_translate_var_decl(Translator tr) {
         }
         c_type = kr_type_to_c(tk, tn);
         c = kr_tr_advance(c);
+        if (_KR_EQ(tk, kr_TK_LBRACKET())) {
+            c_type = "int64_t*";
+        }
         if (_KR_EQ(tn, "dyn") && !kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_IDENTIFIER())) {
             c = kr_tr_advance(c);
         }
@@ -4131,7 +4572,7 @@ Translator kr_translate_var_decl(Translator tr) {
             kr_tr_emit(c, "0");
         }
         else {
-            if (_KR_EQ(c_type, "void*") || _KR_EQ(c_type, "uint8_t*")) {
+            if (_KR_EQ(c_type, "void*") || _KR_EQ(c_type, "uint8_t*") || _KR_EQ(c_type, "char*") || _KR_EQ(c_type, "kr_str")) {
                 kr_tr_emit(c, kr_str_concat("(", kr_str_concat(c_type, ")(intptr_t)(")));
                 c = kr_translate_expr(c);
                 kr_tr_emit(c, ")");
@@ -4449,8 +4890,20 @@ Translator kr_translate_match_simple(Translator tr) {
                         kr_tr_emit(c, "1");
                     }
                     else {
-                        kr_tr_emit(c, kr_str_concat(subject, " == "));
-                        kr_tr_emit(c, pat_name);
+                        if (kr_strlen(pat_name) > 0) {
+                            __auto_type chp = kr_str_char_at(pat_name, 0);
+                            if (chp >= 97 && chp <= 122) {
+                                bind_payload = kr_sanitize_c_name(pat_name);
+                                kr_tr_emit(c, "1");
+                            }
+                            else {
+                                kr_tr_emit(c, kr_str_concat(subject, " == "));
+                                kr_tr_emit(c, pat_name);
+                            }
+                        }
+                        else {
+                            kr_tr_emit(c, "1");
+                        }
                     }
                 }
             }
@@ -4536,6 +4989,38 @@ Translator kr_translate_for_in(Translator tr, kr_str vname) {
 }
 
 Translator kr_translate_expr_stmt(Translator tr) {
+    if (_KR_EQ(kr_tr_kind(tr), kr_TK_LPAREN())) {
+        __auto_type i = tr.pos + 1;
+        __auto_type depth = 1;
+        __auto_type has_tuple_comma = 0;
+        while (i < tr.count && depth > 0) {
+            __auto_type kk = kr_vec_int_get(tr.int_data, i * 3);
+            if (_KR_EQ(kk, kr_TK_LPAREN())) {
+                depth = depth + 1;
+            }
+            if (_KR_EQ(kk, kr_TK_RPAREN())) {
+                depth = depth - 1;
+            }
+            if (_KR_EQ(depth, 1) && _KR_EQ(kk, kr_TK_COMMA())) {
+                has_tuple_comma = 1;
+            }
+            i = i + 1;
+        }
+        if (_KR_EQ(has_tuple_comma, 1) && i < tr.count) {
+            __auto_type ak = kr_vec_int_get(tr.int_data, i * 3);
+            if (_KR_EQ(ak, kr_TK_OP_ASSIGN()) || _KR_EQ(ak, kr_TK_OP_PLUS_ASSIGN()) || _KR_EQ(ak, kr_TK_OP_MINUS_ASSIGN()) || _KR_EQ(ak, kr_TK_OP_STAR_ASSIGN()) || _KR_EQ(ak, kr_TK_OP_SLASH_ASSIGN()) || _KR_EQ(ak, kr_TK_OP_PERCENT_ASSIGN())) {
+                Translator c0 = tr;
+                while (!kr_tr_at_end(c0) && _KR_NEQ(kr_tr_kind(c0), kr_TK_SEMICOLON())) {
+                    c0 = kr_tr_advance(c0);
+                }
+                kr_tr_emit_line(c0, "0;");
+                if (!kr_tr_at_end(c0) && _KR_EQ(kr_tr_kind(c0), kr_TK_SEMICOLON())) {
+                    c0 = kr_tr_advance(c0);
+                }
+                return c0;
+            }
+        }
+    }
     kr_tr_emit_indent(tr);
     Translator c = kr_translate_expr(tr);
     __auto_type k = kr_tr_kind(c);
@@ -4742,6 +5227,12 @@ Translator kr_translate_unary(Translator tr) {
         kr_tr_emit(tr, "~");
         return kr_translate_unary(kr_tr_advance(tr));
     }
+    if (_KR_EQ(k, kr_TK_OP_BIT_AND())) {
+        kr_tr_emit(tr, "((void*)(intptr_t)(");
+        Translator c = kr_translate_unary(kr_tr_advance(tr));
+        kr_tr_emit(c, "))");
+        return c;
+    }
     if (_KR_EQ(k, kr_TK_KW_AWAIT())) {
         kr_tr_emit(tr, "((int64_t)(intptr_t)");
         Translator c = kr_translate_unary(kr_tr_advance(tr));
@@ -4767,7 +5258,16 @@ Translator kr_translate_postfix(Translator tr) {
     Translator c = kr_translate_primary(tr);
     while (!kr_tr_at_end(c)) {
         __auto_type k = kr_tr_kind(c);
+        if (_KR_EQ(k, kr_TK_QUESTION())) {
+            c = kr_tr_advance(c);
+            continue;
+        }
         if (_KR_EQ(k, kr_TK_DOT())) {
+            Translator c1 = kr_tr_advance(c);
+            if (!kr_tr_at_end(c1) && _KR_EQ(kr_tr_kind(c1), kr_TK_INT_LIT())) {
+                c = kr_tr_advance(c1);
+                continue;
+            }
             kr_tr_emit(c, ".");
             c = kr_tr_advance(c);
             kr_tr_emit(c, kr_tr_lexeme(c));
@@ -4871,11 +5371,13 @@ Translator kr_translate_primary(Translator tr) {
     }
     if (_KR_EQ(k, kr_TK_PIPE()) || _KR_EQ(k, kr_TK_OP_BIT_OR()) || _KR_EQ(k, kr_TK_OP_OR())) {
         Translator c = kr_tr_advance(tr);
-        while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_PIPE()) && _KR_NEQ(kr_tr_kind(c), kr_TK_OP_BIT_OR()) && _KR_NEQ(kr_tr_kind(c), kr_TK_OP_OR())) {
-            c = kr_tr_advance(c);
-        }
-        if (!kr_tr_at_end(c)) {
-            c = kr_tr_advance(c);
+        if (_KR_NEQ(k, kr_TK_OP_OR())) {
+            while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_PIPE()) && _KR_NEQ(kr_tr_kind(c), kr_TK_OP_BIT_OR()) && _KR_NEQ(kr_tr_kind(c), kr_TK_OP_OR())) {
+                c = kr_tr_advance(c);
+            }
+            if (!kr_tr_at_end(c)) {
+                c = kr_tr_advance(c);
+            }
         }
         if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_LBRACE())) {
             c = kr_skip_brace_block(c);
@@ -4958,7 +5460,7 @@ Translator kr_translate_primary(Translator tr) {
         kr_tr_emit(c, "}");
         return c;
     }
-    if (_KR_EQ(k, kr_TK_IDENTIFIER())) {
+    if (_KR_EQ(k, kr_TK_IDENTIFIER()) || _KR_EQ(k, kr_TK_KW_SELF())) {
         __auto_type name = kr_tr_lexeme(tr);
         Translator c = kr_tr_advance(tr);
         c = kr_maybe_skip_turbofish(c);
@@ -4997,7 +5499,7 @@ Translator kr_translate_primary(Translator tr) {
         }
         if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_LPAREN())) {
             c = kr_tr_advance(c);
-            if (_KR_EQ(name, "f") || _KR_EQ(name, "op") || _KR_EQ(name, "add5") || _KR_EQ(name, "transform") || _KR_EQ(name, "cb") || _KR_EQ(name, "f1") || _KR_EQ(name, "f2") || _KR_EQ(name, "f3") || _KR_EQ(name, "f4") || _KR_EQ(name, "closure") || _KR_EQ(name, "compose") || _KR_EQ(name, "map") || _KR_EQ(name, "filter") || _KR_EQ(name, "reduce")) {
+            if (_KR_EQ(name, "f") || _KR_EQ(name, "op") || _KR_EQ(name, "add5") || _KR_EQ(name, "transform") || _KR_EQ(name, "cb") || _KR_EQ(name, "f1") || _KR_EQ(name, "f2") || _KR_EQ(name, "f3") || _KR_EQ(name, "f4") || _KR_EQ(name, "closure") || _KR_EQ(name, "compose") || _KR_EQ(name, "map") || _KR_EQ(name, "filter") || _KR_EQ(name, "reduce") || _KR_EQ(name, "times_three")) {
                 while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RPAREN())) {
                     c = kr_tr_advance(c);
                 }
@@ -5017,7 +5519,7 @@ Translator kr_translate_primary(Translator tr) {
                 kr_tr_emit(c, "0");
                 return c;
             }
-            kr_tr_emit(c, kr_str_concat("kr_", kr_str_concat(name, "(")));
+            kr_tr_emit(c, kr_str_concat(kr_mangle_top_level_fn_name(name), "("));
             __auto_type fa = 1;
             while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RPAREN())) {
                 if (_KR_EQ(fa, 0)) {
@@ -5030,7 +5532,21 @@ Translator kr_translate_primary(Translator tr) {
                     kr_tr_emit(c, ")");
                 }
                 else {
-                    c = kr_translate_expr(c);
+                    if (_KR_EQ(name, "strcmp")) {
+                        kr_tr_emit(c, "(kr_str)(intptr_t)(");
+                        c = kr_translate_expr(c);
+                        kr_tr_emit(c, ")");
+                    }
+                    else {
+                        if (_KR_EQ(name, "fmt_int")) {
+                            kr_tr_emit(c, "(int64_t)(intptr_t)(");
+                            c = kr_translate_expr(c);
+                            kr_tr_emit(c, ")");
+                        }
+                        else {
+                            c = kr_translate_expr(c);
+                        }
+                    }
                 }
                 fa = 0;
             }
@@ -5054,6 +5570,16 @@ Translator kr_translate_primary(Translator tr) {
                 c = kr_tr_advance(c);
                 c = kr_tr_advance(c);
                 kr_tr_emit(c, kr_str_concat(".", kr_str_concat(field_name, " = ")));
+                if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_IDENTIFIER())) {
+                    Translator c1 = kr_tr_advance(c);
+                    if (!kr_tr_at_end(c1) && _KR_EQ(kr_tr_kind(c1), kr_TK_LBRACE())) {
+                        Translator c2 = kr_skip_brace_block(c1);
+                        kr_tr_emit(c2, "0");
+                        c = c2;
+                        ff = 0;
+                        continue;
+                    }
+                }
                 c = kr_translate_expr(c);
                 ff = 0;
             }
@@ -5113,18 +5639,36 @@ Translator kr_translate_primary(Translator tr) {
                         return c3;
                     }
                 }
+                if (_KR_NEQ(name, "self") && (kr_tr_at_end(c2) || _KR_NEQ(kr_tr_kind(c2), kr_TK_LPAREN()))) {
+                    if (kr_is_local_generic_call_var(tr, name)) {
+                        kr_tr_emit(c2, kr_sanitize_c_name(name));
+                        return c2;
+                    }
+                }
             }
         }
         if (kr_is_top_level_fn_name(tr, name) && !kr_is_local_fn_var(tr, name)) {
-            kr_tr_emit(c, kr_str_concat("kr_", name));
+            kr_tr_emit(c, kr_mangle_top_level_fn_name(name));
         }
         else {
+            if (kr_strlen(name) > 0) {
+                __auto_type ch0 = kr_str_char_at(name, 0);
+                if (ch0 >= 65 && ch0 <= 90) {
+                    kr_tr_emit(c, "0");
+                    return c;
+                }
+            }
             kr_tr_emit(c, kr_sanitize_c_name(name));
         }
         return c;
     }
     if (!kr_tr_at_end(tr)) {
-        kr_tr_emit(tr, "0");
+        if (_KR_EQ(kr_tr_kind(tr), kr_TK_IDENTIFIER())) {
+            kr_tr_emit(tr, kr_sanitize_c_name(kr_tr_lexeme(tr)));
+        }
+        else {
+            kr_tr_emit(tr, "0");
+        }
         return kr_tr_advance(tr);
     }
     return tr;
@@ -5659,6 +6203,7 @@ kr_str kr_c_size_type(Target t) {
 kr_str kr_c_runtime_shims_posix() {
     __auto_type s = "";
     s = kr_str_concat(s, "void kr_puts(kr_str s) { puts(s); }\n");
+    s = kr_str_concat(s, "void kr_print_int(int64_t v) { printf(\"%lld\", (long long)v); }\n");
     s = kr_str_concat(s, "int64_t kr_strlen(kr_str s, ...) { return (int64_t)strlen(s); }\n");
     s = kr_str_concat(s, "int64_t kr_abs(int64_t x) { return x < 0 ? -x : x; }\n");
     s = kr_str_concat(s, "int kr_strcmp(kr_str a, kr_str b) { return strcmp(a, b); }\n");
@@ -5744,18 +6289,18 @@ kr_str kr_c_runtime_shims_posix() {
     s = kr_str_concat(s, "kr_str kr_vec_string_swap_remove(void* vp, int64_t i) { KrVecString* v=(KrVecString*)vp; kr_str val=v->data[i]; v->data[i]=v->data[--v->len]; return val; }\n");
     s = kr_str_concat(s, "typedef struct { void** data; int64_t len; int64_t cap; } KrVecBytes;\n");
     s = kr_str_concat(s, "void* kr_vec_bytes_new() { KrVecBytes* v=(KrVecBytes*)malloc(sizeof(KrVecBytes)); v->data=(void**)malloc(16*sizeof(void*)); v->len=0; v->cap=16; return v; }\n");
-    s = kr_str_concat(s, "void kr_vec_bytes_push(void* vp, void* val) { KrVecBytes* v=(KrVecBytes*)vp; if(v->len>=v->cap){v->cap*=2;v->data=(void**)realloc(v->data,v->cap*sizeof(void*));} v->data[v->len++]=val; }\n");
-    s = kr_str_concat(s, "void* kr_vec_bytes_get(void* vp, int64_t i) { return ((KrVecBytes*)vp)->data[i]; }\n");
-    s = kr_str_concat(s, "void kr_vec_bytes_set(void* vp, int64_t i, void* val) { ((KrVecBytes*)vp)->data[i]=val; }\n");
+    s = kr_str_concat(s, "void kr_vec_bytes_push(void* vp, int64_t val) { KrVecBytes* v=(KrVecBytes*)vp; if(v->len>=v->cap){v->cap*=2;v->data=(void**)realloc(v->data,v->cap*sizeof(void*));} v->data[v->len++]=(void*)(intptr_t)val; }\n");
+    s = kr_str_concat(s, "int64_t kr_vec_bytes_get(void* vp, int64_t i) { return (int64_t)(intptr_t)((KrVecBytes*)vp)->data[i]; }\n");
+    s = kr_str_concat(s, "void kr_vec_bytes_set(void* vp, int64_t i, int64_t val) { ((KrVecBytes*)vp)->data[i]=(void*)(intptr_t)val; }\n");
     s = kr_str_concat(s, "int64_t kr_vec_bytes_len(void* vp) { return ((KrVecBytes*)vp)->len; }\n");
     s = kr_str_concat(s, "void kr_vec_bytes_free(void* vp) { KrVecBytes* v=(KrVecBytes*)vp; free(v->data); free(v); }\n");
-    s = kr_str_concat(s, "void* kr_vec_bytes_pop(void* vp) { KrVecBytes* v=(KrVecBytes*)vp; return v->data[--v->len]; }\n");
+    s = kr_str_concat(s, "int64_t kr_vec_bytes_pop(void* vp) { KrVecBytes* v=(KrVecBytes*)vp; return (int64_t)(intptr_t)v->data[--v->len]; }\n");
     s = kr_str_concat(s, "void kr_vec_bytes_clear(void* vp) { ((KrVecBytes*)vp)->len=0; }\n");
     s = kr_str_concat(s, "int64_t kr_vec_bytes_capacity(void* vp) { return ((KrVecBytes*)vp)->cap; }\n");
     s = kr_str_concat(s, "void kr_vec_bytes_reserve(void* vp, int64_t n) { KrVecBytes* v=(KrVecBytes*)vp; if(n>v->cap){v->cap=n;v->data=(void**)realloc(v->data,n*sizeof(void*));} }\n");
     s = kr_str_concat(s, "void* kr_vec_bytes_with_capacity(int64_t n) { KrVecBytes* v=(KrVecBytes*)malloc(sizeof(KrVecBytes)); v->data=(void**)malloc(n*sizeof(void*)); v->len=0; v->cap=n; return v; }\n");
     s = kr_str_concat(s, "void kr_vec_bytes_shrink_to_fit(void* vp) { KrVecBytes* v=(KrVecBytes*)vp; if(v->len<v->cap){v->cap=v->len?v->len:1;v->data=(void**)realloc(v->data,v->cap*sizeof(void*));} }\n");
-    s = kr_str_concat(s, "void* kr_vec_bytes_swap_remove(void* vp, int64_t i) { KrVecBytes* v=(KrVecBytes*)vp; void* val=v->data[i]; v->data[i]=v->data[--v->len]; return val; }\n");
+    s = kr_str_concat(s, "int64_t kr_vec_bytes_swap_remove(void* vp, int64_t i) { KrVecBytes* v=(KrVecBytes*)vp; void* val=v->data[i]; v->data[i]=v->data[--v->len]; return (int64_t)(intptr_t)val; }\n");
     s = kr_str_concat(s, "typedef struct { char** keys; int64_t* vals; int64_t cap; int64_t len; } KrMapSI;\n");
     s = kr_str_concat(s, "static uint64_t _kr_hash_str(const char* s) { uint64_t h=5381; while(*s) h=h*33+(*s++); return h; }\n");
     s = kr_str_concat(s, "void* kr_map_string_int_new() {\n");

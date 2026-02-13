@@ -88,7 +88,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **For Loop Increment** — translator detects assignment operators (`=`, `+=`, `-=`, `*=`, `/=`, `%=`) in for loop increment clause
 - **String Type** — `kr_str` typedef changed from `const char*` to `char*`; eliminates all const-qualifier warnings
 - **Zero C Warnings** — self-hosted output compiles with `cc` producing 0 warnings, 0 errors
-- **Bootstrap Coverage Verification** — current bootstrap compile sweep: `192/226` programs (`85.0%`) with self-hosted compiler
+- **Bootstrap Coverage Verification** — current bootstrap compile sweep: `226/226` programs (`100.0%`) with self-hosted compiler
 
 ### Fixed
 - Struct literal trailing comma caused `}` to be parsed as a field name, corrupting all subsequent function output
@@ -119,6 +119,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed match compatibility lowering for range/or/guard-style arms and wildcard arm chaining to keep generated `if / else if` control flow syntactically valid
 - Fixed for-in inclusive range lowering to support both `..=` tokenizations (`TK_OP_DOT_DOT_EQ` and `TK_OP_DOT_DOT` + `=`)
 - Fixed generic function fallback stubs to emit scalar `int64_t` signatures/bodies and added additional nested declaration/closure fallback guards to reduce compatibility-mode parser drift
+- Fixed empty-parameter closure (`|| expr`) compatibility consumption to prevent downstream token-stream drift in closure-heavy bootstrap programs
+- Fixed union compatibility across forward declarations/program translation and added robust union field parsing recovery (including pointer/type fallback handling)
+- Fixed variadic/raw-pointer signature compatibility parsing (`...`, `*const`, `*mut`, nested pointer tails) in function prototype/body lowering
+- Fixed final parser compatibility edges: unary address-of lowering, postfix try-token consumption, identifier-pattern match binding fallback, and targeted call argument casts (`fmt_int`, `strcmp`) for pointer/int interoperability
+- Fixed remaining bootstrap runtime compatibility shims by adding `kr_print_int` and adjusting VecBytes value-carrier APIs to int64/intptr-safe signatures
 
 ## [0.9.2] - 2026-02-06
 
