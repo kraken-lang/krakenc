@@ -304,16 +304,19 @@ pub fn c_includes_for_target(t: Target) -> string {
 // ---------------------------------------------------------------------------
 
 pub fn c_typedefs_common() -> string {
-    return str_concat(
-        str_concat(
-            str_concat(
-                "typedef int64_t kr_int;\n",
-                "typedef double kr_float;\n"
-            ),
-            "typedef bool kr_bool;\n"
-        ),
-        "typedef char* kr_str;\n"
-    );
+    let s = "";
+    s = str_concat(s, "typedef int64_t kr_int;\n");
+    s = str_concat(s, "typedef double kr_float;\n");
+    s = str_concat(s, "typedef bool kr_bool;\n");
+    s = str_concat(s, "typedef char* kr_str;\n");
+    // Tuple structs for tuple literal/field-access lowering
+    s = str_concat(s, "typedef struct { int64_t f0; int64_t f1; } KrTuple2;\n");
+    s = str_concat(s, "typedef struct { int64_t f0; int64_t f1; int64_t f2; } KrTuple3;\n");
+    s = str_concat(s, "typedef struct { int64_t f0; int64_t f1; int64_t f2; int64_t f3; } KrTuple4;\n");
+    s = str_concat(s, "typedef struct { int64_t f0; int64_t f1; int64_t f2; int64_t f3; int64_t f4; } KrTuple5;\n");
+    // Generic closure function pointer type
+    s = str_concat(s, "typedef int64_t (*KrClosure)(int64_t);\n");
+    return s;
 }
 
 // Size type varies per platform

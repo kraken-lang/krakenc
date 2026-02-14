@@ -100,6 +100,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Lexer returns now emit `return lex;` (preserves source/length fields)
   - Other struct returns now emit `return (TypeName){0};` (proper zero-init)
 - **Generic Stub Return Type** — generic function stub emitter hardcoded `int64_t` return type for all generic functions; now captures the declared return type after `->` using `type_to_c()` and emits typed default returns
+- **Bailout Block Removal** — removed all 3 `translate_fn` bailout blocks that stubbed entire function bodies when closures, tuples, unsafe, turbofish, try, self-init-let, nested fn/type, or fn-param patterns were detected; functions are now always fully translated (zero regressions: 135/135 tests, 226/226 bootstrap, gen2==gen3)
+- **Dead Code Cleanup** — removed all 8 bailout detector functions (`block_has_unsafe_like`, `block_has_turbofish_like`, `block_has_try_like`, `block_has_self_init_let`, `block_has_tuple_like`, `block_has_closure_like`, `block_has_nested_type_decl`, `block_has_nested_fn`); 70+ lines of dead scanning code eliminated
+
+### Improved
+- **Unsafe Block Lowering** — `unsafe { ... }` now transparently emits the inner block body as real C statements instead of falling through to expression-statement handling
+- **Tuple Literal Lowering** — `(a, b, c)` now emits a real C comma-expression `((a), (b), (c))` that evaluates all sub-expressions and returns the last value; previously collapsed to `0` discarding all side effects
+- **Tuple Destructuring Binding** — `let (a, b) = (x, y);` now emits `__auto_type a = x; __auto_type b = y;` per-element bindings when RHS is a tuple literal; non-tuple RHS evaluates via `(void)(expr)` instead of being silently skipped
+- **Tuple Assignment Lowering** — `(a, b) = (x, y);` now emits per-element assignments `a = x; b = y;` when RHS is a tuple literal; non-tuple RHS evaluates via `(void)(expr)` instead of neutral `0;`
+- **Static Assert Lowering** — `static_assert(cond, msg)` now emits real C `_Static_assert(cond, msg);` with translated argument expressions instead of no-op `0;`
+- **Tuple Struct Codegen** — added `KrTuple2`..`KrTuple5` struct typedefs to C preamble; tuple literals `(a, b)` now emit `(KrTupleN){.f0 = a, .f1 = b}` struct initializers; tuple field access `x.0` emits `x.f0`; tuple destructuring from non-tuple RHS stores into `KrTupleN` temp and extracts `.f0`/`.f1` fields
+- **Generic Function Type-Erased Translation** — generic functions now translate their real body with type parameters erased to `int64_t` instead of emitting empty stubs with default returns; both prototypes and bodies use the same type-erased parameter parsing
+- **Closure Codegen** — added `emit_closure_statics` extraction pass that emits each closure as a top-level `static` C function with unique name derived from token position; `translate_primary` emits `(void*)_kr_cl_N` function pointers instead of null `0`; supports typed params, block/expression bodies, and zero-arg closures; added `KrClosure` typedef
+- **Dyn Trait-Object Dispatch** — `lookup_local_var_type_name` returns `dyn:TraitName` for dyn variables; added `lookup_dyn_concrete_type` to resolve concrete struct type at declaration site; dyn method calls dispatch to `kr_ConcreteType_method()` instead of `0`; dyn variable init translates RHS expression; removed hardcoded `s`/`dc`/`dr` name-based hack
 - Struct literal trailing comma caused `}` to be parsed as a field name, corrupting all subsequent function output
 - Forward declaration ordering: `Target` and `Diagnostic` structs used in function signatures before their typedefs appeared
 - Struct definition ordering: struct bodies emitted after functions that used them by value caused incomplete type errors

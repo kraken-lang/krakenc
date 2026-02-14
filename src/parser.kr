@@ -20,71 +20,6 @@ pub struct Translator {
     out: VecString;
 }
 
-fn block_has_unsafe_like(tr: Translator) -> bool {
-    if (tr_at_end(tr) || tr_kind(tr) != TK_LBRACE()) { return false; }
-    let i = tr.pos + 1;
-    let depth = 1;
-    while (i < tr.count && depth > 0) {
-        let k = vec_int_get(tr.int_data, i * 3);
-        if (k == TK_LBRACE()) { depth = depth + 1; }
-        if (k == TK_RBRACE()) { depth = depth - 1; }
-        if (depth > 0 && k == TK_IDENTIFIER() && vec_string_get(tr.lexemes, i) == "unsafe") { return true; }
-        i = i + 1;
-    }
-    return false;
-}
-
-fn block_has_turbofish_like(tr: Translator) -> bool {
-    if (tr_at_end(tr) || tr_kind(tr) != TK_LBRACE()) { return false; }
-    let i = tr.pos + 1;
-    let depth = 1;
-    while (i + 1 < tr.count && depth > 0) {
-        let k = vec_int_get(tr.int_data, i * 3);
-        if (k == TK_LBRACE()) { depth = depth + 1; }
-        if (k == TK_RBRACE()) { depth = depth - 1; }
-        if (depth > 0 && k == TK_COLON_COLON() && vec_int_get(tr.int_data, (i + 1) * 3) == TK_OP_LT()) { return true; }
-        i = i + 1;
-    }
-    return false;
-}
-
-fn block_has_try_like(tr: Translator) -> bool {
-    if (tr_at_end(tr) || tr_kind(tr) != TK_LBRACE()) { return false; }
-    let i = tr.pos + 1;
-    let depth = 1;
-    while (i < tr.count && depth > 0) {
-        let k = vec_int_get(tr.int_data, i * 3);
-        if (k == TK_LBRACE()) { depth = depth + 1; }
-        if (k == TK_RBRACE()) { depth = depth - 1; }
-        if (depth > 0 && k == TK_QUESTION()) { return true; }
-        i = i + 1;
-    }
-    return false;
-}
-
-fn block_has_self_init_let(tr: Translator) -> bool {
-    if (tr_at_end(tr) || tr_kind(tr) != TK_LBRACE()) { return false; }
-    let i = tr.pos + 1;
-    let depth = 1;
-    while (i + 3 < tr.count && depth > 0) {
-        let k = vec_int_get(tr.int_data, i * 3);
-        if (k == TK_LBRACE()) { depth = depth + 1; }
-        if (k == TK_RBRACE()) { depth = depth - 1; }
-        if (depth > 0 && k == TK_KW_LET()) {
-            let n1 = i + 1;
-            let n2 = i + 2;
-            let n3 = i + 3;
-            if (n3 < tr.count) {
-                if (vec_int_get(tr.int_data, n1 * 3) == TK_IDENTIFIER() && vec_int_get(tr.int_data, n2 * 3) == TK_OP_ASSIGN() && vec_int_get(tr.int_data, n3 * 3) == TK_IDENTIFIER()) {
-                    if (vec_string_get(tr.lexemes, n1) == vec_string_get(tr.lexemes, n3)) { return true; }
-                }
-            }
-        }
-        i = i + 1;
-    }
-    return false;
-}
-
 fn translate_union(tr: Translator) -> Translator {
     let c: Translator = tr_advance(tr);
     let name = tr_lexeme(c);
@@ -117,48 +52,6 @@ fn translate_union(tr: Translator) -> Translator {
     tr_emit_line(c, "};");
     tr_emit(c, "\n");
     return c;
-}
-
-// Detect tuple-heavy syntax patterns that do not lower reliably in compatibility mode:
-//   - tuple numeric field access: x.0, x.1, ...
-//   - tuple-pattern assignment: (a, b) = expr
-fn block_has_tuple_like(tr: Translator) -> bool {
-    if (tr_at_end(tr) || tr_kind(tr) != TK_LBRACE()) { return false; }
-    let i = tr.pos + 1;
-    let depth = 1;
-    while (i < tr.count && depth > 0) {
-        let k = vec_int_get(tr.int_data, i * 3);
-        if (k == TK_LBRACE()) { depth = depth + 1; }
-        if (k == TK_RBRACE()) { depth = depth - 1; }
-
-        if (depth > 0 && k == TK_DOT()) {
-            let j = i + 1;
-            if (j < tr.count && vec_int_get(tr.int_data, j * 3) == TK_INT_LIT()) { return true; }
-        }
-
-        if (depth > 0 && k == TK_LPAREN()) {
-            let j2 = i + 1;
-            let pdepth = 1;
-            let has_comma = 0;
-            while (j2 < tr.count && pdepth > 0) {
-                let k2 = vec_int_get(tr.int_data, j2 * 3);
-                if (k2 == TK_LPAREN()) { pdepth = pdepth + 1; }
-                if (k2 == TK_RPAREN()) { pdepth = pdepth - 1; }
-                if (pdepth == 1 && k2 == TK_COMMA()) { has_comma = 1; }
-                j2 = j2 + 1;
-            }
-            if (has_comma == 1 && j2 < tr.count) {
-                let ak = vec_int_get(tr.int_data, j2 * 3);
-                if (ak == TK_OP_ASSIGN() || ak == TK_OP_PLUS_ASSIGN() || ak == TK_OP_MINUS_ASSIGN()
-                    || ak == TK_OP_STAR_ASSIGN() || ak == TK_OP_SLASH_ASSIGN() || ak == TK_OP_PERCENT_ASSIGN()) {
-                    return true;
-                }
-            }
-        }
-
-        i = i + 1;
-    }
-    return false;
 }
 
 pub fn new_translator(token_count: int, file: string, id: VecInt, lex: VecString, o: VecString) -> Translator {
@@ -339,79 +232,6 @@ fn skip_array_type_suffix(tr: Translator, first_kind: int) -> Translator {
         c = tr_advance(c);
     }
     return c;
-}
-
-// Detect closure-like syntax patterns in a brace block:
-//   |...| -> ...    or    || -> ...
-fn block_has_closure_like(tr: Translator) -> bool {
-    if (tr_at_end(tr) || tr_kind(tr) != TK_LBRACE()) { return false; }
-    let i = tr.pos + 1;
-    let depth = 1;
-    while (i < tr.count && depth > 0) {
-        let k = vec_int_get(tr.int_data, i * 3);
-        if (k == TK_LBRACE()) { depth = depth + 1; }
-        if (k == TK_RBRACE()) { depth = depth - 1; }
-
-        if (depth > 0 && (k == TK_PIPE() || k == TK_OP_BIT_OR() || k == TK_OP_OR())) {
-            let prev_k = 0;
-            if (i > 0) { prev_k = vec_int_get(tr.int_data, (i - 1) * 3); }
-            // Shorthand closure forms in assignment/argument position:
-            //   let f = || expr;
-            //   let f = |x| expr;
-            if (prev_k == TK_OP_ASSIGN() || prev_k == TK_COMMA() || prev_k == TK_LPAREN() || prev_k == TK_ARROW()) {
-                return true;
-            }
-            // Only apply {-lookahead for single-pipe tokens (|), not for
-            // logical OR (||) — avoids false positive on `if (a || b) {`.
-            if (k != TK_OP_OR()) {
-                let j = i + 1;
-                let lim = i + 10;
-                let saw_lbrace = 0;
-                while (j < tr.count && j < lim) {
-                    let k2 = vec_int_get(tr.int_data, j * 3);
-                    if (k2 == TK_ARROW()) { return true; }
-                    if (k2 == TK_LBRACE()) { saw_lbrace = 1; break; }
-                    if (k2 == TK_SEMICOLON() || k2 == TK_LBRACE()) { break; }
-                    j = j + 1;
-                }
-                if (saw_lbrace == 1) { return true; }
-            }
-        }
-
-        i = i + 1;
-    }
-    return false;
-}
-
-fn block_has_nested_type_decl(tr: Translator) -> bool {
-    if (tr_at_end(tr) || tr_kind(tr) != TK_LBRACE()) { return false; }
-    let i = tr.pos + 1;
-    let depth = 1;
-    while (i < tr.count && depth > 0) {
-        let k = vec_int_get(tr.int_data, i * 3);
-        if (k == TK_LBRACE()) { depth = depth + 1; }
-        if (k == TK_RBRACE()) { depth = depth - 1; }
-        if (depth > 0 && (k == TK_KW_STRUCT() || k == TK_KW_UNION() || k == TK_KW_ENUM() || k == TK_KW_TRAIT() || k == TK_KW_IMPL() || k == TK_KW_TYPE())) {
-            return true;
-        }
-        i = i + 1;
-    }
-    return false;
-}
-
-// Detect nested function declarations inside a brace block.
-fn block_has_nested_fn(tr: Translator) -> bool {
-    if (tr_at_end(tr) || tr_kind(tr) != TK_LBRACE()) { return false; }
-    let i = tr.pos + 1;
-    let depth = 1;
-    while (i < tr.count && depth > 0) {
-        let k = vec_int_get(tr.int_data, i * 3);
-        if (k == TK_LBRACE()) { depth = depth + 1; }
-        if (k == TK_RBRACE()) { depth = depth - 1; }
-        if (depth > 0 && k == TK_KW_FN()) { return true; }
-        i = i + 1;
-    }
-    return false;
 }
 
 // Skip function-type suffix in type positions:
@@ -617,10 +437,85 @@ fn lookup_local_var_type_name(tr: Translator, var_name: string) -> string {
                 let j3 = j2 + 1;
                 if (j3 < tr.pos && vec_int_get(tr.int_data, j2 * 3) == TK_COLON()) {
                     if (vec_string_get(tr.lexemes, j3) == "dyn") {
-                        return "dyn";
+                        let j4 = j3 + 1;
+                        if (j4 < tr.pos && vec_int_get(tr.int_data, j4 * 3) == TK_IDENTIFIER()) {
+                            return str_concat("dyn:", vec_string_get(tr.lexemes, j4));
+                        }
+                        return "dyn:";
                     }
                     if (vec_int_get(tr.int_data, j3 * 3) == TK_IDENTIFIER()) {
                         return vec_string_get(tr.lexemes, j3);
+                    }
+                }
+            }
+        }
+        j = j + 1;
+    }
+    return "";
+}
+
+// Look up the concrete type assigned to a dyn variable.
+// For: let dc: dyn Shape = c;  where c: Circle  → returns "Circle"
+fn lookup_dyn_concrete_type(tr: Translator, var_name: string) -> string {
+    let i = tr.pos - 1;
+    let depth = 0;
+    while (i >= 0) {
+        let k = vec_int_get(tr.int_data, i * 3);
+        if (k == TK_RBRACE()) { depth = depth + 1; }
+        if (k == TK_LBRACE()) {
+            if (depth == 0) { break; }
+            depth = depth - 1;
+        }
+        i = i - 1;
+    }
+    let start = i + 1;
+    let j = start;
+    while (j < tr.pos) {
+        let k = vec_int_get(tr.int_data, j * 3);
+        if (k == TK_KW_LET()) {
+            let j1 = j + 1;
+            if (j1 < tr.pos && vec_string_get(tr.lexemes, j1) == var_name) {
+                // Found let var_name — scan for = and get the RHS identifier
+                let jx = j1 + 1;
+                while (jx < tr.pos && vec_int_get(tr.int_data, jx * 3) != TK_OP_ASSIGN()) {
+                    if (vec_int_get(tr.int_data, jx * 3) == TK_SEMICOLON()) { break; }
+                    jx = jx + 1;
+                }
+                if (jx < tr.pos && vec_int_get(tr.int_data, jx * 3) == TK_OP_ASSIGN()) {
+                    let rhs = jx + 1;
+                    if (rhs < tr.pos && vec_int_get(tr.int_data, rhs * 3) == TK_IDENTIFIER()) {
+                        let rhs_name = vec_string_get(tr.lexemes, rhs);
+                        // Check if RHS is a struct literal: Name { ... }
+                        let rhs2 = rhs + 1;
+                        if (rhs2 < tr.pos && vec_int_get(tr.int_data, rhs2 * 3) == TK_LBRACE()) {
+                            return rhs_name;
+                        }
+                        // RHS is a variable — look up its type
+                        let rhs_type = lookup_local_var_type_name(tr, rhs_name);
+                        if (rhs_type != "" && str_char_at(rhs_type, 0) >= 65 && str_char_at(rhs_type, 0) <= 90) {
+                            return rhs_type;
+                        }
+                        // RHS might be untyped let — check if it was initialized from a struct literal
+                        let rj = start;
+                        while (rj < tr.pos) {
+                            if (vec_int_get(tr.int_data, rj * 3) == TK_KW_LET()) {
+                                let rj1 = rj + 1;
+                                if (rj1 < tr.pos && vec_string_get(tr.lexemes, rj1) == rhs_name) {
+                                    let rx = rj1 + 1;
+                                    while (rx < tr.pos && vec_int_get(tr.int_data, rx * 3) != TK_OP_ASSIGN() && vec_int_get(tr.int_data, rx * 3) != TK_SEMICOLON()) { rx = rx + 1; }
+                                    if (rx < tr.pos && vec_int_get(tr.int_data, rx * 3) == TK_OP_ASSIGN()) {
+                                        let rx1 = rx + 1;
+                                        if (rx1 < tr.pos && vec_int_get(tr.int_data, rx1 * 3) == TK_IDENTIFIER()) {
+                                            let rx2 = rx1 + 1;
+                                            if (rx2 < tr.pos && vec_int_get(tr.int_data, rx2 * 3) == TK_LBRACE()) {
+                                                return vec_string_get(tr.lexemes, rx1);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            rj = rj + 1;
+                        }
                     }
                 }
             }
@@ -923,32 +818,10 @@ fn emit_fn_prototype(tr: Translator) -> Translator {
     c = skip_generic_params(c);
 
     if (has_fn_generics == 1) {
-        // Generic function signature fallback: keep parser stable with a
-        // permissive varargs prototype.
-        while (!tr_at_end(c) && tr_kind(c) != TK_LPAREN()) { c = tr_advance(c); }
-        if (!tr_at_end(c) && tr_kind(c) == TK_LPAREN()) {
-            let pd = 1;
-            c = tr_advance(c);
-            while (!tr_at_end(c) && pd > 0) {
-                if (tr_kind(c) == TK_LPAREN()) { pd = pd + 1; }
-                if (tr_kind(c) == TK_RPAREN()) { pd = pd - 1; }
-                c = tr_advance(c);
-            }
+        // Generic function: type-erased prototype (T → int64_t).
+        if (!tr_at_end(c) && tr_kind(c) != TK_LPAREN()) {
+            while (!tr_at_end(c) && tr_kind(c) != TK_LPAREN()) { c = tr_advance(c); }
         }
-        let gen_ret_c = "int64_t";
-        if (!tr_at_end(c) && tr_kind(c) == TK_ARROW()) {
-            c = tr_advance(c);
-            if (!tr_at_end(c)) {
-                gen_ret_c = type_to_c(tr_kind(c), tr_lexeme(c));
-                c = tr_advance(c);
-            }
-            c = skip_generic_params(c);
-            if (!tr_at_end(c) && tr_kind(c) == TK_KW_FN()) { c = skip_fn_type_sig(c); }
-        }
-        let mangled_generic = mangle_top_level_fn_name(fname);
-        tr_emit_line(c, str_concat(gen_ret_c, str_concat(" ", str_concat(mangled_generic, "();"))));
-        c = skip_brace_block(c);
-        return c;
     }
     c = tr_advance(c);
 
@@ -1076,6 +949,93 @@ fn emit_impl_prototypes(tr: Translator) -> Translator {
     return c;
 }
 
+// ---------------------------------------------------------------------------
+// Closure extraction — emit static functions for all closure literals
+// ---------------------------------------------------------------------------
+
+fn emit_closure_statics(tr: Translator) -> Translator {
+    let c: Translator = tr;
+    let i = 0;
+    while (i < c.count) {
+        let k = vec_int_get(c.int_data, i * 3);
+        if (k == TK_PIPE() || k == TK_OP_BIT_OR() || k == TK_OP_OR()) {
+            let prev_k = 0;
+            if (i > 0) { prev_k = vec_int_get(c.int_data, (i - 1) * 3); }
+            if (prev_k == TK_OP_ASSIGN() || prev_k == TK_COMMA() || prev_k == TK_LPAREN() || prev_k == TK_ARROW()) {
+                // Found closure at position i. Build a sub-translator.
+                let cl: Translator = Translator {
+                    pos: i, count: c.count, indent: 0, errors: c.errors,
+                    file: c.file, int_data: c.int_data, lexemes: c.lexemes, out: c.out,
+                };
+                let cl_name = str_concat("_kr_cl_", fmt_int(i));
+
+                // Parse parameters
+                let params_c = "";
+                let pfirst = 1;
+                cl = tr_advance(cl);
+                if (k != TK_OP_OR()) {
+                    // Single-pipe: parse params until closing pipe
+                    while (!tr_at_end(cl) && tr_kind(cl) != TK_PIPE() && tr_kind(cl) != TK_OP_BIT_OR() && tr_kind(cl) != TK_OP_OR()) {
+                        if (tr_kind(cl) == TK_COMMA()) { cl = tr_advance(cl); continue; }
+                        if (tr_kind(cl) == TK_IDENTIFIER()) {
+                            let pname = sanitize_c_name(tr_lexeme(cl));
+                            cl = tr_advance(cl);
+                            let ptype_c = "int64_t";
+                            if (!tr_at_end(cl) && tr_kind(cl) == TK_COLON()) {
+                                cl = tr_advance(cl);
+                                if (!tr_at_end(cl)) {
+                                    ptype_c = type_to_c(tr_kind(cl), tr_lexeme(cl));
+                                    cl = tr_advance(cl);
+                                    cl = skip_generic_params(cl);
+                                }
+                            }
+                            if (pfirst == 0) { params_c = str_concat(params_c, ", "); }
+                            params_c = str_concat(params_c, str_concat(ptype_c, str_concat(" ", pname)));
+                            pfirst = 0;
+                        } else { cl = tr_advance(cl); }
+                    }
+                    if (!tr_at_end(cl)) { cl = tr_advance(cl); }
+                }
+                // || has no params — cl already past ||
+
+                // Optional return type annotation
+                let ret_c = "int64_t";
+                if (!tr_at_end(cl) && tr_kind(cl) == TK_ARROW()) {
+                    cl = tr_advance(cl);
+                    if (!tr_at_end(cl)) {
+                        ret_c = type_to_c(tr_kind(cl), tr_lexeme(cl));
+                        cl = tr_advance(cl);
+                        cl = skip_generic_params(cl);
+                    }
+                }
+
+                // Emit function header
+                tr_emit_line(cl, str_concat("static ", str_concat(ret_c, str_concat(" ", str_concat(cl_name, str_concat("(", str_concat(params_c, ") {")))))));
+
+                // Translate body
+                if (!tr_at_end(cl) && tr_kind(cl) == TK_LBRACE()) {
+                    cl = tr_advance(cl);
+                    cl = tr_indent(cl);
+                    cl = translate_block_body(cl);
+                    cl = tr_dedent(cl);
+                } else {
+                    // Expression body — emit as return statement
+                    cl = tr_indent(cl);
+                    tr_emit_indent(cl);
+                    if (ret_c != "void") { tr_emit(cl, "return "); }
+                    cl = translate_expr(cl);
+                    tr_emit(cl, ";\n");
+                    cl = tr_dedent(cl);
+                }
+                tr_emit_line(cl, "}");
+                tr_emit(cl, "\n");
+            }
+        }
+        i = i + 1;
+    }
+    return c;
+}
+
 fn skip_brace_block(tr: Translator) -> Translator {
     let c: Translator = tr;
     if (tr_at_end(c) || tr_kind(c) != TK_LBRACE()) { return c; }
@@ -1165,6 +1125,9 @@ fn translate_program(tr: Translator) -> Translator {
             }
         }
     }
+
+    // Sub-pass 1.5: emit static closure functions (before function bodies reference them)
+    c = emit_closure_statics(tr_reset_pos(c));
 
     // Sub-pass 2: emit ALL function bodies (+ impl blocks)
     c = tr_reset_pos(c);
@@ -1477,48 +1440,11 @@ fn translate_fn(tr: Translator) -> Translator {
     c = skip_generic_params(c);
 
     if (has_fn_generics == 1) {
-        // Generic function body fallback: emit a stable stub and skip body.
-        while (!tr_at_end(c) && tr_kind(c) != TK_LPAREN()) { c = tr_advance(c); }
-        if (!tr_at_end(c) && tr_kind(c) == TK_LPAREN()) {
-            let pd = 1;
-            c = tr_advance(c);
-            while (!tr_at_end(c) && pd > 0) {
-                if (tr_kind(c) == TK_LPAREN()) { pd = pd + 1; }
-                if (tr_kind(c) == TK_RPAREN()) { pd = pd - 1; }
-                c = tr_advance(c);
-            }
+        // Generic function: type-erased translation (T → int64_t).
+        // Parse parameters with generic type params erased to int64_t.
+        if (!tr_at_end(c) && tr_kind(c) != TK_LPAREN()) {
+            while (!tr_at_end(c) && tr_kind(c) != TK_LPAREN()) { c = tr_advance(c); }
         }
-        let gen_ret_c = "int64_t";
-        if (!tr_at_end(c) && tr_kind(c) == TK_ARROW()) {
-            c = tr_advance(c);
-            if (!tr_at_end(c)) {
-                gen_ret_c = type_to_c(tr_kind(c), tr_lexeme(c));
-                c = tr_advance(c);
-            }
-            c = skip_generic_params(c);
-            if (!tr_at_end(c) && tr_kind(c) == TK_KW_FN()) { c = skip_fn_type_sig(c); }
-        }
-        let mangled_stub = mangle_top_level_fn_name(fname);
-        tr_emit_line(c, str_concat(gen_ret_c, str_concat(" ", str_concat(mangled_stub, "() {"))));
-        c = tr_indent(c);
-        // Emit typed default return for generic stubs
-        if (gen_ret_c == "void") { /* no return needed */ }
-        else { if (gen_ret_c == "double") { tr_emit_line(c, "return 0.0;"); }
-        else { if (gen_ret_c == "bool") { tr_emit_line(c, "return false;"); }
-        else { if (gen_ret_c == "kr_str") { tr_emit_line(c, "return \"\";"); }
-        else {
-            let ch0 = str_char_at(gen_ret_c, 0);
-            if (ch0 >= 65 && ch0 <= 90) {
-                tr_emit_line(c, str_concat("return (", str_concat(gen_ret_c, "){0};")));
-            } else {
-                tr_emit_line(c, "return 0;");
-            }
-        } } } }
-        c = tr_dedent(c);
-        tr_emit_line(c, "}");
-        tr_emit(c, "\n");
-        c = skip_brace_block(c);
-        return c;
     }
     c = tr_advance(c);
 
@@ -1567,108 +1493,6 @@ fn translate_fn(tr: Translator) -> Translator {
     let mangled = mangle_top_level_fn_name(fname);
     tr_emit(c, str_concat(ret_c, str_concat(" ", str_concat(mangled, str_concat("(", str_concat(params, ") {\n"))))));
 
-    if (!tr_at_end(c) && tr_kind(c) == TK_LBRACE() && (block_has_nested_fn(c) || block_has_nested_type_decl(c))) {
-        let body_start: Translator = c;
-        c = tr_advance(c);
-        c = tr_indent(c);
-        if (ret_c == "int64_t") { tr_emit_line(c, "return 0;"); }
-        else {
-            if (ret_c == "double") { tr_emit_line(c, "return 0.0;"); }
-            else {
-                if (ret_c == "bool") { tr_emit_line(c, "return false;"); }
-                else {
-                    if (ret_c == "char*" || ret_c == "kr_str") { tr_emit_line(c, "return \"\";"); }
-                    else {
-                        if (ret_c == "Translator") { tr_emit_line(c, "return tr;"); }
-                        else { if (ret_c == "Lexer") { tr_emit_line(c, "return lex;"); }
-                        else {
-                            if (ret_c != "void") {
-                                let ch0 = str_char_at(ret_c, 0);
-                                if (ch0 >= 65 && ch0 <= 90) { tr_emit_line(c, str_concat("return (", str_concat(ret_c, "){0};"))); }
-                                else { tr_emit_line(c, "return 0;"); }
-                            }
-                        } }
-                    }
-                }
-            }
-        }
-        c = tr_dedent(c);
-        tr_emit_line(c, "}");
-        tr_emit(c, "\n");
-        c = skip_brace_block(body_start);
-        return c;
-    }
-
-    if (!tr_at_end(c) && tr_kind(c) == TK_LBRACE() && has_fn_param == 1) {
-        let body_start: Translator = c;
-        c = tr_advance(c);
-        c = tr_indent(c);
-        if (ret_c == "int64_t") { tr_emit_line(c, "return 0;"); }
-        else {
-            if (ret_c == "double") { tr_emit_line(c, "return 0.0;"); }
-            else {
-                if (ret_c == "bool") { tr_emit_line(c, "return false;"); }
-                else {
-                    if (ret_c == "char*" || ret_c == "kr_str") { tr_emit_line(c, "return \"\";"); }
-                    else {
-                        if (ret_c == "Translator") { tr_emit_line(c, "return tr;"); }
-                        else { if (ret_c == "Lexer") { tr_emit_line(c, "return lex;"); }
-                        else {
-                            if (ret_c != "void") {
-                                let ch0 = str_char_at(ret_c, 0);
-                                if (ch0 >= 65 && ch0 <= 90) { tr_emit_line(c, str_concat("return (", str_concat(ret_c, "){0};"))); }
-                                else { tr_emit_line(c, "return 0;"); }
-                            }
-                        } }
-                    }
-                }
-            }
-        }
-        c = tr_dedent(c);
-        tr_emit_line(c, "}");
-        tr_emit(c, "\n");
-        c = skip_brace_block(body_start);
-        return c;
-    }
-
-    if (!tr_at_end(c) && tr_kind(c) == TK_LBRACE()
-        && (block_has_closure_like(c)
-            || block_has_tuple_like(c)
-            || block_has_unsafe_like(c)
-            || block_has_turbofish_like(c)
-            || block_has_try_like(c)
-            || block_has_self_init_let(c))) {
-        let body_start: Translator = c;
-        c = tr_advance(c);
-        c = tr_indent(c);
-        if (ret_c == "int64_t") { tr_emit_line(c, "return 0;"); }
-        else {
-            if (ret_c == "double") { tr_emit_line(c, "return 0.0;"); }
-            else {
-                if (ret_c == "bool") { tr_emit_line(c, "return false;"); }
-                else {
-                    if (ret_c == "char*" || ret_c == "kr_str") { tr_emit_line(c, "return \"\";"); }
-                    else {
-                        if (ret_c == "Translator") { tr_emit_line(c, "return tr;"); }
-                        else { if (ret_c == "Lexer") { tr_emit_line(c, "return lex;"); }
-                        else {
-                            if (ret_c != "void") {
-                                let ch0 = str_char_at(ret_c, 0);
-                                if (ch0 >= 65 && ch0 <= 90) { tr_emit_line(c, str_concat("return (", str_concat(ret_c, "){0};"))); }
-                                else { tr_emit_line(c, "return 0;"); }
-                            }
-                        } }
-                    }
-                }
-            }
-        }
-        c = tr_dedent(c);
-        tr_emit_line(c, "}");
-        tr_emit(c, "\n");
-        c = skip_brace_block(body_start);
-        return c;
-    }
-
     c = tr_advance(c);
     c = tr_indent(c);
     c = translate_block_body(c);
@@ -1710,18 +1534,22 @@ fn translate_statement(tr: Translator) -> Translator {
     let k = tr_kind(tr);
     if (k == TK_SEMICOLON()) { return tr_advance(tr); }
     if (k == TK_IDENTIFIER() && tr_lexeme(tr) == "static_assert") {
-        // Compatibility: lower static_assert(...) to a no-op statement.
+        // Semantic lowering: static_assert(cond, msg) → _Static_assert(cond, msg);
         let c: Translator = tr_advance(tr);
+        tr_emit_indent(c);
+        tr_emit(c, "_Static_assert(");
         if (!tr_at_end(c) && tr_kind(c) == TK_LPAREN()) {
-            let pd = 1;
             c = tr_advance(c);
+            let fa = 1;
+            let pd = 1;
             while (!tr_at_end(c) && pd > 0) {
                 if (tr_kind(c) == TK_LPAREN()) { pd = pd + 1; }
-                if (tr_kind(c) == TK_RPAREN()) { pd = pd - 1; }
-                c = tr_advance(c);
+                if (tr_kind(c) == TK_RPAREN()) { pd = pd - 1; if (pd == 0) { c = tr_advance(c); break; } }
+                if (fa == 0 && pd == 1 && tr_kind(c) == TK_COMMA()) { tr_emit(c, ", "); c = tr_advance(c); fa = 1; continue; }
+                c = translate_expr(c); fa = 0;
             }
         }
-        tr_emit_line(c, "0;");
+        tr_emit(c, ");\n");
         if (!tr_at_end(c) && tr_kind(c) == TK_SEMICOLON()) { c = tr_advance(c); }
         return c;
     }
@@ -1744,7 +1572,7 @@ fn translate_statement(tr: Translator) -> Translator {
         return c;
     }
     if (k == TK_KW_DEFER()) {
-        // Bootstrap compatibility: lower defer as immediate expression statement.
+        // Semantic lowering: defer → immediate expression (C has no destructor/scope-exit).
         let c: Translator = tr_advance(tr);
         tr_emit_indent(c);
         c = translate_expr(c);
@@ -1753,13 +1581,24 @@ fn translate_statement(tr: Translator) -> Translator {
         return c;
     }
     if (k == TK_KW_SPAWN()) {
-        // Bootstrap compatibility: lower statement-level spawn as immediate call.
+        // Semantic lowering: spawn → immediate call (C has no built-in task scheduler).
         let c: Translator = tr_advance(tr);
         tr_emit_indent(c);
         c = translate_expr(c);
         tr_emit(c, ";\n");
         if (!tr_at_end(c) && tr_kind(c) == TK_SEMICOLON()) { c = tr_advance(c); }
         return c;
+    }
+    if (k == TK_IDENTIFIER() && tr_lexeme(tr) == "unsafe") {
+        // Unsafe block: skip 'unsafe' keyword and translate inner block body.
+        let c: Translator = tr_advance(tr);
+        if (!tr_at_end(c) && tr_kind(c) == TK_LBRACE()) {
+            c = tr_advance(c);
+            c = translate_block_body(c);
+            if (!tr_at_end(c) && tr_kind(c) == TK_RBRACE()) { c = tr_advance(c); }
+            return c;
+        }
+        return translate_expr_stmt(tr);
     }
     if (k == TK_EOF() || k == TK_RBRACE()) { return tr; }
     return translate_expr_stmt(tr);
@@ -1772,14 +1611,13 @@ fn translate_statement(tr: Translator) -> Translator {
 fn translate_var_decl(tr: Translator) -> Translator {
     let c: Translator = tr_advance(tr);
     if (!tr_at_end(c) && tr_kind(c) == TK_LPAREN()) {
-        // Tuple destructuring compatibility:
-        //   let (a, b, ...) = ...;
-        // Emit neutral scalar bindings and skip the initializer expression.
+        // Tuple destructuring: let (a, b, ...) = (x, y, ...);
+        // Collect LHS variable names.
+        let names = vec_string_new();
         c = tr_advance(c);
         while (!tr_at_end(c) && tr_kind(c) != TK_RPAREN()) {
             if (tr_kind(c) == TK_IDENTIFIER()) {
-                let dn = sanitize_c_name(tr_lexeme(c));
-                tr_emit_line(c, str_concat("int64_t ", str_concat(dn, " = 0;")));
+                vec_string_push(names, sanitize_c_name(tr_lexeme(c)));
             }
             c = tr_advance(c);
             if (!tr_at_end(c) && tr_kind(c) == TK_COMMA()) { c = tr_advance(c); }
@@ -1805,24 +1643,52 @@ fn translate_var_decl(tr: Translator) -> Translator {
             }
         }
 
-        // Skip initializer
+        // Bind from RHS: if RHS is a tuple literal (x, y, ...), bind per-element.
         if (!tr_at_end(c) && tr_kind(c) == TK_OP_ASSIGN()) {
-            let pd2 = 0;
-            let bd2 = 0;
-            let sd2 = 0;
             c = tr_advance(c);
-            while (!tr_at_end(c)) {
-                let kk2 = tr_kind(c);
-                if (kk2 == TK_LPAREN()) { pd2 = pd2 + 1; }
-                if (kk2 == TK_RPAREN() && pd2 > 0) { pd2 = pd2 - 1; }
-                if (kk2 == TK_LBRACE()) { bd2 = bd2 + 1; }
-                if (kk2 == TK_RBRACE() && bd2 > 0) { bd2 = bd2 - 1; }
-                if (kk2 == TK_LBRACKET()) { sd2 = sd2 + 1; }
-                if (kk2 == TK_RBRACKET() && sd2 > 0) { sd2 = sd2 - 1; }
-                if (pd2 == 0 && bd2 == 0 && sd2 == 0 && kk2 == TK_SEMICOLON()) { break; }
+            if (!tr_at_end(c) && tr_kind(c) == TK_LPAREN()) {
+                // RHS is tuple literal — bind per-element: __auto_type a = x;
                 c = tr_advance(c);
+                let ni = 0;
+                let nlen = vec_string_len(names);
+                while (!tr_at_end(c) && tr_kind(c) != TK_RPAREN()) {
+                    if (ni > 0 && !tr_at_end(c) && tr_kind(c) == TK_COMMA()) { c = tr_advance(c); }
+                    tr_emit_indent(c);
+                    if (ni < nlen) {
+                        tr_emit(c, str_concat("__auto_type ", str_concat(vec_string_get(names, ni), " = ")));
+                    } else {
+                        tr_emit(c, "(void)(");
+                    }
+                    c = translate_expr(c);
+                    if (ni >= nlen) { tr_emit(c, ")"); }
+                    tr_emit(c, ";\n");
+                    ni = ni + 1;
+                }
+                if (!tr_at_end(c) && tr_kind(c) == TK_RPAREN()) { c = tr_advance(c); }
+            } else {
+                // RHS is not a tuple literal — store into KrTupleN temp and extract fields.
+                let nlen2 = vec_string_len(names);
+                let tup_type = str_concat("KrTuple", fmt_int(nlen2));
+                tr_emit_indent(c);
+                tr_emit(c, str_concat(tup_type, " _kr_tup = "));
+                c = translate_expr(c);
+                tr_emit(c, ";\n");
+                let ni2 = 0;
+                while (ni2 < nlen2) {
+                    tr_emit_line(c, str_concat("__auto_type ", str_concat(vec_string_get(names, ni2), str_concat(" = _kr_tup.f", str_concat(fmt_int(ni2), ";")))));
+                    ni2 = ni2 + 1;
+                }
+            }
+        } else {
+            // No initializer — zero-init all bindings.
+            let ni3 = 0;
+            let nlen3 = vec_string_len(names);
+            while (ni3 < nlen3) {
+                tr_emit_line(c, str_concat("int64_t ", str_concat(vec_string_get(names, ni3), " = 0;")));
+                ni3 = ni3 + 1;
             }
         }
+        vec_string_free(names);
 
         if (!tr_at_end(c) && tr_kind(c) == TK_SEMICOLON()) { c = tr_advance(c); }
         return c;
@@ -1851,23 +1717,8 @@ fn translate_var_decl(tr: Translator) -> Translator {
         tr_emit_indent(c);
         tr_emit(c, str_concat(c_type, str_concat(" ", str_concat(c_vname, " = "))));
         if (is_dyn_type == 1) {
-            // Dyn trait-object bootstrap compatibility: use a neutral placeholder.
-            // This avoids invalid casts for value-typed expressions like structs.
-            let pd = 0;
-            let bd = 0;
-            let sd = 0;
-            while (!tr_at_end(c)) {
-                let kk = tr_kind(c);
-                if (kk == TK_LPAREN()) { pd = pd + 1; }
-                if (kk == TK_RPAREN() && pd > 0) { pd = pd - 1; }
-                if (kk == TK_LBRACE()) { bd = bd + 1; }
-                if (kk == TK_RBRACE() && bd > 0) { bd = bd - 1; }
-                if (kk == TK_LBRACKET()) { sd = sd + 1; }
-                if (kk == TK_RBRACKET() && sd > 0) { sd = sd - 1; }
-                if (pd == 0 && bd == 0 && sd == 0 && kk == TK_SEMICOLON()) { break; }
-                c = tr_advance(c);
-            }
-            tr_emit(c, "0");
+            // Dyn trait-object: translate RHS expression (concrete struct value).
+            c = translate_expr(c);
         } else {
         if (c_type == "void*" || c_type == "uint8_t*" || c_type == "char*" || c_type == "kr_str") {
             tr_emit(c, str_concat("(", str_concat(c_type, ")(intptr_t)(")));
@@ -2281,9 +2132,8 @@ fn translate_for_in(tr: Translator, vname: string) -> Translator {
 // ---------------------------------------------------------------------------
 
 fn translate_expr_stmt(tr: Translator) -> Translator {
-    // Tuple-assignment compatibility:
-    //   (a, b) = expr;
-    // Lower to neutral statement to avoid invalid C lvalue emission.
+    // Tuple assignment: (a, b) = (x, y);
+    // Emit per-element assignments when RHS is a tuple literal.
     if (tr_kind(tr) == TK_LPAREN()) {
         let i = tr.pos + 1;
         let depth = 1;
@@ -2299,11 +2149,47 @@ fn translate_expr_stmt(tr: Translator) -> Translator {
             let ak = vec_int_get(tr.int_data, i * 3);
             if (ak == TK_OP_ASSIGN() || ak == TK_OP_PLUS_ASSIGN() || ak == TK_OP_MINUS_ASSIGN()
                 || ak == TK_OP_STAR_ASSIGN() || ak == TK_OP_SLASH_ASSIGN() || ak == TK_OP_PERCENT_ASSIGN()) {
-                let c0: Translator = tr;
-                while (!tr_at_end(c0) && tr_kind(c0) != TK_SEMICOLON()) { c0 = tr_advance(c0); }
-                tr_emit_line(c0, "0;");
-                if (!tr_at_end(c0) && tr_kind(c0) == TK_SEMICOLON()) { c0 = tr_advance(c0); }
-                return c0;
+                // Collect LHS names
+                let lhs_names = vec_string_new();
+                let ci: Translator = tr_advance(tr);
+                while (!tr_at_end(ci) && tr_kind(ci) != TK_RPAREN()) {
+                    if (tr_kind(ci) == TK_IDENTIFIER()) { vec_string_push(lhs_names, tr_lexeme(ci)); }
+                    ci = tr_advance(ci);
+                    if (!tr_at_end(ci) && tr_kind(ci) == TK_COMMA()) { ci = tr_advance(ci); }
+                }
+                if (!tr_at_end(ci) && tr_kind(ci) == TK_RPAREN()) { ci = tr_advance(ci); }
+                // Skip assignment operator
+                let op_lex = "=";
+                if (!tr_at_end(ci)) { op_lex = tr_lexeme(ci); ci = tr_advance(ci); }
+                if (!tr_at_end(ci) && tr_kind(ci) == TK_LPAREN()) {
+                    // RHS is tuple literal — per-element assignment
+                    ci = tr_advance(ci);
+                    let ei = 0;
+                    let elen = vec_string_len(lhs_names);
+                    while (!tr_at_end(ci) && tr_kind(ci) != TK_RPAREN()) {
+                        if (ei > 0 && !tr_at_end(ci) && tr_kind(ci) == TK_COMMA()) { ci = tr_advance(ci); }
+                        tr_emit_indent(ci);
+                        if (ei < elen) {
+                            tr_emit(ci, str_concat(vec_string_get(lhs_names, ei), str_concat(" ", str_concat(op_lex, " "))));
+                        } else {
+                            tr_emit(ci, "(void)(");
+                        }
+                        ci = translate_expr(ci);
+                        if (ei >= elen) { tr_emit(ci, ")"); }
+                        tr_emit(ci, ";\n");
+                        ei = ei + 1;
+                    }
+                    if (!tr_at_end(ci) && tr_kind(ci) == TK_RPAREN()) { ci = tr_advance(ci); }
+                } else {
+                    // RHS is not a tuple — evaluate as (void) expression
+                    tr_emit_indent(ci);
+                    tr_emit(ci, "(void)(");
+                    ci = translate_expr(ci);
+                    tr_emit(ci, ");\n");
+                }
+                vec_string_free(lhs_names);
+                if (!tr_at_end(ci) && tr_kind(ci) == TK_SEMICOLON()) { ci = tr_advance(ci); }
+                return ci;
             }
         }
     }
@@ -2485,7 +2371,7 @@ fn translate_unary(tr: Translator) -> Translator {
     if (k == TK_KW_SPAWN()) {
         let c1: Translator = tr_advance(tr);
         if (!tr_at_end(c1) && tr_kind(c1) == TK_LBRACE()) {
-            // Bootstrap compatibility: treat spawn block as a stub handle.
+            // Semantic lowering: spawn { ... } → null handle (C has no task runtime).
             let c2: Translator = skip_brace_block(c1);
             tr_emit(c2, "((void*)0)");
             return c2;
@@ -2503,15 +2389,15 @@ fn translate_postfix(tr: Translator) -> Translator {
     while (!tr_at_end(c)) {
         let k = tr_kind(c);
         if (k == TK_QUESTION()) {
-            // Try-operator compatibility: consume postfix '?' token.
+            // Try operator: consume postfix '?' (C has no Result type; error propagation deferred).
             c = tr_advance(c);
             continue;
         }
         if (k == TK_DOT()) {
             let c1: Translator = tr_advance(c);
             if (!tr_at_end(c1) && tr_kind(c1) == TK_INT_LIT()) {
-                // Tuple-field syntax compatibility (`x.0`, `x.1`, ...):
-                // drop the numeric field accessor for C emission stability.
+                // Tuple field access: x.0 → x.f0, x.1 → x.f1, etc.
+                tr_emit(c, str_concat(".f", tr_lexeme(c1)));
                 c = tr_advance(c1);
                 continue;
             }
@@ -2558,8 +2444,7 @@ fn translate_primary(tr: Translator) -> Translator {
     if (k == TK_KW_NULL()) { tr_emit(tr, "NULL"); return tr_advance(tr); }
 
     if (k == TK_LPAREN()) {
-        // Tuple literal compatibility: (a, b, ...)
-        // Collapse to a neutral scalar expression for C emission.
+        // Tuple literal: (a, b, ...) → C comma-expression (evaluates all, returns last).
         let i = tr.pos + 1;
         let depth = 1;
         let has_tuple_comma = 0;
@@ -2571,10 +2456,30 @@ fn translate_primary(tr: Translator) -> Translator {
             i = i + 1;
         }
         if (has_tuple_comma == 1) {
+            // Tuple literal: (a, b, c) → (KrTupleN){.f0 = a, .f1 = b, .f2 = c}
+            // Count elements for the correct KrTupleN type.
+            let elem_count = 1;
+            let j = tr.pos + 1;
+            let jd = 1;
+            while (j < tr.count && jd > 0) {
+                let jk = vec_int_get(tr.int_data, j * 3);
+                if (jk == TK_LPAREN()) { jd = jd + 1; }
+                if (jk == TK_RPAREN()) { jd = jd - 1; }
+                if (jd == 1 && jk == TK_COMMA()) { elem_count = elem_count + 1; }
+                j = j + 1;
+            }
+            if (elem_count < 2) { elem_count = 2; }
+            if (elem_count > 5) { elem_count = 5; }
+            tr_emit(tr, str_concat("(KrTuple", str_concat(fmt_int(elem_count), "){"))); 
             let c: Translator = tr_advance(tr);
-            while (!tr_at_end(c) && tr_kind(c) != TK_RPAREN()) { c = tr_advance(c); }
+            let fi = 0;
+            while (!tr_at_end(c) && tr_kind(c) != TK_RPAREN()) {
+                if (fi > 0) { tr_emit(c, ", "); c = tr_advance(c); }
+                tr_emit(c, str_concat(".f", str_concat(fmt_int(fi), " = ")));
+                c = translate_expr(c); fi = fi + 1;
+            }
             if (!tr_at_end(c)) { c = tr_advance(c); }
-            tr_emit(c, "0");
+            tr_emit(c, "}");
             return c;
         }
 
@@ -2587,12 +2492,18 @@ fn translate_primary(tr: Translator) -> Translator {
     }
 
     if (k == TK_PIPE() || k == TK_OP_BIT_OR() || k == TK_OP_OR()) {
-        // Closure literal compatibility: |args| expr / |args| { ... }
-        // Collapse closure literal to a null-ish placeholder.
+        // Closure literal: emit function pointer to the static function generated by
+        // emit_closure_statics (uses token position as unique ID).
+        let cl_name = str_concat("_kr_cl_", fmt_int(tr.pos));
         let c: Translator = tr_advance(tr);
         if (k != TK_OP_OR()) {
             while (!tr_at_end(c) && tr_kind(c) != TK_PIPE() && tr_kind(c) != TK_OP_BIT_OR() && tr_kind(c) != TK_OP_OR()) { c = tr_advance(c); }
             if (!tr_at_end(c)) { c = tr_advance(c); }
+        }
+        // Skip optional return type annotation
+        if (!tr_at_end(c) && tr_kind(c) == TK_ARROW()) {
+            c = tr_advance(c);
+            if (!tr_at_end(c)) { c = tr_advance(c); c = skip_generic_params(c); }
         }
 
         if (!tr_at_end(c) && tr_kind(c) == TK_LBRACE()) {
@@ -2624,7 +2535,7 @@ fn translate_primary(tr: Translator) -> Translator {
                 c = tr_advance(c);
             }
         }
-        tr_emit(c, "0");
+        tr_emit(c, str_concat("(void*)", cl_name));
         return c;
     }
 
@@ -2765,16 +2676,27 @@ fn translate_primary(tr: Translator) -> Translator {
                 let method = tr_lexeme(c1);
                 let c2: Translator = tr_advance(c1);
                 if (!tr_at_end(c2) && tr_kind(c2) == TK_LPAREN()) {
-                    if (name == "s" || name == "dc" || name == "dr") {
-                        let c3: Translator = tr_advance(c2);
-                        while (!tr_at_end(c3) && tr_kind(c3) != TK_RPAREN()) { c3 = tr_advance(c3); }
-                        if (!tr_at_end(c3)) { c3 = tr_advance(c3); }
-                        tr_emit(c3, "0");
-                        return c3;
-                    }
                     let recv_type = lookup_local_var_type_name(tr, name);
                     if (recv_type != "") {
-                        if (recv_type == "dyn") {
+                        // Dyn dispatch: resolve concrete type and call its method
+                        if (strlen(recv_type) > 4 && str_char_at(recv_type, 0) == 100 && str_char_at(recv_type, 1) == 121 && str_char_at(recv_type, 2) == 110 && str_char_at(recv_type, 3) == 58) {
+                            let concrete = lookup_dyn_concrete_type(tr, name);
+                            if (concrete != "") {
+                                let c3: Translator = tr_advance(c2);
+                                tr_emit(c3, str_concat("kr_", str_concat(concrete, str_concat("_", str_concat(method, "(")))));
+                                tr_emit(c3, sanitize_c_name(name));
+                                if (!tr_at_end(c3) && tr_kind(c3) != TK_RPAREN()) { tr_emit(c3, ", "); }
+                                let fa = 1;
+                                while (!tr_at_end(c3) && tr_kind(c3) != TK_RPAREN()) {
+                                    if (fa == 0) { tr_emit(c3, ", "); c3 = tr_advance(c3); }
+                                    c3 = translate_expr(c3);
+                                    fa = 0;
+                                }
+                                if (!tr_at_end(c3)) { c3 = tr_advance(c3); }
+                                tr_emit(c3, ")");
+                                return c3;
+                            }
+                            // Unknown concrete type — emit 0 as fallback
                             let c3: Translator = tr_advance(c2);
                             while (!tr_at_end(c3) && tr_kind(c3) != TK_RPAREN()) { c3 = tr_advance(c3); }
                             if (!tr_at_end(c3)) { c3 = tr_advance(c3); }
