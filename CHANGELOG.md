@@ -91,6 +91,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Bootstrap Coverage Verification** — current bootstrap compile sweep: `226/226` programs (`100.0%`) with self-hosted compiler
 
 ### Fixed
+- **Bailout Detector False Positives** — three detectors incorrectly matched string literal content (tokenizer strips quotes), causing critical compiler functions to be stubbed out:
+  - `block_has_try_like`: removed `vec_string_get(lexemes, i) == "?"` check that matched the `"?"` string literal inside `read_operator`; now only checks `TK_QUESTION` token kind
+  - `block_has_unsafe_like`: added `k == TK_IDENTIFIER()` guard before matching `"unsafe"` lexeme; prevents false positive on `"unsafe"` string literal inside `keyword_to_token_kind`
+  - `block_has_closure_like`: excluded `TK_OP_OR` (`||`) from `{`-lookahead; prevents false positive on `if (a || b) {` patterns that were incorrectly detected as closure syntax
+- **Bailout Return Type Errors** — all three bailout blocks emitted `return 0;` for struct-returning functions, causing 16 C compile errors (`returning 'int' from a function with incompatible result type 'Translator'`)
+  - Translator returns now emit `return tr;` (preserves output buffer pointer)
+  - Lexer returns now emit `return lex;` (preserves source/length fields)
+  - Other struct returns now emit `return (TypeName){0};` (proper zero-init)
+- **Generic Stub Return Type** — generic function stub emitter hardcoded `int64_t` return type for all generic functions; now captures the declared return type after `->` using `type_to_c()` and emits typed default returns
 - Struct literal trailing comma caused `}` to be parsed as a field name, corrupting all subsequent function output
 - Forward declaration ordering: `Target` and `Diagnostic` structs used in function signatures before their typedefs appeared
 - Struct definition ordering: struct bodies emitted after functions that used them by value caused incomplete type errors

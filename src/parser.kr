@@ -28,7 +28,7 @@ fn block_has_unsafe_like(tr: Translator) -> bool {
         let k = vec_int_get(tr.int_data, i * 3);
         if (k == TK_LBRACE()) { depth = depth + 1; }
         if (k == TK_RBRACE()) { depth = depth - 1; }
-        if (depth > 0 && vec_string_get(tr.lexemes, i) == "unsafe") { return true; }
+        if (depth > 0 && k == TK_IDENTIFIER() && vec_string_get(tr.lexemes, i) == "unsafe") { return true; }
         i = i + 1;
     }
     return false;
@@ -56,7 +56,7 @@ fn block_has_try_like(tr: Translator) -> bool {
         let k = vec_int_get(tr.int_data, i * 3);
         if (k == TK_LBRACE()) { depth = depth + 1; }
         if (k == TK_RBRACE()) { depth = depth - 1; }
-        if (depth > 0 && (k == TK_QUESTION() || vec_string_get(tr.lexemes, i) == "?")) { return true; }
+        if (depth > 0 && k == TK_QUESTION()) { return true; }
         i = i + 1;
     }
     return false;
@@ -361,17 +361,21 @@ fn block_has_closure_like(tr: Translator) -> bool {
             if (prev_k == TK_OP_ASSIGN() || prev_k == TK_COMMA() || prev_k == TK_LPAREN() || prev_k == TK_ARROW()) {
                 return true;
             }
-            let j = i + 1;
-            let lim = i + 10;
-            let saw_lbrace = 0;
-            while (j < tr.count && j < lim) {
-                let k2 = vec_int_get(tr.int_data, j * 3);
-                if (k2 == TK_ARROW()) { return true; }
-                if (k2 == TK_LBRACE()) { saw_lbrace = 1; break; }
-                if (k2 == TK_SEMICOLON() || k2 == TK_LBRACE()) { break; }
-                j = j + 1;
+            // Only apply {-lookahead for single-pipe tokens (|), not for
+            // logical OR (||) — avoids false positive on `if (a || b) {`.
+            if (k != TK_OP_OR()) {
+                let j = i + 1;
+                let lim = i + 10;
+                let saw_lbrace = 0;
+                while (j < tr.count && j < lim) {
+                    let k2 = vec_int_get(tr.int_data, j * 3);
+                    if (k2 == TK_ARROW()) { return true; }
+                    if (k2 == TK_LBRACE()) { saw_lbrace = 1; break; }
+                    if (k2 == TK_SEMICOLON() || k2 == TK_LBRACE()) { break; }
+                    j = j + 1;
+                }
+                if (saw_lbrace == 1) { return true; }
             }
-            if (saw_lbrace == 1) { return true; }
         }
 
         i = i + 1;
@@ -931,14 +935,18 @@ fn emit_fn_prototype(tr: Translator) -> Translator {
                 c = tr_advance(c);
             }
         }
+        let gen_ret_c = "int64_t";
         if (!tr_at_end(c) && tr_kind(c) == TK_ARROW()) {
             c = tr_advance(c);
-            if (!tr_at_end(c)) { c = tr_advance(c); }
+            if (!tr_at_end(c)) {
+                gen_ret_c = type_to_c(tr_kind(c), tr_lexeme(c));
+                c = tr_advance(c);
+            }
             c = skip_generic_params(c);
             if (!tr_at_end(c) && tr_kind(c) == TK_KW_FN()) { c = skip_fn_type_sig(c); }
         }
         let mangled_generic = mangle_top_level_fn_name(fname);
-        tr_emit_line(c, str_concat("int64_t ", str_concat(mangled_generic, "();")));
+        tr_emit_line(c, str_concat(gen_ret_c, str_concat(" ", str_concat(mangled_generic, "();"))));
         c = skip_brace_block(c);
         return c;
     }
@@ -1480,16 +1488,32 @@ fn translate_fn(tr: Translator) -> Translator {
                 c = tr_advance(c);
             }
         }
+        let gen_ret_c = "int64_t";
         if (!tr_at_end(c) && tr_kind(c) == TK_ARROW()) {
             c = tr_advance(c);
-            if (!tr_at_end(c)) { c = tr_advance(c); }
+            if (!tr_at_end(c)) {
+                gen_ret_c = type_to_c(tr_kind(c), tr_lexeme(c));
+                c = tr_advance(c);
+            }
             c = skip_generic_params(c);
             if (!tr_at_end(c) && tr_kind(c) == TK_KW_FN()) { c = skip_fn_type_sig(c); }
         }
         let mangled_stub = mangle_top_level_fn_name(fname);
-        tr_emit_line(c, str_concat("int64_t ", str_concat(mangled_stub, "() {")));
+        tr_emit_line(c, str_concat(gen_ret_c, str_concat(" ", str_concat(mangled_stub, "() {"))));
         c = tr_indent(c);
-        tr_emit_line(c, "return 0;");
+        // Emit typed default return for generic stubs
+        if (gen_ret_c == "void") { /* no return needed */ }
+        else { if (gen_ret_c == "double") { tr_emit_line(c, "return 0.0;"); }
+        else { if (gen_ret_c == "bool") { tr_emit_line(c, "return false;"); }
+        else { if (gen_ret_c == "kr_str") { tr_emit_line(c, "return \"\";"); }
+        else {
+            let ch0 = str_char_at(gen_ret_c, 0);
+            if (ch0 >= 65 && ch0 <= 90) {
+                tr_emit_line(c, str_concat("return (", str_concat(gen_ret_c, "){0};")));
+            } else {
+                tr_emit_line(c, "return 0;");
+            }
+        } } } }
         c = tr_dedent(c);
         tr_emit_line(c, "}");
         tr_emit(c, "\n");
@@ -1555,7 +1579,15 @@ fn translate_fn(tr: Translator) -> Translator {
                 else {
                     if (ret_c == "char*" || ret_c == "kr_str") { tr_emit_line(c, "return \"\";"); }
                     else {
-                        if (ret_c != "void") { tr_emit_line(c, "return 0;"); }
+                        if (ret_c == "Translator") { tr_emit_line(c, "return tr;"); }
+                        else { if (ret_c == "Lexer") { tr_emit_line(c, "return lex;"); }
+                        else {
+                            if (ret_c != "void") {
+                                let ch0 = str_char_at(ret_c, 0);
+                                if (ch0 >= 65 && ch0 <= 90) { tr_emit_line(c, str_concat("return (", str_concat(ret_c, "){0};"))); }
+                                else { tr_emit_line(c, "return 0;"); }
+                            }
+                        } }
                     }
                 }
             }
@@ -1579,7 +1611,15 @@ fn translate_fn(tr: Translator) -> Translator {
                 else {
                     if (ret_c == "char*" || ret_c == "kr_str") { tr_emit_line(c, "return \"\";"); }
                     else {
-                        if (ret_c != "void") { tr_emit_line(c, "return 0;"); }
+                        if (ret_c == "Translator") { tr_emit_line(c, "return tr;"); }
+                        else { if (ret_c == "Lexer") { tr_emit_line(c, "return lex;"); }
+                        else {
+                            if (ret_c != "void") {
+                                let ch0 = str_char_at(ret_c, 0);
+                                if (ch0 >= 65 && ch0 <= 90) { tr_emit_line(c, str_concat("return (", str_concat(ret_c, "){0};"))); }
+                                else { tr_emit_line(c, "return 0;"); }
+                            }
+                        } }
                     }
                 }
             }
@@ -1609,7 +1649,15 @@ fn translate_fn(tr: Translator) -> Translator {
                 else {
                     if (ret_c == "char*" || ret_c == "kr_str") { tr_emit_line(c, "return \"\";"); }
                     else {
-                        if (ret_c != "void") { tr_emit_line(c, "return 0;"); }
+                        if (ret_c == "Translator") { tr_emit_line(c, "return tr;"); }
+                        else { if (ret_c == "Lexer") { tr_emit_line(c, "return lex;"); }
+                        else {
+                            if (ret_c != "void") {
+                                let ch0 = str_char_at(ret_c, 0);
+                                if (ch0 >= 65 && ch0 <= 90) { tr_emit_line(c, str_concat("return (", str_concat(ret_c, "){0};"))); }
+                                else { tr_emit_line(c, "return 0;"); }
+                            }
+                        } }
                     }
                 }
             }
