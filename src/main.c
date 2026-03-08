@@ -10,6 +10,7 @@
 #include <math.h>
 #include <time.h>
 #include <ctype.h>
+#include <stdarg.h>
 
 typedef int64_t kr_int;
 typedef double kr_float;
@@ -19,7 +20,27 @@ typedef struct { int64_t f0; int64_t f1; } KrTuple2;
 typedef struct { int64_t f0; int64_t f1; int64_t f2; } KrTuple3;
 typedef struct { int64_t f0; int64_t f1; int64_t f2; int64_t f3; } KrTuple4;
 typedef struct { int64_t f0; int64_t f1; int64_t f2; int64_t f3; int64_t f4; } KrTuple5;
-typedef int64_t (*KrClosure)(int64_t);
+typedef int64_t (*KrClosure)(void*,int64_t);
+#define _KR_CL_FN(cl) ((void*)(*(int64_t*)(cl)))
+#define _KR_CL_ENV(cl) ((void*)((int64_t*)(cl) + 1))
+static void* _kr_cl_alloc(void* fn, int n, ...) {
+  int64_t* cl = (int64_t*)malloc((1+n)*sizeof(int64_t));
+  cl[0] = (int64_t)fn; va_list a; va_start(a,n);
+  for(int i=0;i<n;i++) cl[1+i]=va_arg(a,int64_t);
+  va_end(a); return (void*)cl;
+}
+static int64_t _kr_cl_call0(void* cl) {
+  return ((int64_t(*)(void*))_KR_CL_FN(cl))(_KR_CL_ENV(cl));
+}
+static int64_t _kr_cl_call1(void* cl, int64_t a) {
+  return ((int64_t(*)(void*,int64_t))_KR_CL_FN(cl))(_KR_CL_ENV(cl), a);
+}
+static int64_t _kr_cl_call2(void* cl, int64_t a, int64_t b) {
+  return ((int64_t(*)(void*,int64_t,int64_t))_KR_CL_FN(cl))(_KR_CL_ENV(cl), a, b);
+}
+static int64_t _kr_cl_call3(void* cl, int64_t a, int64_t b, int64_t c) {
+  return ((int64_t(*)(void*,int64_t,int64_t,int64_t))_KR_CL_FN(cl))(_KR_CL_ENV(cl), a, b, c);
+}
 typedef ssize_t kr_size;
 
 void kr_puts(kr_str s) { puts(s); }
@@ -35,6 +56,7 @@ static inline int _kr_int_eq(int64_t a, int64_t b) { return a==b; }
 static inline int _kr_int_neq(int64_t a, int64_t b) { return a!=b; }
 #define _KR_EQ(a, b) __builtin_choose_expr(__builtin_types_compatible_p(__typeof__(a), char*), _kr_cmp_eq((void*)(a),(void*)(b)), _kr_int_eq((int64_t)(intptr_t)(a),(int64_t)(intptr_t)(b)))
 #define _KR_NEQ(a, b) __builtin_choose_expr(__builtin_types_compatible_p(__typeof__(a), char*), _kr_cmp_neq((void*)(a),(void*)(b)), _kr_int_neq((int64_t)(intptr_t)(a),(int64_t)(intptr_t)(b)))
+#define _KR_ADD(a, b) __builtin_choose_expr(__builtin_types_compatible_p(__typeof__(a), char*), kr_str_concat((char*)(a),(char*)(b)), ((int64_t)(a) + (int64_t)(b)))
 #pragma clang diagnostic ignored "-Wint-to-void-pointer-cast"
 kr_str kr_str_concat(kr_str a, kr_str b) {
   size_t la = strlen(a), lb = strlen(b);
@@ -140,11 +162,19 @@ int64_t kr_vec_bytes_swap_remove(void* vp, int64_t i) { KrVecBytes* v=(KrVecByte
 typedef struct { char** keys; int64_t* vals; int64_t cap; int64_t len; } KrMapSI;
 static uint64_t _kr_hash_str(const char* s) { uint64_t h=5381; while(*s) h=h*33+(*s++); return h; }
 void* kr_map_string_int_new() {
-  KrMapSI* m=(KrMapSI*)malloc(sizeof(KrMapSI)); m->cap=64; m->len=0;
-  m->keys=(char**)calloc(64,sizeof(char*)); m->vals=(int64_t*)calloc(64,sizeof(int64_t)); return m;
+  KrMapSI* m=(KrMapSI*)malloc(sizeof(KrMapSI)); m->cap=256; m->len=0;
+  m->keys=(char**)calloc(256,sizeof(char*)); m->vals=(int64_t*)calloc(256,sizeof(int64_t)); return m;
+}
+static void _kr_mapsi_grow(KrMapSI* m) {
+  int64_t oc=m->cap; char** ok=m->keys; int64_t* ov=m->vals;
+  m->cap=oc*2; m->keys=(char**)calloc(m->cap,sizeof(char*)); m->vals=(int64_t*)calloc(m->cap,sizeof(int64_t)); m->len=0;
+  for(int64_t i=0;i<oc;i++){if(ok[i]){uint64_t h=_kr_hash_str(ok[i])%m->cap;
+    while(m->keys[h]) h=(h+1)%m->cap; m->keys[h]=ok[i]; m->vals[h]=ov[i]; m->len++;}} free(ok);free(ov);
 }
 void kr_map_string_int_set(void* mp, kr_str key, int64_t val) {
-  KrMapSI* m=(KrMapSI*)mp; uint64_t h=_kr_hash_str(key)%m->cap;
+  KrMapSI* m=(KrMapSI*)mp;
+  if(m->len*10 >= m->cap*7) _kr_mapsi_grow(m);
+  uint64_t h=_kr_hash_str(key)%m->cap;
   while(m->keys[h]){if(strcmp(m->keys[h],key)==0){m->vals[h]=val;return;} h=(h+1)%m->cap;}
   m->keys[h]=strdup(key); m->vals[h]=val; m->len++;
 }
@@ -167,11 +197,19 @@ void* kr_map_string_int_keys(void* mp) { KrMapSI* m=(KrMapSI*)mp; void* v=kr_vec
 void* kr_map_string_int_values(void* mp) { KrMapSI* m=(KrMapSI*)mp; void* v=kr_vec_int_new(); for(int64_t i=0;i<m->cap;i++)if(m->keys[i])kr_vec_int_push(v,m->vals[i]); return v; }
 typedef struct { char** keys; char** vals; int64_t cap; int64_t len; } KrMapSS;
 void* kr_map_string_string_new() {
-  KrMapSS* m=(KrMapSS*)malloc(sizeof(KrMapSS)); m->cap=64; m->len=0;
-  m->keys=(char**)calloc(64,sizeof(char*)); m->vals=(char**)calloc(64,sizeof(char*)); return m;
+  KrMapSS* m=(KrMapSS*)malloc(sizeof(KrMapSS)); m->cap=256; m->len=0;
+  m->keys=(char**)calloc(256,sizeof(char*)); m->vals=(char**)calloc(256,sizeof(char*)); return m;
+}
+static void _kr_mapss_grow(KrMapSS* m) {
+  int64_t oc=m->cap; char** ok=m->keys; char** ov=m->vals;
+  m->cap=oc*2; m->keys=(char**)calloc(m->cap,sizeof(char*)); m->vals=(char**)calloc(m->cap,sizeof(char*)); m->len=0;
+  for(int64_t i=0;i<oc;i++){if(ok[i]){uint64_t h=_kr_hash_str(ok[i])%m->cap;
+    while(m->keys[h]) h=(h+1)%m->cap; m->keys[h]=ok[i]; m->vals[h]=ov[i]; m->len++;}} free(ok);free(ov);
 }
 void kr_map_string_string_set(void* mp, kr_str key, kr_str val) {
-  KrMapSS* m=(KrMapSS*)mp; uint64_t h=_kr_hash_str(key)%m->cap;
+  KrMapSS* m=(KrMapSS*)mp;
+  if(m->len*10 >= m->cap*7) _kr_mapss_grow(m);
+  uint64_t h=_kr_hash_str(key)%m->cap;
   while(m->keys[h]){if(strcmp(m->keys[h],key)==0){free(m->vals[h]);m->vals[h]=strdup(val);return;} h=(h+1)%m->cap;}
   m->keys[h]=strdup(key); m->vals[h]=strdup(val); m->len++;
 }
@@ -209,7 +247,8 @@ int64_t kr_str_starts_with(kr_str s, kr_str pfx) { return strncmp(s,pfx,strlen(p
 int64_t kr_str_index_of(kr_str s, kr_str sub) { char* p=strstr(s,sub); return p?(int64_t)(p-s):-1; }
 kr_str kr_str_replace(kr_str s, kr_str old, kr_str rep) {
   size_t ol=strlen(old),rl=strlen(rep),sl=strlen(s); char* r=(char*)malloc(sl*2+1); char* w=r;
-  while(*s){char* p=strstr(s,old);if(!p){strcpy(w,s);break;}memcpy(w,s,p-s);w+=p-s;memcpy(w,rep,rl);w+=rl;s=p+ol;}*w=0;return r;
+  if(!ol){strcpy(r,s);return r;}
+  while(*s){char* p=strstr(s,old);if(!p){strcpy(w,s);return r;}memcpy(w,s,p-s);w+=p-s;memcpy(w,rep,rl);w+=rl;s=p+ol;}*w=0;return r;
 }
 kr_str kr_str_to_lower(kr_str s) { size_t n=strlen(s); char* r=(char*)malloc(n+1); for(size_t i=0;i<=n;i++)r[i]=tolower((unsigned char)s[i]); return r; }
 kr_str kr_str_to_upper(kr_str s) { size_t n=strlen(s); char* r=(char*)malloc(n+1); for(size_t i=0;i<=n;i++)r[i]=toupper((unsigned char)s[i]); return r; }
@@ -689,6 +728,13 @@ void kr_tr_emit(Translator tr, kr_str s);
 void kr_tr_emit_indent(Translator tr);
 void kr_tr_emit_line(Translator tr, kr_str s);
 kr_str kr_type_to_c(int64_t kind, kr_str name);
+int64_t kr_count_tuple_arity_at(Translator tr, int64_t pos);
+int64_t kr_count_tuple_arity(Translator tr);
+Translator kr_skip_tuple_type(Translator tr);
+kr_str kr_tuple_type_c(int64_t arity);
+int64_t kr_has_tuple_comma_at(Translator tr, int64_t pos);
+int64_t kr_count_nested_tuple_leaves_at(Translator tr, int64_t pos);
+kr_str kr_collect_tuple_structure_at(Translator tr, int64_t pos);
 kr_str kr_type_to_c_value(int64_t kind);
 Translator kr_skip_generic_params(Translator tr);
 Translator kr_skip_array_type_suffix(Translator tr, int64_t first_kind);
@@ -696,18 +742,27 @@ Translator kr_skip_fn_type_sig(Translator tr);
 Translator kr_maybe_skip_turbofish(Translator tr);
 kr_str kr_sanitize_c_name(kr_str name);
 kr_str kr_mangle_top_level_fn_name(kr_str name);
+int64_t kr_is_var_already_declared(Translator tr, kr_str var_name, int64_t let_pos);
 bool kr_is_local_fn_var(Translator tr, kr_str name);
 kr_str kr_lookup_local_var_type_name(Translator tr, kr_str var_name);
 kr_str kr_lookup_dyn_concrete_type(Translator tr, kr_str var_name);
 bool kr_is_generic_top_level_fn_name(Translator tr, kr_str fn_name);
 bool kr_is_local_generic_call_var(Translator tr, kr_str name);
 bool kr_is_top_level_fn_name(Translator tr, kr_str name);
+void kr_sema_set(Translator tr, kr_str key, kr_str val);
+kr_str kr_sema_get(Translator tr, kr_str key);
+bool kr_sema_has(Translator tr, kr_str key);
+Translator kr_build_sema_registry(Translator tr);
 TranslateResult kr_translate(void* int_data, void* lexemes, int64_t token_count, kr_str file, Target target, void* out);
 Translator kr_emit_forward_decls(Translator tr);
 Translator kr_emit_fn_prototype(Translator tr);
 Translator kr_emit_impl_prototypes(Translator tr);
 Translator kr_emit_closure_statics(Translator tr);
 Translator kr_skip_brace_block(Translator tr);
+Translator kr_emit_vtables(Translator tr);
+Translator kr_emit_nested_fn_prototypes(Translator tr);
+Translator kr_emit_nested_fn_bodies(Translator tr);
+Translator kr_neutralize_nested_fn_tokens(Translator tr);
 Translator kr_translate_program(Translator tr);
 Translator kr_translate_top_level(Translator tr);
 Translator kr_translate_impl(Translator tr);
@@ -715,6 +770,7 @@ Translator kr_translate_impl_fn(Translator tr, kr_str type_name);
 Translator kr_translate_type_alias(Translator tr);
 Translator kr_translate_const_decl(Translator tr);
 Translator kr_translate_enum(Translator tr);
+Translator kr_skip_struct_tokens(Translator tr);
 Translator kr_translate_struct(Translator tr);
 Translator kr_translate_fn(Translator tr);
 Translator kr_translate_block_body(Translator tr);
@@ -725,6 +781,8 @@ Translator kr_translate_return(Translator tr);
 Translator kr_translate_if(Translator tr);
 Translator kr_translate_while(Translator tr);
 Translator kr_translate_for(Translator tr);
+bool kr_is_match_arm_arrow(Translator tr);
+Translator kr_skip_match_arm_arrow(Translator tr);
 Translator kr_translate_match(Translator tr);
 Translator kr_translate_match_simple(Translator tr);
 Translator kr_translate_for_in(Translator tr, kr_str vname);
@@ -739,6 +797,7 @@ int64_t kr_scan_eq_ahead(Translator tr);
 Translator kr_translate_equality(Translator tr);
 Translator kr_translate_comparison(Translator tr);
 Translator kr_translate_shift(Translator tr);
+int64_t kr_count_plus_before_minus(Translator tr);
 Translator kr_translate_addition(Translator tr);
 Translator kr_translate_multiplication(Translator tr);
 Translator kr_translate_unary(Translator tr);
@@ -917,6 +976,7 @@ kr_str file;
 void* int_data;
 void* lexemes;
 void* out;
+void* sema;
 };
 
 struct TranslateResult {
@@ -941,6 +1001,7 @@ int64_t abi;
 kr_str vendor;
 kr_str triple;
 };
+
 
 SourceLocation kr_new_location(int64_t line, int64_t column, int64_t offset) {
     return (SourceLocation){.line = line, .column = column, .offset = offset};
@@ -1592,19 +1653,19 @@ int64_t kr_peek_char(Lexer lex) {
 }
 
 int64_t kr_peek_next(Lexer lex) {
-    if (lex.pos + 1 >= lex.length) {
+    if (_KR_ADD(lex.pos, 1) >= lex.length) {
         return 0;
     }
-    return kr_str_char_at(lex.source, lex.pos + 1);
+    return kr_str_char_at(lex.source, _KR_ADD(lex.pos, 1));
 }
 
 Lexer kr_advance(Lexer lex) {
     __auto_type c = kr_peek_char(lex);
-    __auto_type new_pos = lex.pos + 1;
+    __auto_type new_pos = _KR_ADD(lex.pos, 1);
     __auto_type new_line = lex.line;
-    __auto_type new_col = lex.column + 1;
+    __auto_type new_col = _KR_ADD(lex.column, 1);
     if (_KR_EQ(c, 10)) {
-        new_line = lex.line + 1;
+        new_line = _KR_ADD(lex.line, 1);
         new_col = 1;
     }
     return (Lexer){.source = lex.source, .pos = new_pos, .line = new_line, .column = new_col, .length = lex.length};
@@ -1856,7 +1917,7 @@ Lexer kr_advance_n(Lexer lex, int64_t n) {
     __auto_type i = 0;
     while (i < n) {
         current = kr_advance(current);
-        i = i + 1;
+        i = _KR_ADD(i, 1);
     }
     return current;
 }
@@ -1877,7 +1938,7 @@ int64_t kr_tokenize(kr_str source, void* int_data, void* lexemes) {
             kr_vec_int_push(int_data, tok.column);
             kr_vec_string_push(lexemes, tok.lexeme);
             lex = kr_advance_n(lex, kr_strlen(tok.lexeme));
-            count = count + 1;
+            count = _KR_ADD(count, 1);
         }
         else {
             if (kr_is_digit(c)) {
@@ -1887,7 +1948,7 @@ int64_t kr_tokenize(kr_str source, void* int_data, void* lexemes) {
                 kr_vec_int_push(int_data, tok.column);
                 kr_vec_string_push(lexemes, tok.lexeme);
                 lex = kr_advance_n(lex, kr_strlen(tok.lexeme));
-                count = count + 1;
+                count = _KR_ADD(count, 1);
             }
             else {
                 if (_KR_EQ(c, 34)) {
@@ -1896,8 +1957,8 @@ int64_t kr_tokenize(kr_str source, void* int_data, void* lexemes) {
                     kr_vec_int_push(int_data, tok.line);
                     kr_vec_int_push(int_data, tok.column);
                     kr_vec_string_push(lexemes, tok.lexeme);
-                    lex = kr_advance_n(lex, kr_strlen(tok.lexeme) + 2);
-                    count = count + 1;
+                    lex = kr_advance_n(lex, _KR_ADD(kr_strlen(tok.lexeme), 2));
+                    count = _KR_ADD(count, 1);
                 }
                 else {
                     Token tok = kr_read_operator(lex);
@@ -1910,7 +1971,7 @@ int64_t kr_tokenize(kr_str source, void* int_data, void* lexemes) {
                         adv = 1;
                     }
                     lex = kr_advance_n(lex, adv);
-                    count = count + 1;
+                    count = _KR_ADD(count, 1);
                 }
             }
         }
@@ -1919,7 +1980,7 @@ int64_t kr_tokenize(kr_str source, void* int_data, void* lexemes) {
     kr_vec_int_push(int_data, lex.line);
     kr_vec_int_push(int_data, lex.column);
     kr_vec_string_push(lexemes, "");
-    count = count + 1;
+    count = _KR_ADD(count, 1);
     return count;
 }
 
@@ -2256,7 +2317,7 @@ AstArena kr_new_arena() {
 }
 
 AstArena kr_arena_add(AstArena arena) {
-    return (AstArena){.count = arena.count + 1};
+    return (AstArena){.count = _KR_ADD(arena.count, 1)};
 }
 
 TypeNode kr_new_type(int64_t kind, kr_str name) {
@@ -2455,7 +2516,7 @@ Translator kr_translate_union(Translator tr) {
 }
 
 Translator kr_new_translator(int64_t token_count, kr_str file, void* id, void* lex, void* o) {
-    return (Translator){.pos = 0, .count = token_count, .indent = 0, .errors = 0, .file = file, .int_data = id, .lexemes = lex, .out = o};
+    return (Translator){.pos = 0, .count = token_count, .indent = 0, .errors = 0, .file = file, .int_data = id, .lexemes = lex, .out = o, .sema = kr_map_string_string_new()};
 }
 
 bool kr_tr_at_end(Translator tr) {
@@ -2480,26 +2541,26 @@ int64_t kr_tr_line(Translator tr) {
     if (kr_tr_at_end(tr)) {
         return 0;
     }
-    return kr_vec_int_get(tr.int_data, tr.pos * 3 + 1);
+    return kr_vec_int_get(tr.int_data, _KR_ADD(tr.pos * 3, 1));
 }
 
 int64_t kr_tr_col(Translator tr) {
     if (kr_tr_at_end(tr)) {
         return 0;
     }
-    return kr_vec_int_get(tr.int_data, tr.pos * 3 + 2);
+    return kr_vec_int_get(tr.int_data, _KR_ADD(tr.pos * 3, 2));
 }
 
 Translator kr_tr_advance(Translator tr) {
-    return (Translator){.pos = tr.pos + 1, .count = tr.count, .indent = tr.indent, .errors = tr.errors, .file = tr.file, .int_data = tr.int_data, .lexemes = tr.lexemes, .out = tr.out};
+    return (Translator){.pos = _KR_ADD(tr.pos, 1), .count = tr.count, .indent = tr.indent, .errors = tr.errors, .file = tr.file, .int_data = tr.int_data, .lexemes = tr.lexemes, .out = tr.out, .sema = tr.sema};
 }
 
 Translator kr_tr_skip(Translator tr, int64_t n) {
-    return (Translator){.pos = tr.pos + n, .count = tr.count, .indent = tr.indent, .errors = tr.errors, .file = tr.file, .int_data = tr.int_data, .lexemes = tr.lexemes, .out = tr.out};
+    return (Translator){.pos = _KR_ADD(tr.pos, n), .count = tr.count, .indent = tr.indent, .errors = tr.errors, .file = tr.file, .int_data = tr.int_data, .lexemes = tr.lexemes, .out = tr.out, .sema = tr.sema};
 }
 
 Translator kr_tr_indent(Translator tr) {
-    return (Translator){.pos = tr.pos, .count = tr.count, .indent = tr.indent + 1, .errors = tr.errors, .file = tr.file, .int_data = tr.int_data, .lexemes = tr.lexemes, .out = tr.out};
+    return (Translator){.pos = tr.pos, .count = tr.count, .indent = _KR_ADD(tr.indent, 1), .errors = tr.errors, .file = tr.file, .int_data = tr.int_data, .lexemes = tr.lexemes, .out = tr.out, .sema = tr.sema};
 }
 
 Translator kr_tr_dedent(Translator tr) {
@@ -2507,11 +2568,11 @@ Translator kr_tr_dedent(Translator tr) {
     if (new_i < 0) {
         new_i = 0;
     }
-    return (Translator){.pos = tr.pos, .count = tr.count, .indent = new_i, .errors = tr.errors, .file = tr.file, .int_data = tr.int_data, .lexemes = tr.lexemes, .out = tr.out};
+    return (Translator){.pos = tr.pos, .count = tr.count, .indent = new_i, .errors = tr.errors, .file = tr.file, .int_data = tr.int_data, .lexemes = tr.lexemes, .out = tr.out, .sema = tr.sema};
 }
 
 Translator kr_tr_reset_pos(Translator tr) {
-    return (Translator){.pos = 0, .count = tr.count, .indent = 0, .errors = tr.errors, .file = tr.file, .int_data = tr.int_data, .lexemes = tr.lexemes, .out = tr.out};
+    return (Translator){.pos = 0, .count = tr.count, .indent = 0, .errors = tr.errors, .file = tr.file, .int_data = tr.int_data, .lexemes = tr.lexemes, .out = tr.out, .sema = tr.sema};
 }
 
 Translator kr_tr_error(Translator tr, kr_str msg) {
@@ -2519,7 +2580,7 @@ Translator kr_tr_error(Translator tr, kr_str msg) {
     __auto_type co = kr_tr_col(tr);
     __auto_type d = kr_new_error(kr_KRA_UNEXPECTED_TOKEN(), msg, tr.file, ln, co);
     kr_print_diagnostic(d);
-    return (Translator){.pos = tr.pos, .count = tr.count, .indent = tr.indent, .errors = tr.errors + 1, .file = tr.file, .int_data = tr.int_data, .lexemes = tr.lexemes, .out = tr.out};
+    return (Translator){.pos = tr.pos, .count = tr.count, .indent = tr.indent, .errors = _KR_ADD(tr.errors, 1), .file = tr.file, .int_data = tr.int_data, .lexemes = tr.lexemes, .out = tr.out, .sema = tr.sema};
 }
 
 void kr_tr_emit(Translator tr, kr_str s) {
@@ -2530,7 +2591,7 @@ void kr_tr_emit_indent(Translator tr) {
     __auto_type i = 0;
     while (i < tr.indent) {
         kr_vec_string_push(tr.out, "    ");
-        i = i + 1;
+        i = _KR_ADD(i, 1);
     }
 }
 
@@ -2562,12 +2623,18 @@ kr_str kr_type_to_c(int64_t kind, kr_str name) {
     if (_KR_EQ(kind, kr_TK_KW_VOID())) {
         return "void";
     }
+    if (_KR_EQ(kind, kr_TK_KW_DYN())) {
+        return "KrDyn";
+    }
     if (_KR_EQ(kind, kr_TK_IDENTIFIER())) {
         if (_KR_EQ(kr_strcmp((kr_str)(intptr_t)(name), (kr_str)(intptr_t)("T")), 0) || _KR_EQ(kr_strcmp((kr_str)(intptr_t)(name), (kr_str)(intptr_t)("U")), 0) || _KR_EQ(kr_strcmp((kr_str)(intptr_t)(name), (kr_str)(intptr_t)("V")), 0) || _KR_EQ(kr_strcmp((kr_str)(intptr_t)(name), (kr_str)(intptr_t)("K")), 0) || _KR_EQ(kr_strcmp((kr_str)(intptr_t)(name), (kr_str)(intptr_t)("R")), 0)) {
             return "int64_t";
         }
         if (_KR_EQ(kr_strcmp((kr_str)(intptr_t)(name), (kr_str)(intptr_t)("Self")), 0)) {
             return "void*";
+        }
+        if (_KR_EQ(kr_strcmp((kr_str)(intptr_t)(name), (kr_str)(intptr_t)("dyn")), 0)) {
+            return "KrDyn";
         }
         if (_KR_EQ(kr_strcmp((kr_str)(intptr_t)(name), (kr_str)(intptr_t)("VecInt")), 0)) {
             return "void*";
@@ -2593,6 +2660,174 @@ kr_str kr_type_to_c(int64_t kind, kr_str name) {
         return name;
     }
     return "void*";
+}
+
+int64_t kr_count_tuple_arity_at(Translator tr, int64_t pos) {
+    __auto_type j = _KR_ADD(pos, 1);
+    __auto_type commas = 0;
+    __auto_type depth = 0;
+    while (j < tr.count && !(_KR_EQ(kr_vec_int_get(tr.int_data, j * 3), kr_TK_RPAREN()) && _KR_EQ(depth, 0))) {
+        if (_KR_EQ(kr_vec_int_get(tr.int_data, j * 3), kr_TK_LPAREN())) {
+            depth = _KR_ADD(depth, 1);
+        }
+        if (_KR_EQ(kr_vec_int_get(tr.int_data, j * 3), kr_TK_RPAREN())) {
+            depth = depth - 1;
+        }
+        if (_KR_EQ(kr_vec_int_get(tr.int_data, j * 3), kr_TK_COMMA()) && _KR_EQ(depth, 0)) {
+            commas = _KR_ADD(commas, 1);
+        }
+        j = _KR_ADD(j, 1);
+    }
+    return _KR_ADD(commas, 1);
+}
+
+int64_t kr_count_tuple_arity(Translator tr) {
+    Translator c = tr;
+    __auto_type commas = 0;
+    __auto_type depth = 0;
+    while (!kr_tr_at_end(c) && !(_KR_EQ(kr_tr_kind(c), kr_TK_RPAREN()) && _KR_EQ(depth, 0))) {
+        if (_KR_EQ(kr_tr_kind(c), kr_TK_LPAREN())) {
+            depth = _KR_ADD(depth, 1);
+        }
+        if (_KR_EQ(kr_tr_kind(c), kr_TK_RPAREN())) {
+            depth = depth - 1;
+        }
+        if (_KR_EQ(kr_tr_kind(c), kr_TK_COMMA()) && _KR_EQ(depth, 0)) {
+            commas = _KR_ADD(commas, 1);
+        }
+        c = kr_tr_advance(c);
+    }
+    return _KR_ADD(commas, 1);
+}
+
+Translator kr_skip_tuple_type(Translator tr) {
+    Translator c = tr;
+    __auto_type depth = 0;
+    while (!kr_tr_at_end(c) && !(_KR_EQ(kr_tr_kind(c), kr_TK_RPAREN()) && _KR_EQ(depth, 0))) {
+        if (_KR_EQ(kr_tr_kind(c), kr_TK_LPAREN())) {
+            depth = _KR_ADD(depth, 1);
+        }
+        if (_KR_EQ(kr_tr_kind(c), kr_TK_RPAREN())) {
+            depth = depth - 1;
+        }
+        c = kr_tr_advance(c);
+    }
+    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_RPAREN())) {
+        c = kr_tr_advance(c);
+    }
+    return c;
+}
+
+kr_str kr_tuple_type_c(int64_t arity) {
+    if (arity >= 1 && arity <= 10) {
+        return kr_str_concat("KrTuple", kr_fmt_int((int64_t)(intptr_t)(arity)));
+    }
+    return "void*";
+}
+
+int64_t kr_has_tuple_comma_at(Translator tr, int64_t pos) {
+    __auto_type ci = _KR_ADD(pos, 1);
+    __auto_type cd = 1;
+    while (ci < tr.count && cd > 0) {
+        __auto_type ck = kr_vec_int_get(tr.int_data, ci * 3);
+        if (_KR_EQ(ck, kr_TK_LPAREN())) {
+            cd = _KR_ADD(cd, 1);
+        }
+        if (_KR_EQ(ck, kr_TK_RPAREN())) {
+            cd = cd - 1;
+        }
+        if (_KR_EQ(cd, 1) && _KR_EQ(ck, kr_TK_COMMA())) {
+            return 1;
+        }
+        ci = _KR_ADD(ci, 1);
+    }
+    return 0;
+}
+
+int64_t kr_count_nested_tuple_leaves_at(Translator tr, int64_t pos) {
+    __auto_type j = _KR_ADD(pos, 1);
+    __auto_type total = 0;
+    __auto_type depth = 0;
+    __auto_type elem_start = j;
+    while (j < tr.count) {
+        __auto_type k = kr_vec_int_get(tr.int_data, j * 3);
+        if (_KR_EQ(k, kr_TK_LPAREN())) {
+            depth = _KR_ADD(depth, 1);
+        }
+        if (_KR_EQ(k, kr_TK_RPAREN())) {
+            if (_KR_EQ(depth, 0)) {
+                if (j > elem_start) {
+                    __auto_type ek = kr_vec_int_get(tr.int_data, elem_start * 3);
+                    if (_KR_EQ(ek, kr_TK_LPAREN())) {
+                        total = _KR_ADD(total, kr_count_nested_tuple_leaves_at(tr, elem_start));
+                    }
+                    else {
+                        total = _KR_ADD(total, 1);
+                    }
+                }
+                break;
+            }
+            depth = depth - 1;
+        }
+        if (_KR_EQ(depth, 0) && _KR_EQ(k, kr_TK_COMMA())) {
+            __auto_type ek = kr_vec_int_get(tr.int_data, elem_start * 3);
+            if (_KR_EQ(ek, kr_TK_LPAREN())) {
+                total = _KR_ADD(total, kr_count_nested_tuple_leaves_at(tr, elem_start));
+            }
+            else {
+                total = _KR_ADD(total, 1);
+            }
+            elem_start = _KR_ADD(j, 1);
+        }
+        j = _KR_ADD(j, 1);
+    }
+    return total;
+}
+
+kr_str kr_collect_tuple_structure_at(Translator tr, int64_t pos) {
+    __auto_type j = _KR_ADD(pos, 1);
+    __auto_type result = "";
+    __auto_type depth = 0;
+    __auto_type elem_start = j;
+    __auto_type elem_idx = 0;
+    while (j < tr.count) {
+        __auto_type k = kr_vec_int_get(tr.int_data, j * 3);
+        if (_KR_EQ(k, kr_TK_LPAREN())) {
+            depth = _KR_ADD(depth, 1);
+        }
+        if (_KR_EQ(k, kr_TK_RPAREN())) {
+            if (_KR_EQ(depth, 0)) {
+                if (j > elem_start) {
+                    __auto_type ek = kr_vec_int_get(tr.int_data, elem_start * 3);
+                    __auto_type leaves = 1;
+                    if (_KR_EQ(ek, kr_TK_LPAREN())) {
+                        leaves = kr_count_nested_tuple_leaves_at(tr, elem_start);
+                    }
+                    if (elem_idx > 0) {
+                        result = kr_str_concat(result, ",");
+                    }
+                    result = kr_str_concat(result, kr_fmt_int((int64_t)(intptr_t)(leaves)));
+                }
+                break;
+            }
+            depth = depth - 1;
+        }
+        if (_KR_EQ(depth, 0) && _KR_EQ(k, kr_TK_COMMA())) {
+            __auto_type ek = kr_vec_int_get(tr.int_data, elem_start * 3);
+            __auto_type leaves = 1;
+            if (_KR_EQ(ek, kr_TK_LPAREN())) {
+                leaves = kr_count_nested_tuple_leaves_at(tr, elem_start);
+            }
+            if (elem_idx > 0) {
+                result = kr_str_concat(result, ",");
+            }
+            result = kr_str_concat(result, kr_fmt_int((int64_t)(intptr_t)(leaves)));
+            elem_idx = _KR_ADD(elem_idx, 1);
+            elem_start = _KR_ADD(j, 1);
+        }
+        j = _KR_ADD(j, 1);
+    }
+    return result;
 }
 
 kr_str kr_type_to_c_value(int64_t kind) {
@@ -2623,7 +2858,7 @@ Translator kr_skip_generic_params(Translator tr) {
     __auto_type depth = 1;
     while (!kr_tr_at_end(c) && depth > 0) {
         if (_KR_EQ(kr_tr_kind(c), kr_TK_OP_LT())) {
-            depth = depth + 1;
+            depth = _KR_ADD(depth, 1);
         }
         if (_KR_EQ(kr_tr_kind(c), kr_TK_OP_GT())) {
             depth = depth - 1;
@@ -2642,7 +2877,7 @@ Translator kr_skip_array_type_suffix(Translator tr, int64_t first_kind) {
     while (!kr_tr_at_end(c) && depth > 0) {
         __auto_type k = kr_tr_kind(c);
         if (_KR_EQ(k, kr_TK_LBRACKET())) {
-            depth = depth + 1;
+            depth = _KR_ADD(depth, 1);
         }
         if (_KR_EQ(k, kr_TK_RBRACKET())) {
             depth = depth - 1;
@@ -2661,7 +2896,7 @@ Translator kr_skip_fn_type_sig(Translator tr) {
     __auto_type depth = 1;
     while (!kr_tr_at_end(c) && depth > 0) {
         if (_KR_EQ(kr_tr_kind(c), kr_TK_LPAREN())) {
-            depth = depth + 1;
+            depth = _KR_ADD(depth, 1);
         }
         if (_KR_EQ(kr_tr_kind(c), kr_TK_RPAREN())) {
             depth = depth - 1;
@@ -2670,7 +2905,13 @@ Translator kr_skip_fn_type_sig(Translator tr) {
     }
     if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_ARROW())) {
         c = kr_tr_advance(c);
-        c = kr_tr_advance(c);
+        if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_LBRACKET())) {
+            c = kr_tr_advance(c);
+            c = kr_skip_array_type_suffix(c, kr_TK_LBRACKET());
+        }
+        else {
+            c = kr_tr_advance(c);
+        }
         c = kr_skip_generic_params(c);
     }
     return c;
@@ -2686,12 +2927,12 @@ Translator kr_maybe_skip_turbofish(Translator tr) {
     while (i < c.count) {
         __auto_type k = kr_vec_int_get(c.int_data, i * 3);
         if (_KR_EQ(k, kr_TK_OP_LT())) {
-            depth = depth + 1;
+            depth = _KR_ADD(depth, 1);
         }
         if (_KR_EQ(k, kr_TK_OP_GT())) {
             depth = depth - 1;
             if (_KR_EQ(depth, 0)) {
-                __auto_type j = i + 1;
+                __auto_type j = _KR_ADD(i, 1);
                 if (j < c.count) {
                     __auto_type k2 = kr_vec_int_get(c.int_data, j * 3);
                     if (_KR_EQ(k2, kr_TK_LPAREN()) || _KR_EQ(k2, kr_TK_LBRACE())) {
@@ -2701,7 +2942,7 @@ Translator kr_maybe_skip_turbofish(Translator tr) {
                 return c;
             }
         }
-        i = i + 1;
+        i = _KR_ADD(i, 1);
     }
     return c;
 }
@@ -2749,6 +2990,36 @@ kr_str kr_sanitize_c_name(kr_str name) {
     if (_KR_EQ(name, "unsigned")) {
         return "unsigned_val";
     }
+    if (_KR_EQ(name, "default")) {
+        return "default_val";
+    }
+    if (_KR_EQ(name, "switch")) {
+        return "switch_val";
+    }
+    if (_KR_EQ(name, "case")) {
+        return "case_val";
+    }
+    if (_KR_EQ(name, "break")) {
+        return "break_val";
+    }
+    if (_KR_EQ(name, "continue")) {
+        return "continue_val";
+    }
+    if (_KR_EQ(name, "goto")) {
+        return "goto_val";
+    }
+    if (_KR_EQ(name, "sizeof")) {
+        return "sizeof_val";
+    }
+    if (_KR_EQ(name, "typedef")) {
+        return "typedef_val";
+    }
+    if (_KR_EQ(name, "union")) {
+        return "union_val";
+    }
+    if (_KR_EQ(name, "volatile")) {
+        return "volatile_val";
+    }
     return name;
 }
 
@@ -2759,13 +3030,57 @@ kr_str kr_mangle_top_level_fn_name(kr_str name) {
     return kr_str_concat("kr_", name);
 }
 
+int64_t kr_is_var_already_declared(Translator tr, kr_str var_name, int64_t let_pos) {
+    __auto_type i = let_pos - 1;
+    __auto_type depth = 0;
+    while (i >= 0) {
+        __auto_type k = kr_vec_int_get(tr.int_data, i * 3);
+        if (_KR_EQ(k, kr_TK_RBRACE())) {
+            depth = _KR_ADD(depth, 1);
+        }
+        if (_KR_EQ(k, kr_TK_LBRACE())) {
+            if (_KR_EQ(depth, 0)) {
+                break;
+            }
+            depth = depth - 1;
+        }
+        if (_KR_EQ(depth, 0) && _KR_EQ(k, kr_TK_KW_LET())) {
+            __auto_type j = _KR_ADD(i, 1);
+            if (j < tr.count && _KR_EQ(kr_vec_int_get(tr.int_data, j * 3), kr_TK_KW_MUT())) {
+                j = _KR_ADD(j, 1);
+            }
+            if (j < tr.count && _KR_EQ(kr_vec_string_get(tr.lexemes, j), var_name)) {
+                return 1;
+            }
+            if (j < tr.count && _KR_EQ(kr_vec_int_get(tr.int_data, j * 3), kr_TK_LPAREN())) {
+                j = _KR_ADD(j, 1);
+                __auto_type pd = 1;
+                while (j < tr.count && pd > 0) {
+                    if (_KR_EQ(kr_vec_int_get(tr.int_data, j * 3), kr_TK_LPAREN())) {
+                        pd = _KR_ADD(pd, 1);
+                    }
+                    if (_KR_EQ(kr_vec_int_get(tr.int_data, j * 3), kr_TK_RPAREN())) {
+                        pd = pd - 1;
+                    }
+                    if (pd > 0 && _KR_EQ(kr_vec_string_get(tr.lexemes, j), var_name)) {
+                        return 1;
+                    }
+                    j = _KR_ADD(j, 1);
+                }
+            }
+        }
+        i = i - 1;
+    }
+    return 0;
+}
+
 bool kr_is_local_fn_var(Translator tr, kr_str name) {
     __auto_type i = tr.pos - 1;
     __auto_type depth = 0;
     while (i >= 0) {
         __auto_type k = kr_vec_int_get(tr.int_data, i * 3);
         if (_KR_EQ(k, kr_TK_RBRACE())) {
-            depth = depth + 1;
+            depth = _KR_ADD(depth, 1);
         }
         if (_KR_EQ(k, kr_TK_LBRACE())) {
             if (_KR_EQ(depth, 0)) {
@@ -2775,13 +3090,13 @@ bool kr_is_local_fn_var(Translator tr, kr_str name) {
         }
         i = i - 1;
     }
-    __auto_type start = i + 1;
+    __auto_type start = _KR_ADD(i, 1);
     __auto_type j = start;
     while (j < tr.pos) {
         __auto_type k = kr_vec_int_get(tr.int_data, j * 3);
         if (_KR_EQ(kr_vec_string_get(tr.lexemes, j), name)) {
-            __auto_type j1 = j + 1;
-            __auto_type j2 = j1 + 1;
+            __auto_type j1 = _KR_ADD(j, 1);
+            __auto_type j2 = _KR_ADD(j1, 1);
             if (j2 < tr.pos) {
                 if (_KR_EQ(kr_vec_int_get(tr.int_data, j1 * 3), kr_TK_COLON()) && _KR_EQ(kr_vec_int_get(tr.int_data, j2 * 3), kr_TK_KW_FN())) {
                     return true;
@@ -2789,27 +3104,21 @@ bool kr_is_local_fn_var(Translator tr, kr_str name) {
             }
         }
         if (_KR_EQ(k, kr_TK_KW_LET())) {
-            __auto_type j1 = j + 1;
+            __auto_type j1 = _KR_ADD(j, 1);
             if (j1 < tr.pos && _KR_EQ(kr_vec_string_get(tr.lexemes, j1), name)) {
-                __auto_type j2 = j1 + 1;
-                __auto_type j3 = j2 + 1;
+                __auto_type j2 = _KR_ADD(j1, 1);
+                __auto_type j3 = _KR_ADD(j2, 1);
                 if (j3 < tr.pos) {
                     if (_KR_EQ(kr_vec_int_get(tr.int_data, j2 * 3), kr_TK_COLON()) && _KR_EQ(kr_vec_int_get(tr.int_data, j3 * 3), kr_TK_KW_FN())) {
                         return true;
                     }
                 }
-                __auto_type j4 = j3 + 1;
+                __auto_type j4 = _KR_ADD(j3, 1);
                 if (j4 < tr.pos) {
                     if (_KR_EQ(kr_vec_int_get(tr.int_data, j2 * 3), kr_TK_OP_ASSIGN())) {
                         __auto_type k_rhs = kr_vec_int_get(tr.int_data, j3 * 3);
                         if (_KR_EQ(k_rhs, kr_TK_PIPE()) || _KR_EQ(k_rhs, kr_TK_OP_BIT_OR()) || _KR_EQ(k_rhs, kr_TK_OP_OR())) {
                             return true;
-                        }
-                        if (_KR_EQ(k_rhs, kr_TK_IDENTIFIER())) {
-                            __auto_type j5 = j3 + 1;
-                            if (j5 < tr.pos && _KR_EQ(kr_vec_int_get(tr.int_data, j5 * 3), kr_TK_LPAREN())) {
-                                return true;
-                            }
                         }
                     }
                     if (_KR_EQ(kr_vec_int_get(tr.int_data, j3 * 3), kr_TK_OP_ASSIGN())) {
@@ -2817,52 +3126,76 @@ bool kr_is_local_fn_var(Translator tr, kr_str name) {
                         if (_KR_EQ(k_rhs2, kr_TK_PIPE()) || _KR_EQ(k_rhs2, kr_TK_OP_BIT_OR()) || _KR_EQ(k_rhs2, kr_TK_OP_OR())) {
                             return true;
                         }
-                        if (_KR_EQ(k_rhs2, kr_TK_IDENTIFIER())) {
-                            __auto_type j6 = j4 + 1;
-                            if (j6 < tr.pos && _KR_EQ(kr_vec_int_get(tr.int_data, j6 * 3), kr_TK_LPAREN())) {
-                                return true;
-                            }
-                        }
                     }
                 }
             }
         }
-        j = j + 1;
+        j = _KR_ADD(j, 1);
     }
     __auto_type b = start - 1;
     if (b >= 0) {
         __auto_type fidx = b;
-        while (fidx >= 0 && _KR_NEQ(kr_vec_int_get(tr.int_data, fidx * 3), kr_TK_KW_FN())) {
+        while (fidx >= 0) {
+            if (_KR_EQ(kr_vec_int_get(tr.int_data, fidx * 3), kr_TK_KW_FN())) {
+                __auto_type fnext = _KR_ADD(fidx, 1);
+                if (fnext < tr.count && _KR_EQ(kr_vec_int_get(tr.int_data, fnext * 3), kr_TK_IDENTIFIER())) {
+                    break;
+                }
+            }
             fidx = fidx - 1;
         }
         if (fidx >= 0) {
             __auto_type p = fidx;
             while (p < start && _KR_NEQ(kr_vec_int_get(tr.int_data, p * 3), kr_TK_LPAREN())) {
-                p = p + 1;
+                p = _KR_ADD(p, 1);
             }
             if (p < start && _KR_EQ(kr_vec_int_get(tr.int_data, p * 3), kr_TK_LPAREN())) {
-                p = p + 1;
+                p = _KR_ADD(p, 1);
                 __auto_type depthp = 1;
                 while (p < start && depthp > 0) {
                     __auto_type kp = kr_vec_int_get(tr.int_data, p * 3);
                     if (_KR_EQ(kp, kr_TK_LPAREN())) {
-                        depthp = depthp + 1;
+                        depthp = _KR_ADD(depthp, 1);
                     }
                     if (_KR_EQ(kp, kr_TK_RPAREN())) {
                         depthp = depthp - 1;
                     }
                     if (_KR_EQ(depthp, 1) && _KR_EQ(kr_vec_string_get(tr.lexemes, p), name)) {
-                        __auto_type c1 = p + 1;
-                        __auto_type c2 = c1 + 1;
+                        __auto_type c1 = _KR_ADD(p, 1);
+                        __auto_type c2 = _KR_ADD(c1, 1);
                         if (c2 < start) {
                             if (_KR_EQ(kr_vec_int_get(tr.int_data, c1 * 3), kr_TK_COLON()) && _KR_EQ(kr_vec_int_get(tr.int_data, c2 * 3), kr_TK_KW_FN())) {
                                 return true;
                             }
                         }
                     }
-                    p = p + 1;
+                    p = _KR_ADD(p, 1);
                 }
             }
+        }
+    }
+    if (_KR_NEQ(kr_sema_get(tr, kr_str_concat("localfn:", name)), "")) {
+        return true;
+    }
+    if (!kr_sema_has(tr, kr_str_concat("f:", kr_str_concat(name, ":ret")))) {
+        __auto_type lj = start;
+        while (lj < tr.pos) {
+            if (_KR_EQ(kr_vec_int_get(tr.int_data, lj * 3), kr_TK_KW_LET())) {
+                __auto_type lj1 = _KR_ADD(lj, 1);
+                if (lj1 < tr.pos && _KR_EQ(kr_vec_string_get(tr.lexemes, lj1), name)) {
+                    return true;
+                }
+                if (lj1 < tr.pos && _KR_EQ(kr_vec_int_get(tr.int_data, lj1 * 3), kr_TK_LPAREN())) {
+                    __auto_type lj2 = _KR_ADD(lj1, 1);
+                    while (lj2 < tr.pos && _KR_NEQ(kr_vec_int_get(tr.int_data, lj2 * 3), kr_TK_RPAREN())) {
+                        if (_KR_EQ(kr_vec_string_get(tr.lexemes, lj2), name)) {
+                            return true;
+                        }
+                        lj2 = _KR_ADD(lj2, 1);
+                    }
+                }
+            }
+            lj = _KR_ADD(lj, 1);
         }
     }
     return false;
@@ -2871,43 +3204,112 @@ bool kr_is_local_fn_var(Translator tr, kr_str name) {
 kr_str kr_lookup_local_var_type_name(Translator tr, kr_str var_name) {
     __auto_type i = tr.pos - 1;
     __auto_type depth = 0;
+    __auto_type fn_start = 0;
     while (i >= 0) {
         __auto_type k = kr_vec_int_get(tr.int_data, i * 3);
         if (_KR_EQ(k, kr_TK_RBRACE())) {
-            depth = depth + 1;
+            depth = _KR_ADD(depth, 1);
         }
         if (_KR_EQ(k, kr_TK_LBRACE())) {
-            if (_KR_EQ(depth, 0)) {
-                break;
+            if (depth <= 0) {
+                fn_start = _KR_ADD(i, 1);
             }
             depth = depth - 1;
         }
+        if (_KR_EQ(k, kr_TK_KW_FN())) {
+            __auto_type ni = _KR_ADD(i, 1);
+            if (ni < tr.count && _KR_EQ(kr_vec_int_get(tr.int_data, ni * 3), kr_TK_IDENTIFIER())) {
+                break;
+            }
+        }
         i = i - 1;
     }
-    __auto_type start = i + 1;
-    __auto_type j = start;
+    __auto_type j = fn_start;
     while (j < tr.pos) {
         __auto_type k = kr_vec_int_get(tr.int_data, j * 3);
         if (_KR_EQ(k, kr_TK_KW_LET())) {
-            __auto_type j1 = j + 1;
+            __auto_type j1 = _KR_ADD(j, 1);
             if (j1 < tr.pos && _KR_EQ(kr_vec_string_get(tr.lexemes, j1), var_name)) {
-                __auto_type j2 = j1 + 1;
-                __auto_type j3 = j2 + 1;
+                __auto_type j2 = _KR_ADD(j1, 1);
+                __auto_type j3 = _KR_ADD(j2, 1);
                 if (j3 < tr.pos && _KR_EQ(kr_vec_int_get(tr.int_data, j2 * 3), kr_TK_COLON())) {
-                    if (_KR_EQ(kr_vec_string_get(tr.lexemes, j3), "dyn")) {
-                        __auto_type j4 = j3 + 1;
+                    if (_KR_EQ(kr_vec_int_get(tr.int_data, j3 * 3), kr_TK_KW_DYN())) {
+                        __auto_type j4 = _KR_ADD(j3, 1);
                         if (j4 < tr.pos && _KR_EQ(kr_vec_int_get(tr.int_data, j4 * 3), kr_TK_IDENTIFIER())) {
                             return kr_str_concat("dyn:", kr_vec_string_get(tr.lexemes, j4));
                         }
                         return "dyn:";
                     }
+                    if (_KR_EQ(kr_vec_int_get(tr.int_data, j3 * 3), kr_TK_LBRACKET())) {
+                        return "[array]";
+                    }
                     if (_KR_EQ(kr_vec_int_get(tr.int_data, j3 * 3), kr_TK_IDENTIFIER())) {
                         return kr_vec_string_get(tr.lexemes, j3);
                     }
                 }
+                if (j3 < tr.count && _KR_EQ(kr_vec_int_get(tr.int_data, j2 * 3), kr_TK_OP_ASSIGN())) {
+                    if (_KR_EQ(kr_vec_int_get(tr.int_data, j3 * 3), kr_TK_LBRACKET())) {
+                        return "[array]";
+                    }
+                }
             }
         }
-        j = j + 1;
+        j = _KR_ADD(j, 1);
+    }
+    if (i >= 0 && _KR_EQ(kr_vec_int_get(tr.int_data, i * 3), kr_TK_KW_FN())) {
+        __auto_type pi = _KR_ADD(i, 1);
+        if (pi < tr.count && _KR_EQ(kr_vec_int_get(tr.int_data, pi * 3), kr_TK_IDENTIFIER())) {
+            pi = _KR_ADD(pi, 1);
+        }
+        if (pi < tr.count && _KR_EQ(kr_vec_int_get(tr.int_data, pi * 3), kr_TK_OP_LT())) {
+            __auto_type gd = 1;
+            pi = _KR_ADD(pi, 1);
+            while (pi < tr.count && gd > 0) {
+                if (_KR_EQ(kr_vec_int_get(tr.int_data, pi * 3), kr_TK_OP_LT())) {
+                    gd = _KR_ADD(gd, 1);
+                }
+                if (_KR_EQ(kr_vec_int_get(tr.int_data, pi * 3), kr_TK_OP_GT())) {
+                    gd = gd - 1;
+                }
+                pi = _KR_ADD(pi, 1);
+            }
+        }
+        if (pi < tr.count && _KR_EQ(kr_vec_int_get(tr.int_data, pi * 3), kr_TK_LPAREN())) {
+            __auto_type pd = 1;
+            pi = _KR_ADD(pi, 1);
+            while (pi < tr.count && pd > 0) {
+                if (_KR_EQ(kr_vec_int_get(tr.int_data, pi * 3), kr_TK_LPAREN())) {
+                    pd = _KR_ADD(pd, 1);
+                }
+                if (_KR_EQ(kr_vec_int_get(tr.int_data, pi * 3), kr_TK_RPAREN())) {
+                    pd = pd - 1;
+                }
+                if (_KR_EQ(pd, 1) && _KR_EQ(kr_vec_int_get(tr.int_data, pi * 3), kr_TK_IDENTIFIER())) {
+                    if (_KR_EQ(kr_vec_string_get(tr.lexemes, pi), var_name)) {
+                        __auto_type pi2 = _KR_ADD(pi, 1);
+                        if (pi2 < tr.count && _KR_EQ(kr_vec_int_get(tr.int_data, pi2 * 3), kr_TK_COLON())) {
+                            __auto_type pi3 = _KR_ADD(pi2, 1);
+                            if (pi3 < tr.count) {
+                                if (_KR_EQ(kr_vec_int_get(tr.int_data, pi3 * 3), kr_TK_KW_DYN())) {
+                                    __auto_type pi4 = _KR_ADD(pi3, 1);
+                                    if (pi4 < tr.count && _KR_EQ(kr_vec_int_get(tr.int_data, pi4 * 3), kr_TK_IDENTIFIER())) {
+                                        return kr_str_concat("dyn:", kr_vec_string_get(tr.lexemes, pi4));
+                                    }
+                                    return "dyn:";
+                                }
+                                if (_KR_EQ(kr_vec_int_get(tr.int_data, pi3 * 3), kr_TK_LBRACKET())) {
+                                    return "[array]";
+                                }
+                                if (_KR_EQ(kr_vec_int_get(tr.int_data, pi3 * 3), kr_TK_IDENTIFIER())) {
+                                    return kr_vec_string_get(tr.lexemes, pi3);
+                                }
+                            }
+                        }
+                    }
+                }
+                pi = _KR_ADD(pi, 1);
+            }
+        }
     }
     return "";
 }
@@ -2918,7 +3320,7 @@ kr_str kr_lookup_dyn_concrete_type(Translator tr, kr_str var_name) {
     while (i >= 0) {
         __auto_type k = kr_vec_int_get(tr.int_data, i * 3);
         if (_KR_EQ(k, kr_TK_RBRACE())) {
-            depth = depth + 1;
+            depth = _KR_ADD(depth, 1);
         }
         if (_KR_EQ(k, kr_TK_LBRACE())) {
             if (_KR_EQ(depth, 0)) {
@@ -2928,25 +3330,25 @@ kr_str kr_lookup_dyn_concrete_type(Translator tr, kr_str var_name) {
         }
         i = i - 1;
     }
-    __auto_type start = i + 1;
+    __auto_type start = _KR_ADD(i, 1);
     __auto_type j = start;
     while (j < tr.pos) {
         __auto_type k = kr_vec_int_get(tr.int_data, j * 3);
         if (_KR_EQ(k, kr_TK_KW_LET())) {
-            __auto_type j1 = j + 1;
+            __auto_type j1 = _KR_ADD(j, 1);
             if (j1 < tr.pos && _KR_EQ(kr_vec_string_get(tr.lexemes, j1), var_name)) {
-                __auto_type jx = j1 + 1;
+                __auto_type jx = _KR_ADD(j1, 1);
                 while (jx < tr.pos && _KR_NEQ(kr_vec_int_get(tr.int_data, jx * 3), kr_TK_OP_ASSIGN())) {
                     if (_KR_EQ(kr_vec_int_get(tr.int_data, jx * 3), kr_TK_SEMICOLON())) {
                         break;
                     }
-                    jx = jx + 1;
+                    jx = _KR_ADD(jx, 1);
                 }
                 if (jx < tr.pos && _KR_EQ(kr_vec_int_get(tr.int_data, jx * 3), kr_TK_OP_ASSIGN())) {
-                    __auto_type rhs = jx + 1;
+                    __auto_type rhs = _KR_ADD(jx, 1);
                     if (rhs < tr.pos && _KR_EQ(kr_vec_int_get(tr.int_data, rhs * 3), kr_TK_IDENTIFIER())) {
                         __auto_type rhs_name = kr_vec_string_get(tr.lexemes, rhs);
-                        __auto_type rhs2 = rhs + 1;
+                        __auto_type rhs2 = _KR_ADD(rhs, 1);
                         if (rhs2 < tr.pos && _KR_EQ(kr_vec_int_get(tr.int_data, rhs2 * 3), kr_TK_LBRACE())) {
                             return rhs_name;
                         }
@@ -2957,16 +3359,16 @@ kr_str kr_lookup_dyn_concrete_type(Translator tr, kr_str var_name) {
                         __auto_type rj = start;
                         while (rj < tr.pos) {
                             if (_KR_EQ(kr_vec_int_get(tr.int_data, rj * 3), kr_TK_KW_LET())) {
-                                __auto_type rj1 = rj + 1;
+                                __auto_type rj1 = _KR_ADD(rj, 1);
                                 if (rj1 < tr.pos && _KR_EQ(kr_vec_string_get(tr.lexemes, rj1), rhs_name)) {
-                                    __auto_type rx = rj1 + 1;
+                                    __auto_type rx = _KR_ADD(rj1, 1);
                                     while (rx < tr.pos && _KR_NEQ(kr_vec_int_get(tr.int_data, rx * 3), kr_TK_OP_ASSIGN()) && _KR_NEQ(kr_vec_int_get(tr.int_data, rx * 3), kr_TK_SEMICOLON())) {
-                                        rx = rx + 1;
+                                        rx = _KR_ADD(rx, 1);
                                     }
                                     if (rx < tr.pos && _KR_EQ(kr_vec_int_get(tr.int_data, rx * 3), kr_TK_OP_ASSIGN())) {
-                                        __auto_type rx1 = rx + 1;
+                                        __auto_type rx1 = _KR_ADD(rx, 1);
                                         if (rx1 < tr.pos && _KR_EQ(kr_vec_int_get(tr.int_data, rx1 * 3), kr_TK_IDENTIFIER())) {
-                                            __auto_type rx2 = rx1 + 1;
+                                            __auto_type rx2 = _KR_ADD(rx1, 1);
                                             if (rx2 < tr.pos && _KR_EQ(kr_vec_int_get(tr.int_data, rx2 * 3), kr_TK_LBRACE())) {
                                                 return kr_vec_string_get(tr.lexemes, rx1);
                                             }
@@ -2974,31 +3376,31 @@ kr_str kr_lookup_dyn_concrete_type(Translator tr, kr_str var_name) {
                                     }
                                 }
                             }
-                            rj = rj + 1;
+                            rj = _KR_ADD(rj, 1);
                         }
                     }
                 }
             }
         }
-        j = j + 1;
+        j = _KR_ADD(j, 1);
     }
     return "";
 }
 
 bool kr_is_generic_top_level_fn_name(Translator tr, kr_str fn_name) {
     __auto_type i = 0;
-    while (i + 2 < tr.count) {
+    while (_KR_ADD(i, 2) < tr.count) {
         if (_KR_EQ(kr_vec_int_get(tr.int_data, i * 3), kr_TK_KW_FN())) {
-            __auto_type i1 = i + 1;
+            __auto_type i1 = _KR_ADD(i, 1);
             if (_KR_EQ(kr_vec_int_get(tr.int_data, i1 * 3), kr_TK_IDENTIFIER()) && _KR_EQ(kr_vec_string_get(tr.lexemes, i1), fn_name)) {
-                __auto_type i2 = i1 + 1;
+                __auto_type i2 = _KR_ADD(i1, 1);
                 if (i2 < tr.count && _KR_EQ(kr_vec_int_get(tr.int_data, i2 * 3), kr_TK_OP_LT())) {
                     return true;
                 }
                 return false;
             }
         }
-        i = i + 1;
+        i = _KR_ADD(i, 1);
     }
     return false;
 }
@@ -3009,7 +3411,7 @@ bool kr_is_local_generic_call_var(Translator tr, kr_str name) {
     while (i >= 0) {
         __auto_type k = kr_vec_int_get(tr.int_data, i * 3);
         if (_KR_EQ(k, kr_TK_RBRACE())) {
-            depth = depth + 1;
+            depth = _KR_ADD(depth, 1);
         }
         if (_KR_EQ(k, kr_TK_LBRACE())) {
             if (_KR_EQ(depth, 0)) {
@@ -3019,34 +3421,34 @@ bool kr_is_local_generic_call_var(Translator tr, kr_str name) {
         }
         i = i - 1;
     }
-    __auto_type start = i + 1;
+    __auto_type start = _KR_ADD(i, 1);
     __auto_type j = start;
     while (j < tr.pos) {
         if (_KR_EQ(kr_vec_int_get(tr.int_data, j * 3), kr_TK_KW_LET())) {
-            __auto_type j1 = j + 1;
+            __auto_type j1 = _KR_ADD(j, 1);
             if (j1 < tr.pos && _KR_EQ(kr_vec_string_get(tr.lexemes, j1), name)) {
-                __auto_type p = j1 + 1;
+                __auto_type p = _KR_ADD(j1, 1);
                 if (p < tr.pos && _KR_EQ(kr_vec_int_get(tr.int_data, p * 3), kr_TK_COLON())) {
-                    p = p + 1;
+                    p = _KR_ADD(p, 1);
                     __auto_type pd = 0;
                     __auto_type bd = 0;
                     __auto_type sd = 0;
                     while (p < tr.pos) {
                         __auto_type kk = kr_vec_int_get(tr.int_data, p * 3);
                         if (_KR_EQ(kk, kr_TK_LPAREN())) {
-                            pd = pd + 1;
+                            pd = _KR_ADD(pd, 1);
                         }
                         if (_KR_EQ(kk, kr_TK_RPAREN()) && pd > 0) {
                             pd = pd - 1;
                         }
                         if (_KR_EQ(kk, kr_TK_LBRACE())) {
-                            bd = bd + 1;
+                            bd = _KR_ADD(bd, 1);
                         }
                         if (_KR_EQ(kk, kr_TK_RBRACE()) && bd > 0) {
                             bd = bd - 1;
                         }
                         if (_KR_EQ(kk, kr_TK_LBRACKET())) {
-                            sd = sd + 1;
+                            sd = _KR_ADD(sd, 1);
                         }
                         if (_KR_EQ(kk, kr_TK_RBRACKET()) && sd > 0) {
                             sd = sd - 1;
@@ -3054,25 +3456,25 @@ bool kr_is_local_generic_call_var(Translator tr, kr_str name) {
                         if (_KR_EQ(pd, 0) && _KR_EQ(bd, 0) && _KR_EQ(sd, 0) && _KR_EQ(kk, kr_TK_OP_ASSIGN())) {
                             break;
                         }
-                        p = p + 1;
+                        p = _KR_ADD(p, 1);
                     }
                 }
                 if (p < tr.pos && _KR_EQ(kr_vec_int_get(tr.int_data, p * 3), kr_TK_OP_ASSIGN())) {
-                    __auto_type rhs = p + 1;
+                    __auto_type rhs = _KR_ADD(p, 1);
                     if (rhs < tr.pos && _KR_EQ(kr_vec_int_get(tr.int_data, rhs * 3), kr_TK_IDENTIFIER())) {
-                        __auto_type rhs_call = rhs + 1;
+                        __auto_type rhs_call = _KR_ADD(rhs, 1);
                         if (rhs_call < tr.pos && _KR_EQ(kr_vec_int_get(tr.int_data, rhs_call * 3), kr_TK_OP_LT())) {
                             __auto_type gd = 1;
-                            rhs_call = rhs_call + 1;
+                            rhs_call = _KR_ADD(rhs_call, 1);
                             while (rhs_call < tr.pos && gd > 0) {
                                 __auto_type gk = kr_vec_int_get(tr.int_data, rhs_call * 3);
                                 if (_KR_EQ(gk, kr_TK_OP_LT())) {
-                                    gd = gd + 1;
+                                    gd = _KR_ADD(gd, 1);
                                 }
                                 if (_KR_EQ(gk, kr_TK_OP_GT())) {
                                     gd = gd - 1;
                                 }
-                                rhs_call = rhs_call + 1;
+                                rhs_call = _KR_ADD(rhs_call, 1);
                             }
                         }
                         if (rhs_call < tr.pos && _KR_EQ(kr_vec_int_get(tr.int_data, rhs_call * 3), kr_TK_LPAREN())) {
@@ -3085,30 +3487,361 @@ bool kr_is_local_generic_call_var(Translator tr, kr_str name) {
                 }
             }
         }
-        j = j + 1;
+        j = _KR_ADD(j, 1);
     }
     return false;
 }
 
 bool kr_is_top_level_fn_name(Translator tr, kr_str name) {
     __auto_type i = 0;
-    while (i + 1 < tr.count) {
+    while (_KR_ADD(i, 1) < tr.count) {
         __auto_type k = kr_vec_int_get(tr.int_data, i * 3);
         if (_KR_EQ(k, kr_TK_KW_FN())) {
-            __auto_type i1 = i + 1;
+            __auto_type i1 = _KR_ADD(i, 1);
             if (i1 < tr.count && _KR_EQ(kr_vec_int_get(tr.int_data, i1 * 3), kr_TK_IDENTIFIER())) {
                 if (_KR_EQ(kr_vec_string_get(tr.lexemes, i1), name)) {
                     return true;
                 }
             }
         }
-        i = i + 1;
+        i = _KR_ADD(i, 1);
     }
     return false;
 }
 
+void kr_sema_set(Translator tr, kr_str key, kr_str val) {
+    kr_map_string_string_set(tr.sema, key, val);
+}
+
+kr_str kr_sema_get(Translator tr, kr_str key) {
+    return kr_map_string_string_get(tr.sema, key);
+}
+
+bool kr_sema_has(Translator tr, kr_str key) {
+    return _KR_EQ(kr_map_string_string_has(tr.sema, key), 1);
+}
+
+Translator kr_build_sema_registry(Translator tr) {
+    Translator c = tr;
+    __auto_type i = 0;
+    while (i < c.count) {
+        __auto_type k = kr_vec_int_get(c.int_data, i * 3);
+        if (_KR_EQ(k, kr_TK_KW_TRAIT())) {
+            __auto_type i1 = _KR_ADD(i, 1);
+            if (i1 < c.count && _KR_EQ(kr_vec_int_get(c.int_data, i1 * 3), kr_TK_IDENTIFIER())) {
+                __auto_type trait_name = kr_vec_string_get(c.lexemes, i1);
+                __auto_type ti = _KR_ADD(i1, 1);
+                if (ti < c.count && _KR_EQ(kr_vec_int_get(c.int_data, ti * 3), kr_TK_OP_LT())) {
+                    __auto_type gd = 1;
+                    ti = _KR_ADD(ti, 1);
+                    while (ti < c.count && gd > 0) {
+                        if (_KR_EQ(kr_vec_int_get(c.int_data, ti * 3), kr_TK_OP_LT())) {
+                            gd = _KR_ADD(gd, 1);
+                        }
+                        if (_KR_EQ(kr_vec_int_get(c.int_data, ti * 3), kr_TK_OP_GT())) {
+                            gd = gd - 1;
+                        }
+                        ti = _KR_ADD(ti, 1);
+                    }
+                }
+                if (ti < c.count && _KR_EQ(kr_vec_int_get(c.int_data, ti * 3), kr_TK_LBRACE())) {
+                    ti = _KR_ADD(ti, 1);
+                    __auto_type methods = "";
+                    while (ti < c.count && _KR_NEQ(kr_vec_int_get(c.int_data, ti * 3), kr_TK_RBRACE())) {
+                        if (_KR_EQ(kr_vec_int_get(c.int_data, ti * 3), kr_TK_KW_FN())) {
+                            ti = _KR_ADD(ti, 1);
+                            if (ti < c.count) {
+                                __auto_type mname = kr_vec_string_get(c.lexemes, ti);
+                                __auto_type mi = _KR_ADD(ti, 1);
+                                __auto_type extra_params = "";
+                                if (mi < c.count && _KR_EQ(kr_vec_int_get(c.int_data, mi * 3), kr_TK_LPAREN())) {
+                                    mi = _KR_ADD(mi, 1);
+                                    while (mi < c.count && _KR_NEQ(kr_vec_int_get(c.int_data, mi * 3), kr_TK_COMMA()) && _KR_NEQ(kr_vec_int_get(c.int_data, mi * 3), kr_TK_RPAREN())) {
+                                        mi = _KR_ADD(mi, 1);
+                                    }
+                                    if (mi < c.count && _KR_EQ(kr_vec_int_get(c.int_data, mi * 3), kr_TK_COMMA())) {
+                                        mi = _KR_ADD(mi, 1);
+                                        while (mi < c.count && _KR_NEQ(kr_vec_int_get(c.int_data, mi * 3), kr_TK_RPAREN())) {
+                                            __auto_type pnm = kr_vec_string_get(c.lexemes, mi);
+                                            mi = _KR_ADD(mi, 1);
+                                            if (mi < c.count && _KR_EQ(kr_vec_int_get(c.int_data, mi * 3), kr_TK_COLON())) {
+                                                mi = _KR_ADD(mi, 1);
+                                                if (mi < c.count) {
+                                                    __auto_type ptk = kr_vec_int_get(c.int_data, mi * 3);
+                                                    __auto_type pty = kr_type_to_c(ptk, kr_vec_string_get(c.lexemes, mi));
+                                                    if (_KR_EQ(ptk, kr_TK_IDENTIFIER()) && kr_strlen(kr_vec_string_get(c.lexemes, mi)) > 0) {
+                                                        __auto_type pch = kr_str_char_at(kr_vec_string_get(c.lexemes, mi), 0);
+                                                        if (pch >= 65 && pch <= 90) {
+                                                            if (_KR_EQ(kr_vec_string_get(c.lexemes, mi), "Self")) {
+                                                                pty = "void*";
+                                                            }
+                                                            else {
+                                                                pty = kr_vec_string_get(c.lexemes, mi);
+                                                            }
+                                                        }
+                                                    }
+                                                    if (_KR_NEQ(extra_params, "")) {
+                                                        extra_params = kr_str_concat(extra_params, ",");
+                                                    }
+                                                    extra_params = kr_str_concat(extra_params, kr_str_concat(pnm, kr_str_concat(":", pty)));
+                                                    mi = _KR_ADD(mi, 1);
+                                                }
+                                            }
+                                            if (mi < c.count && _KR_EQ(kr_vec_int_get(c.int_data, mi * 3), kr_TK_COMMA())) {
+                                                mi = _KR_ADD(mi, 1);
+                                            }
+                                        }
+                                    }
+                                    if (mi < c.count && _KR_EQ(kr_vec_int_get(c.int_data, mi * 3), kr_TK_RPAREN())) {
+                                        mi = _KR_ADD(mi, 1);
+                                    }
+                                }
+                                __auto_type ret_c = "int64_t";
+                                while (mi < c.count && _KR_NEQ(kr_vec_int_get(c.int_data, mi * 3), kr_TK_SEMICOLON()) && _KR_NEQ(kr_vec_int_get(c.int_data, mi * 3), kr_TK_LBRACE())) {
+                                    if (_KR_EQ(kr_vec_int_get(c.int_data, mi * 3), kr_TK_ARROW())) {
+                                        __auto_type mi2 = _KR_ADD(mi, 1);
+                                        if (mi2 < c.count) {
+                                            ret_c = kr_type_to_c(kr_vec_int_get(c.int_data, mi2 * 3), kr_vec_string_get(c.lexemes, mi2));
+                                        }
+                                    }
+                                    mi = _KR_ADD(mi, 1);
+                                }
+                                kr_sema_set(c, kr_str_concat("t:", kr_str_concat(trait_name, kr_str_concat(":", mname))), ret_c);
+                                if (_KR_NEQ(extra_params, "")) {
+                                    kr_sema_set(c, kr_str_concat("t:", kr_str_concat(trait_name, kr_str_concat(":", kr_str_concat(mname, ":params")))), extra_params);
+                                }
+                                if (mi < c.count && _KR_EQ(kr_vec_int_get(c.int_data, mi * 3), kr_TK_LBRACE())) {
+                                    kr_sema_set(c, kr_str_concat("t:", kr_str_concat(trait_name, kr_str_concat(":", kr_str_concat(mname, ":default_pos")))), kr_fmt_int((int64_t)(intptr_t)(mi)));
+                                    __auto_type bd = 1;
+                                    mi = _KR_ADD(mi, 1);
+                                    while (mi < c.count && bd > 0) {
+                                        if (_KR_EQ(kr_vec_int_get(c.int_data, mi * 3), kr_TK_LBRACE())) {
+                                            bd = _KR_ADD(bd, 1);
+                                        }
+                                        if (_KR_EQ(kr_vec_int_get(c.int_data, mi * 3), kr_TK_RBRACE())) {
+                                            bd = bd - 1;
+                                        }
+                                        mi = _KR_ADD(mi, 1);
+                                    }
+                                }
+                                if (_KR_NEQ(methods, "")) {
+                                    methods = kr_str_concat(methods, ",");
+                                }
+                                methods = kr_str_concat(methods, mname);
+                                ti = mi;
+                            }
+                        }
+                        else {
+                            ti = _KR_ADD(ti, 1);
+                        }
+                    }
+                    kr_sema_set(c, kr_str_concat("t:", kr_str_concat(trait_name, ":_methods")), methods);
+                }
+            }
+        }
+        if (_KR_EQ(k, kr_TK_KW_IMPL())) {
+            __auto_type i1 = _KR_ADD(i, 1);
+            if (i1 < c.count && _KR_EQ(kr_vec_int_get(c.int_data, i1 * 3), kr_TK_IDENTIFIER())) {
+                __auto_type first_name = kr_vec_string_get(c.lexemes, i1);
+                __auto_type ii = _KR_ADD(i1, 1);
+                if (ii < c.count && _KR_EQ(kr_vec_int_get(c.int_data, ii * 3), kr_TK_OP_LT())) {
+                    __auto_type gd = 1;
+                    ii = _KR_ADD(ii, 1);
+                    while (ii < c.count && gd > 0) {
+                        if (_KR_EQ(kr_vec_int_get(c.int_data, ii * 3), kr_TK_OP_LT())) {
+                            gd = _KR_ADD(gd, 1);
+                        }
+                        if (_KR_EQ(kr_vec_int_get(c.int_data, ii * 3), kr_TK_OP_GT())) {
+                            gd = gd - 1;
+                        }
+                        ii = _KR_ADD(ii, 1);
+                    }
+                }
+                __auto_type trait_name = "";
+                __auto_type type_name = first_name;
+                if (ii < c.count && _KR_EQ(kr_vec_string_get(c.lexemes, ii), "for")) {
+                    trait_name = first_name;
+                    ii = _KR_ADD(ii, 1);
+                    if (ii < c.count && _KR_EQ(kr_vec_int_get(c.int_data, ii * 3), kr_TK_IDENTIFIER())) {
+                        type_name = kr_vec_string_get(c.lexemes, ii);
+                        ii = _KR_ADD(ii, 1);
+                    }
+                }
+                if (_KR_NEQ(trait_name, "")) {
+                    kr_sema_set(c, kr_str_concat("i:", kr_str_concat(type_name, kr_str_concat(":", trait_name))), "1");
+                }
+                if (ii < c.count && _KR_EQ(kr_vec_int_get(c.int_data, ii * 3), kr_TK_OP_LT())) {
+                    __auto_type gd = 1;
+                    ii = _KR_ADD(ii, 1);
+                    while (ii < c.count && gd > 0) {
+                        if (_KR_EQ(kr_vec_int_get(c.int_data, ii * 3), kr_TK_OP_LT())) {
+                            gd = _KR_ADD(gd, 1);
+                        }
+                        if (_KR_EQ(kr_vec_int_get(c.int_data, ii * 3), kr_TK_OP_GT())) {
+                            gd = gd - 1;
+                        }
+                        ii = _KR_ADD(ii, 1);
+                    }
+                }
+                if (ii < c.count && _KR_EQ(kr_vec_int_get(c.int_data, ii * 3), kr_TK_LBRACE())) {
+                    ii = _KR_ADD(ii, 1);
+                    __auto_type bd = 1;
+                    while (ii < c.count && bd > 0) {
+                        __auto_type ik = kr_vec_int_get(c.int_data, ii * 3);
+                        if (_KR_EQ(ik, kr_TK_LBRACE())) {
+                            bd = _KR_ADD(bd, 1);
+                        }
+                        if (_KR_EQ(ik, kr_TK_RBRACE())) {
+                            bd = bd - 1;
+                            if (_KR_EQ(bd, 0)) {
+                                break;
+                            }
+                        }
+                        if (_KR_EQ(bd, 1) && _KR_EQ(ik, kr_TK_KW_FN())) {
+                            __auto_type ii2 = _KR_ADD(ii, 1);
+                            if (ii2 < c.count) {
+                                __auto_type mname = kr_vec_string_get(c.lexemes, ii2);
+                                __auto_type mangled = kr_str_concat("kr_", kr_str_concat(type_name, kr_str_concat("_", mname)));
+                                if (_KR_NEQ(trait_name, "")) {
+                                    kr_sema_set(c, kr_str_concat("i:", kr_str_concat(type_name, kr_str_concat(":", kr_str_concat(trait_name, kr_str_concat(":", mname))))), mangled);
+                                }
+                                kr_sema_set(c, kr_str_concat("i:", kr_str_concat(type_name, kr_str_concat("::", mname))), mangled);
+                                __auto_type ri = _KR_ADD(ii2, 1);
+                                __auto_type ret_c = "void";
+                                while (ri < c.count && _KR_NEQ(kr_vec_int_get(c.int_data, ri * 3), kr_TK_LBRACE())) {
+                                    if (_KR_EQ(kr_vec_int_get(c.int_data, ri * 3), kr_TK_ARROW())) {
+                                        __auto_type ri2 = _KR_ADD(ri, 1);
+                                        if (ri2 < c.count) {
+                                            ret_c = kr_type_to_c(kr_vec_int_get(c.int_data, ri2 * 3), kr_vec_string_get(c.lexemes, ri2));
+                                        }
+                                    }
+                                    ri = _KR_ADD(ri, 1);
+                                }
+                                kr_sema_set(c, kr_str_concat("i:", kr_str_concat(type_name, kr_str_concat("::", kr_str_concat(mname, ":ret")))), ret_c);
+                            }
+                        }
+                        ii = _KR_ADD(ii, 1);
+                    }
+                }
+            }
+        }
+        if (_KR_EQ(k, kr_TK_KW_STRUCT())) {
+            __auto_type i1 = _KR_ADD(i, 1);
+            if (i1 < c.count && _KR_EQ(kr_vec_int_get(c.int_data, i1 * 3), kr_TK_IDENTIFIER())) {
+                __auto_type sname = kr_vec_string_get(c.lexemes, i1);
+                __auto_type si = _KR_ADD(i1, 1);
+                if (si < c.count && _KR_EQ(kr_vec_int_get(c.int_data, si * 3), kr_TK_OP_LT())) {
+                    __auto_type gd = 1;
+                    si = _KR_ADD(si, 1);
+                    while (si < c.count && gd > 0) {
+                        if (_KR_EQ(kr_vec_int_get(c.int_data, si * 3), kr_TK_OP_LT())) {
+                            gd = _KR_ADD(gd, 1);
+                        }
+                        if (_KR_EQ(kr_vec_int_get(c.int_data, si * 3), kr_TK_OP_GT())) {
+                            gd = gd - 1;
+                        }
+                        si = _KR_ADD(si, 1);
+                    }
+                }
+                if (si < c.count && _KR_EQ(kr_vec_int_get(c.int_data, si * 3), kr_TK_LBRACE())) {
+                    si = _KR_ADD(si, 1);
+                    __auto_type fields = "";
+                    while (si < c.count && _KR_NEQ(kr_vec_int_get(c.int_data, si * 3), kr_TK_RBRACE())) {
+                        if (_KR_EQ(kr_vec_int_get(c.int_data, si * 3), kr_TK_IDENTIFIER())) {
+                            __auto_type fname = kr_vec_string_get(c.lexemes, si);
+                            __auto_type si2 = _KR_ADD(si, 1);
+                            if (si2 < c.count && _KR_EQ(kr_vec_int_get(c.int_data, si2 * 3), kr_TK_COLON())) {
+                                __auto_type si3 = _KR_ADD(si2, 1);
+                                if (si3 < c.count) {
+                                    __auto_type ftype = kr_type_to_c(kr_vec_int_get(c.int_data, si3 * 3), kr_vec_string_get(c.lexemes, si3));
+                                    kr_sema_set(c, kr_str_concat("s:", kr_str_concat(sname, kr_str_concat(":", fname))), ftype);
+                                    if (_KR_NEQ(fields, "")) {
+                                        fields = kr_str_concat(fields, ",");
+                                    }
+                                    fields = kr_str_concat(fields, fname);
+                                }
+                            }
+                        }
+                        si = _KR_ADD(si, 1);
+                    }
+                    kr_sema_set(c, kr_str_concat("s:", kr_str_concat(sname, ":_fields")), fields);
+                }
+            }
+        }
+        if (_KR_EQ(k, kr_TK_KW_FN())) {
+            __auto_type i1 = _KR_ADD(i, 1);
+            if (i1 < c.count && _KR_EQ(kr_vec_int_get(c.int_data, i1 * 3), kr_TK_IDENTIFIER())) {
+                __auto_type fname = kr_vec_string_get(c.lexemes, i1);
+                __auto_type fi = _KR_ADD(i1, 1);
+                __auto_type is_generic = 0;
+                if (fi < c.count && _KR_EQ(kr_vec_int_get(c.int_data, fi * 3), kr_TK_OP_LT())) {
+                    is_generic = 1;
+                    __auto_type gd = 1;
+                    fi = _KR_ADD(fi, 1);
+                    while (fi < c.count && gd > 0) {
+                        if (_KR_EQ(kr_vec_int_get(c.int_data, fi * 3), kr_TK_OP_LT())) {
+                            gd = _KR_ADD(gd, 1);
+                        }
+                        if (_KR_EQ(kr_vec_int_get(c.int_data, fi * 3), kr_TK_OP_GT())) {
+                            gd = gd - 1;
+                        }
+                        fi = _KR_ADD(fi, 1);
+                    }
+                }
+                if (_KR_EQ(is_generic, 1)) {
+                    kr_sema_set(c, kr_str_concat("f:", kr_str_concat(fname, ":generic")), "1");
+                }
+                if (fi < c.count && _KR_EQ(kr_vec_int_get(c.int_data, fi * 3), kr_TK_LPAREN())) {
+                    __auto_type pd = 1;
+                    fi = _KR_ADD(fi, 1);
+                    __auto_type params_str = "";
+                    while (fi < c.count && pd > 0) {
+                        if (_KR_EQ(kr_vec_int_get(c.int_data, fi * 3), kr_TK_LPAREN())) {
+                            pd = _KR_ADD(pd, 1);
+                        }
+                        if (_KR_EQ(kr_vec_int_get(c.int_data, fi * 3), kr_TK_RPAREN())) {
+                            pd = pd - 1;
+                            if (_KR_EQ(pd, 0)) {
+                                fi = _KR_ADD(fi, 1);
+                                break;
+                            }
+                        }
+                        if (_KR_EQ(pd, 1) && _KR_EQ(kr_vec_int_get(c.int_data, fi * 3), kr_TK_IDENTIFIER())) {
+                            __auto_type pname = kr_vec_string_get(c.lexemes, fi);
+                            __auto_type pi2 = _KR_ADD(fi, 1);
+                            if (pi2 < c.count && _KR_EQ(kr_vec_int_get(c.int_data, pi2 * 3), kr_TK_COLON())) {
+                                __auto_type pi3 = _KR_ADD(pi2, 1);
+                                if (pi3 < c.count) {
+                                    __auto_type ptype = kr_vec_string_get(c.lexemes, pi3);
+                                    if (_KR_NEQ(params_str, "")) {
+                                        params_str = kr_str_concat(params_str, ",");
+                                    }
+                                    params_str = kr_str_concat(params_str, kr_str_concat(pname, kr_str_concat(":", ptype)));
+                                }
+                            }
+                        }
+                        fi = _KR_ADD(fi, 1);
+                    }
+                    kr_sema_set(c, kr_str_concat("f:", kr_str_concat(fname, ":params")), params_str);
+                }
+                __auto_type ret_c = "void";
+                if (fi < c.count && _KR_EQ(kr_vec_int_get(c.int_data, fi * 3), kr_TK_ARROW())) {
+                    __auto_type fi2 = _KR_ADD(fi, 1);
+                    if (fi2 < c.count) {
+                        ret_c = kr_type_to_c(kr_vec_int_get(c.int_data, fi2 * 3), kr_vec_string_get(c.lexemes, fi2));
+                    }
+                }
+                kr_sema_set(c, kr_str_concat("f:", kr_str_concat(fname, ":ret")), ret_c);
+            }
+        }
+        i = _KR_ADD(i, 1);
+    }
+    return c;
+}
+
 TranslateResult kr_translate(void* int_data, void* lexemes, int64_t token_count, kr_str file, Target target, void* out) {
     Translator tr = kr_new_translator(token_count, file, int_data, lexemes, out);
+    tr = kr_build_sema_registry(tr);
     kr_tr_emit(tr, kr_emit_c_preamble(target));
     kr_tr_emit(tr, "\n");
     tr = kr_emit_forward_decls(tr);
@@ -3350,15 +4083,19 @@ Translator kr_emit_fn_prototype(Translator tr) {
             first = 0;
             continue;
         }
-        if (_KR_EQ(ptype_name, "dyn") && !kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_IDENTIFIER())) {
+        if (_KR_EQ(ptype_kind, kr_TK_KW_DYN()) && !kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_IDENTIFIER())) {
             c = kr_tr_advance(c);
+        }
+        __auto_type pc = kr_type_to_c(ptype_kind, ptype_name);
+        if (_KR_EQ(ptype_kind, kr_TK_LPAREN())) {
+            pc = kr_tuple_type_c(kr_count_tuple_arity(c));
+            c = kr_skip_tuple_type(c);
         }
         c = kr_skip_array_type_suffix(c, ptype_kind);
         c = kr_skip_generic_params(c);
         if (_KR_EQ(ptype_kind, kr_TK_KW_FN())) {
             c = kr_skip_fn_type_sig(c);
         }
-        __auto_type pc = kr_type_to_c(ptype_kind, ptype_name);
         if (_KR_EQ(ptype_kind, kr_TK_LBRACKET())) {
             pc = "int64_t*";
         }
@@ -3373,13 +4110,22 @@ Translator kr_emit_fn_prototype(Translator tr) {
         __auto_type rn = kr_tr_lexeme(c);
         ret_c = kr_type_to_c(rk, rn);
         c = kr_tr_advance(c);
-        if (_KR_EQ(rn, "dyn") && !kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_IDENTIFIER())) {
+        if (_KR_EQ(rk, kr_TK_KW_DYN()) && !kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_IDENTIFIER())) {
             c = kr_tr_advance(c);
+        }
+        if (_KR_EQ(rk, kr_TK_LPAREN())) {
+            ret_c = kr_tuple_type_c(kr_count_tuple_arity(c));
+            c = kr_skip_tuple_type(c);
         }
         c = kr_skip_array_type_suffix(c, rk);
         c = kr_skip_generic_params(c);
         if (_KR_EQ(rk, kr_TK_KW_FN())) {
             c = kr_skip_fn_type_sig(c);
+        }
+    }
+    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_KW_WHERE())) {
+        while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_LBRACE())) {
+            c = kr_tr_advance(c);
         }
     }
     __auto_type mangled = kr_mangle_top_level_fn_name(fname);
@@ -3426,7 +4172,7 @@ Translator kr_emit_impl_prototypes(Translator tr) {
                             __auto_type sk = kr_tr_kind(c);
                             __auto_type sn = kr_tr_lexeme(c);
                             c = kr_tr_advance(c);
-                            if (_KR_EQ(sn, "dyn") && !kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_IDENTIFIER())) {
+                            if (_KR_EQ(sk, kr_TK_KW_DYN()) && !kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_IDENTIFIER())) {
                                 c = kr_tr_advance(c);
                             }
                             c = kr_skip_generic_params(c);
@@ -3443,11 +4189,23 @@ Translator kr_emit_impl_prototypes(Translator tr) {
                     __auto_type pk = kr_tr_kind(c);
                     __auto_type pn = kr_tr_lexeme(c);
                     c = kr_tr_advance(c);
-                    if (_KR_EQ(pn, "dyn") && !kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_IDENTIFIER())) {
+                    if (_KR_EQ(pk, kr_TK_KW_DYN()) && !kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_IDENTIFIER())) {
                         c = kr_tr_advance(c);
                     }
+                    __auto_type ipc = kr_type_to_c(pk, pn);
+                    if (_KR_EQ(pk, kr_TK_LPAREN())) {
+                        ipc = kr_tuple_type_c(kr_count_tuple_arity(c));
+                        c = kr_skip_tuple_type(c);
+                    }
                     c = kr_skip_array_type_suffix(c, pk);
-                    params = kr_str_concat(params, kr_str_concat(kr_type_to_c(pk, pn), kr_str_concat(" ", kr_sanitize_c_name(pname))));
+                    c = kr_skip_generic_params(c);
+                    if (_KR_EQ(pk, kr_TK_KW_FN())) {
+                        c = kr_skip_fn_type_sig(c);
+                    }
+                    if (_KR_EQ(pk, kr_TK_LBRACKET())) {
+                        ipc = "int64_t*";
+                    }
+                    params = kr_str_concat(params, kr_str_concat(ipc, kr_str_concat(" ", kr_sanitize_c_name(pname))));
                 }
                 first = 0;
             }
@@ -3459,10 +4217,18 @@ Translator kr_emit_impl_prototypes(Translator tr) {
                 __auto_type rn = kr_tr_lexeme(c);
                 ret_c = kr_type_to_c(rk, rn);
                 c = kr_tr_advance(c);
-                if (_KR_EQ(rn, "dyn") && !kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_IDENTIFIER())) {
+                if (_KR_EQ(rk, kr_TK_KW_DYN()) && !kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_IDENTIFIER())) {
                     c = kr_tr_advance(c);
                 }
+                if (_KR_EQ(rk, kr_TK_LPAREN())) {
+                    ret_c = kr_tuple_type_c(kr_count_tuple_arity(c));
+                    c = kr_skip_tuple_type(c);
+                }
                 c = kr_skip_array_type_suffix(c, rk);
+                c = kr_skip_generic_params(c);
+                if (_KR_EQ(rk, kr_TK_KW_FN())) {
+                    c = kr_skip_fn_type_sig(c);
+                }
             }
             __auto_type mangled = kr_str_concat("kr_", kr_str_concat(type_name, kr_str_concat("_", fname)));
             kr_tr_emit_line(c, kr_str_concat(ret_c, kr_str_concat(" ", kr_str_concat(mangled, kr_str_concat("(", kr_str_concat(params, ");"))))));
@@ -3480,18 +4246,90 @@ Translator kr_emit_impl_prototypes(Translator tr) {
 
 Translator kr_emit_closure_statics(Translator tr) {
     Translator c = tr;
-    __auto_type i = 0;
-    while (i < c.count) {
+    __auto_type fi = 0;
+    while (fi < c.count) {
+        __auto_type fk = kr_vec_int_get(c.int_data, fi * 3);
+        if (_KR_EQ(fk, kr_TK_PIPE()) || _KR_EQ(fk, kr_TK_OP_BIT_OR()) || _KR_EQ(fk, kr_TK_OP_OR())) {
+            __auto_type fprev = 0;
+            if (fi > 0) {
+                fprev = kr_vec_int_get(c.int_data, (fi - 1) * 3);
+            }
+            if (_KR_EQ(fprev, kr_TK_OP_ASSIGN()) || _KR_EQ(fprev, kr_TK_COMMA()) || _KR_EQ(fprev, kr_TK_LPAREN()) || _KR_EQ(fprev, kr_TK_LBRACKET()) || _KR_EQ(fprev, kr_TK_ARROW()) || _KR_EQ(fprev, kr_TK_KW_MOVE()) || _KR_EQ(fprev, kr_TK_KW_RETURN())) {
+                __auto_type fj = _KR_ADD(fi, 1);
+                __auto_type fparams = "void";
+                if (_KR_NEQ(fk, kr_TK_OP_OR())) {
+                    __auto_type fp = _KR_ADD(fi, 1);
+                    __auto_type fpstr = "";
+                    __auto_type fpfirst = 1;
+                    __auto_type fd = 0;
+                    while (fp < c.count) {
+                        __auto_type fpk = kr_vec_int_get(c.int_data, fp * 3);
+                        if (_KR_EQ(fpk, kr_TK_LPAREN())) {
+                            fd = _KR_ADD(fd, 1);
+                        }
+                        if (_KR_EQ(fpk, kr_TK_RPAREN())) {
+                            fd = fd - 1;
+                        }
+                        if (_KR_EQ(fd, 0) && (_KR_EQ(fpk, kr_TK_PIPE()) || _KR_EQ(fpk, kr_TK_OP_BIT_OR()) || _KR_EQ(fpk, kr_TK_OP_OR()))) {
+                            fj = _KR_ADD(fp, 1);
+                            break;
+                        }
+                        if (_KR_EQ(fd, 0) && _KR_EQ(fpk, kr_TK_IDENTIFIER())) {
+                            __auto_type fpt = "int64_t";
+                            if (_KR_ADD(fp, 1) < c.count && _KR_EQ(kr_vec_int_get(c.int_data, (_KR_ADD(fp, 1)) * 3), kr_TK_COLON())) {
+                                if (_KR_ADD(fp, 2) < c.count) {
+                                    fpt = kr_type_to_c(kr_vec_int_get(c.int_data, (_KR_ADD(fp, 2)) * 3), kr_vec_string_get(c.lexemes, _KR_ADD(fp, 2)));
+                                }
+                            }
+                            if (_KR_EQ(fpfirst, 0)) {
+                                fpstr = kr_str_concat(fpstr, ", ");
+                            }
+                            fpstr = kr_str_concat(fpstr, fpt);
+                            fpfirst = 0;
+                        }
+                        fp = _KR_ADD(fp, 1);
+                    }
+                    if (_KR_NEQ(fpstr, "")) {
+                        fparams = fpstr;
+                    }
+                }
+                else {
+                    fj = _KR_ADD(fi, 1);
+                }
+                __auto_type fret = "int64_t";
+                if (fj < c.count && _KR_EQ(kr_vec_int_get(c.int_data, fj * 3), kr_TK_ARROW())) {
+                    fj = _KR_ADD(fj, 1);
+                    if (fj < c.count) {
+                        if (_KR_EQ(kr_vec_int_get(c.int_data, fj * 3), kr_TK_LPAREN())) {
+                            fret = kr_tuple_type_c(kr_count_tuple_arity_at(c, fj));
+                        }
+                        else {
+                            fret = kr_type_to_c(kr_vec_int_get(c.int_data, fj * 3), kr_vec_string_get(c.lexemes, fj));
+                        }
+                    }
+                }
+                __auto_type fparams_full = "void*";
+                if (_KR_NEQ(fparams, "void")) {
+                    fparams_full = kr_str_concat("void*, ", fparams);
+                }
+                kr_tr_emit_line(c, kr_str_concat("static ", kr_str_concat(fret, kr_str_concat(" _kr_cl_", kr_str_concat(kr_fmt_int((int64_t)(intptr_t)(fi)), kr_str_concat("(", kr_str_concat(fparams_full, ");")))))));
+            }
+        }
+        fi = _KR_ADD(fi, 1);
+    }
+    __auto_type i = c.count - 1;
+    while (i >= 0) {
         __auto_type k = kr_vec_int_get(c.int_data, i * 3);
         if (_KR_EQ(k, kr_TK_PIPE()) || _KR_EQ(k, kr_TK_OP_BIT_OR()) || _KR_EQ(k, kr_TK_OP_OR())) {
             __auto_type prev_k = 0;
             if (i > 0) {
                 prev_k = kr_vec_int_get(c.int_data, (i - 1) * 3);
             }
-            if (_KR_EQ(prev_k, kr_TK_OP_ASSIGN()) || _KR_EQ(prev_k, kr_TK_COMMA()) || _KR_EQ(prev_k, kr_TK_LPAREN()) || _KR_EQ(prev_k, kr_TK_ARROW())) {
-                Translator cl = (Translator){.pos = i, .count = c.count, .indent = 0, .errors = c.errors, .file = c.file, .int_data = c.int_data, .lexemes = c.lexemes, .out = c.out};
+            if (_KR_EQ(prev_k, kr_TK_OP_ASSIGN()) || _KR_EQ(prev_k, kr_TK_COMMA()) || _KR_EQ(prev_k, kr_TK_LPAREN()) || _KR_EQ(prev_k, kr_TK_LBRACKET()) || _KR_EQ(prev_k, kr_TK_ARROW()) || _KR_EQ(prev_k, kr_TK_KW_MOVE()) || _KR_EQ(prev_k, kr_TK_KW_RETURN())) {
+                Translator cl = (Translator){.pos = i, .count = c.count, .indent = 0, .errors = c.errors, .file = c.file, .int_data = c.int_data, .lexemes = c.lexemes, .out = c.out, .sema = c.sema};
                 __auto_type cl_name = kr_str_concat("_kr_cl_", kr_fmt_int((int64_t)(intptr_t)(i)));
                 __auto_type params_c = "";
+                __auto_type param_names = "";
                 __auto_type pfirst = 1;
                 cl = kr_tr_advance(cl);
                 if (_KR_NEQ(k, kr_TK_OP_OR())) {
@@ -3507,15 +4345,30 @@ Translator kr_emit_closure_statics(Translator tr) {
                             if (!kr_tr_at_end(cl) && _KR_EQ(kr_tr_kind(cl), kr_TK_COLON())) {
                                 cl = kr_tr_advance(cl);
                                 if (!kr_tr_at_end(cl)) {
-                                    ptype_c = kr_type_to_c(kr_tr_kind(cl), kr_tr_lexeme(cl));
+                                    __auto_type ptk = kr_tr_kind(cl);
+                                    ptype_c = kr_type_to_c(ptk, kr_tr_lexeme(cl));
                                     cl = kr_tr_advance(cl);
+                                    if (_KR_EQ(ptk, kr_TK_LPAREN())) {
+                                        ptype_c = kr_tuple_type_c(kr_count_tuple_arity(cl));
+                                        cl = kr_skip_tuple_type(cl);
+                                    }
+                                    if (_KR_EQ(ptk, kr_TK_LBRACKET())) {
+                                        ptype_c = "int64_t*";
+                                        cl = kr_skip_array_type_suffix(cl, ptk);
+                                    }
                                     cl = kr_skip_generic_params(cl);
+                                    if (_KR_EQ(ptk, kr_TK_KW_FN())) {
+                                        ptype_c = "void*";
+                                        cl = kr_skip_fn_type_sig(cl);
+                                    }
                                 }
                             }
                             if (_KR_EQ(pfirst, 0)) {
                                 params_c = kr_str_concat(params_c, ", ");
+                                param_names = kr_str_concat(param_names, ",");
                             }
                             params_c = kr_str_concat(params_c, kr_str_concat(ptype_c, kr_str_concat(" ", pname)));
+                            param_names = kr_str_concat(param_names, pname);
                             pfirst = 0;
                         }
                         else {
@@ -3530,16 +4383,348 @@ Translator kr_emit_closure_statics(Translator tr) {
                 if (!kr_tr_at_end(cl) && _KR_EQ(kr_tr_kind(cl), kr_TK_ARROW())) {
                     cl = kr_tr_advance(cl);
                     if (!kr_tr_at_end(cl)) {
-                        ret_c = kr_type_to_c(kr_tr_kind(cl), kr_tr_lexeme(cl));
+                        __auto_type rtk = kr_tr_kind(cl);
+                        ret_c = kr_type_to_c(rtk, kr_tr_lexeme(cl));
                         cl = kr_tr_advance(cl);
+                        if (_KR_EQ(rtk, kr_TK_LPAREN())) {
+                            ret_c = kr_tuple_type_c(kr_count_tuple_arity(cl));
+                            cl = kr_skip_tuple_type(cl);
+                        }
+                        if (_KR_EQ(rtk, kr_TK_LBRACKET())) {
+                            ret_c = "int64_t*";
+                            cl = kr_skip_array_type_suffix(cl, rtk);
+                        }
                         cl = kr_skip_generic_params(cl);
+                        if (_KR_EQ(rtk, kr_TK_KW_FN())) {
+                            ret_c = "void*";
+                            cl = kr_skip_fn_type_sig(cl);
+                        }
                     }
                 }
-                kr_tr_emit_line(cl, kr_str_concat("static ", kr_str_concat(ret_c, kr_str_concat(" ", kr_str_concat(cl_name, kr_str_concat("(", kr_str_concat(params_c, ") {")))))));
+                __auto_type body_start_pos = cl.pos;
+                __auto_type body_end_pos = body_start_pos;
+                if (body_start_pos < c.count && _KR_EQ(kr_vec_int_get(c.int_data, body_start_pos * 3), kr_TK_LBRACE())) {
+                    body_end_pos = _KR_ADD(body_start_pos, 1);
+                    __auto_type bdd = 1;
+                    while (body_end_pos < c.count && bdd > 0) {
+                        __auto_type bkk = kr_vec_int_get(c.int_data, body_end_pos * 3);
+                        if (_KR_EQ(bkk, kr_TK_LBRACE())) {
+                            bdd = _KR_ADD(bdd, 1);
+                        }
+                        if (_KR_EQ(bkk, kr_TK_RBRACE())) {
+                            bdd = bdd - 1;
+                        }
+                        body_end_pos = _KR_ADD(body_end_pos, 1);
+                    }
+                }
+                else {
+                    __auto_type pd3 = 0;
+                    __auto_type bd3 = 0;
+                    while (body_end_pos < c.count) {
+                        __auto_type bkk = kr_vec_int_get(c.int_data, body_end_pos * 3);
+                        if (_KR_EQ(bkk, kr_TK_LPAREN())) {
+                            pd3 = _KR_ADD(pd3, 1);
+                        }
+                        if (_KR_EQ(bkk, kr_TK_RPAREN())) {
+                            if (_KR_EQ(pd3, 0) && _KR_EQ(bd3, 0)) {
+                                break;
+                            }
+                            pd3 = pd3 - 1;
+                        }
+                        if (_KR_EQ(bkk, kr_TK_LBRACE())) {
+                            bd3 = _KR_ADD(bd3, 1);
+                        }
+                        if (_KR_EQ(bkk, kr_TK_RBRACE())) {
+                            if (_KR_EQ(pd3, 0) && _KR_EQ(bd3, 0)) {
+                                break;
+                            }
+                            bd3 = bd3 - 1;
+                        }
+                        if (_KR_EQ(pd3, 0) && _KR_EQ(bd3, 0)) {
+                            if (_KR_EQ(bkk, kr_TK_COMMA()) || _KR_EQ(bkk, kr_TK_SEMICOLON())) {
+                                break;
+                            }
+                        }
+                        body_end_pos = _KR_ADD(body_end_pos, 1);
+                    }
+                }
+                __auto_type captures = "";
+                __auto_type cap_count = 0;
+                __auto_type bi = body_start_pos;
+                __auto_type inner_depth = 0;
+                while (bi < body_end_pos) {
+                    __auto_type bkk = kr_vec_int_get(c.int_data, bi * 3);
+                    if (_KR_EQ(bkk, kr_TK_PIPE()) || _KR_EQ(bkk, kr_TK_OP_BIT_OR()) || _KR_EQ(bkk, kr_TK_OP_OR())) {
+                        __auto_type bprev = 0;
+                        if (bi > 0) {
+                            bprev = kr_vec_int_get(c.int_data, (bi - 1) * 3);
+                        }
+                        if (_KR_EQ(bprev, kr_TK_OP_ASSIGN()) || _KR_EQ(bprev, kr_TK_COMMA()) || _KR_EQ(bprev, kr_TK_LPAREN()) || _KR_EQ(bprev, kr_TK_ARROW()) || _KR_EQ(bprev, kr_TK_KW_MOVE()) || _KR_EQ(bprev, kr_TK_KW_RETURN())) {
+                            bi = _KR_ADD(bi, 1);
+                            if (_KR_NEQ(bkk, kr_TK_OP_OR())) {
+                                while (bi < body_end_pos) {
+                                    __auto_type bik = kr_vec_int_get(c.int_data, bi * 3);
+                                    if (_KR_EQ(bik, kr_TK_PIPE()) || _KR_EQ(bik, kr_TK_OP_BIT_OR()) || _KR_EQ(bik, kr_TK_OP_OR())) {
+                                        bi = _KR_ADD(bi, 1);
+                                        break;
+                                    }
+                                    bi = _KR_ADD(bi, 1);
+                                }
+                            }
+                            if (bi < body_end_pos && _KR_EQ(kr_vec_int_get(c.int_data, bi * 3), kr_TK_ARROW())) {
+                                bi = _KR_ADD(bi, 1);
+                                while (bi < body_end_pos && _KR_NEQ(kr_vec_int_get(c.int_data, bi * 3), kr_TK_LBRACE()) && _KR_NEQ(kr_vec_int_get(c.int_data, bi * 3), kr_TK_SEMICOLON()) && _KR_NEQ(kr_vec_int_get(c.int_data, bi * 3), kr_TK_COMMA())) {
+                                    bi = _KR_ADD(bi, 1);
+                                }
+                            }
+                            if (bi < body_end_pos && _KR_EQ(kr_vec_int_get(c.int_data, bi * 3), kr_TK_LBRACE())) {
+                                __auto_type ibd = 1;
+                                bi = _KR_ADD(bi, 1);
+                                while (bi < body_end_pos && ibd > 0) {
+                                    __auto_type ibk = kr_vec_int_get(c.int_data, bi * 3);
+                                    if (_KR_EQ(ibk, kr_TK_LBRACE())) {
+                                        ibd = _KR_ADD(ibd, 1);
+                                    }
+                                    if (_KR_EQ(ibk, kr_TK_RBRACE())) {
+                                        ibd = ibd - 1;
+                                    }
+                                    bi = _KR_ADD(bi, 1);
+                                }
+                            }
+                            else {
+                                __auto_type epd = 0;
+                                while (bi < body_end_pos) {
+                                    __auto_type ebk = kr_vec_int_get(c.int_data, bi * 3);
+                                    if (_KR_EQ(ebk, kr_TK_LPAREN()) || _KR_EQ(ebk, kr_TK_LBRACKET())) {
+                                        epd = _KR_ADD(epd, 1);
+                                    }
+                                    if (_KR_EQ(ebk, kr_TK_RPAREN()) || _KR_EQ(ebk, kr_TK_RBRACKET())) {
+                                        epd = epd - 1;
+                                    }
+                                    if (_KR_EQ(epd, 0) && (_KR_EQ(ebk, kr_TK_SEMICOLON()) || _KR_EQ(ebk, kr_TK_COMMA()))) {
+                                        break;
+                                    }
+                                    bi = _KR_ADD(bi, 1);
+                                }
+                            }
+                            continue;
+                        }
+                    }
+                    if (_KR_EQ(bkk, kr_TK_IDENTIFIER())) {
+                        __auto_type bname = kr_vec_string_get(c.lexemes, bi);
+                        __auto_type skip_cap = 0;
+                        __auto_type found_local_let = 0;
+                        if (_KR_ADD(bi, 1) < body_end_pos && _KR_EQ(kr_vec_int_get(c.int_data, (_KR_ADD(bi, 1)) * 3), kr_TK_LPAREN())) {
+                            skip_cap = 1;
+                            __auto_type si2 = i - 1;
+                            __auto_type sd2 = 0;
+                            __auto_type found_brace = 0;
+                            while (si2 >= 0) {
+                                __auto_type sk2 = kr_vec_int_get(c.int_data, si2 * 3);
+                                if (_KR_EQ(sk2, kr_TK_RBRACE())) {
+                                    sd2 = _KR_ADD(sd2, 1);
+                                }
+                                if (_KR_EQ(sk2, kr_TK_LBRACE())) {
+                                    if (_KR_EQ(sd2, 0)) {
+                                        found_brace = 1;
+                                        si2 = si2 - 1;
+                                        break;
+                                    }
+                                    sd2 = sd2 - 1;
+                                }
+                                if (_KR_EQ(sd2, 0) && _KR_EQ(sk2, kr_TK_KW_LET()) && _KR_ADD(si2, 1) < c.count) {
+                                    if (_KR_EQ(kr_vec_string_get(c.lexemes, _KR_ADD(si2, 1)), bname)) {
+                                        skip_cap = 0;
+                                        found_local_let = 1;
+                                    }
+                                }
+                                si2 = si2 - 1;
+                            }
+                            if (_KR_EQ(found_brace, 1) && _KR_EQ(skip_cap, 1)) {
+                                while (si2 >= 0) {
+                                    __auto_type sk3 = kr_vec_int_get(c.int_data, si2 * 3);
+                                    if (_KR_EQ(sk3, kr_TK_RBRACE()) || _KR_EQ(sk3, kr_TK_SEMICOLON())) {
+                                        break;
+                                    }
+                                    if (_KR_EQ(sk3, kr_TK_KW_FN()) && _KR_ADD(si2, 1) < c.count && _KR_EQ(kr_vec_int_get(c.int_data, (_KR_ADD(si2, 1)) * 3), kr_TK_IDENTIFIER())) {
+                                        break;
+                                    }
+                                    if (_KR_EQ(kr_vec_string_get(c.lexemes, si2), bname) && _KR_ADD(si2, 2) < c.count) {
+                                        if (_KR_EQ(kr_vec_int_get(c.int_data, (_KR_ADD(si2, 1)) * 3), kr_TK_COLON()) && _KR_EQ(kr_vec_int_get(c.int_data, (_KR_ADD(si2, 2)) * 3), kr_TK_KW_FN())) {
+                                            skip_cap = 0;
+                                        }
+                                    }
+                                    si2 = si2 - 1;
+                                }
+                            }
+                        }
+                        if (_KR_EQ(skip_cap, 0) && kr_strlen(bname) > 0) {
+                            __auto_type bch = kr_str_char_at(bname, 0);
+                            if (bch >= 65 && bch <= 90) {
+                                skip_cap = 1;
+                            }
+                        }
+                        if (_KR_EQ(bname, "self") || _KR_EQ(bname, "true") || _KR_EQ(bname, "false") || _KR_EQ(bname, "move")) {
+                            skip_cap = 1;
+                        }
+                        if (_KR_EQ(skip_cap, 0) && _KR_EQ(found_local_let, 0) && kr_sema_has(c, kr_str_concat("f:", kr_str_concat(bname, ":ret")))) {
+                            skip_cap = 1;
+                        }
+                        if (_KR_EQ(skip_cap, 0) && _KR_NEQ(param_names, "")) {
+                            __auto_type pi3 = 0;
+                            __auto_type plen2 = kr_strlen(param_names);
+                            while (pi3 < plen2) {
+                                __auto_type pstart2 = pi3;
+                                while (pi3 < plen2 && _KR_NEQ(kr_str_char_at(param_names, pi3), 44)) {
+                                    pi3 = _KR_ADD(pi3, 1);
+                                }
+                                __auto_type pn2 = kr_str_slice(param_names, pstart2, pi3);
+                                if (_KR_EQ(pn2, bname)) {
+                                    skip_cap = 1;
+                                }
+                                if (pi3 < plen2) {
+                                    pi3 = _KR_ADD(pi3, 1);
+                                }
+                            }
+                        }
+                        if (_KR_EQ(skip_cap, 0) && _KR_NEQ(captures, "")) {
+                            __auto_type ci4 = 0;
+                            __auto_type clen3 = kr_strlen(captures);
+                            while (ci4 < clen3) {
+                                __auto_type cstart3 = ci4;
+                                while (ci4 < clen3 && _KR_NEQ(kr_str_char_at(captures, ci4), 44)) {
+                                    ci4 = _KR_ADD(ci4, 1);
+                                }
+                                __auto_type cn3 = kr_str_slice(captures, cstart3, ci4);
+                                if (_KR_EQ(cn3, bname)) {
+                                    skip_cap = 1;
+                                }
+                                if (ci4 < clen3) {
+                                    ci4 = _KR_ADD(ci4, 1);
+                                }
+                            }
+                        }
+                        if (_KR_EQ(skip_cap, 0)) {
+                            __auto_type li2 = body_start_pos;
+                            while (li2 < body_end_pos) {
+                                __auto_type li2k = kr_vec_int_get(c.int_data, li2 * 3);
+                                if (_KR_EQ(li2k, kr_TK_KW_LET())) {
+                                    __auto_type li3 = _KR_ADD(li2, 1);
+                                    if (li3 < body_end_pos && _KR_EQ(kr_vec_string_get(c.lexemes, li3), bname)) {
+                                        skip_cap = 1;
+                                    }
+                                    if (li3 < body_end_pos && _KR_EQ(kr_vec_int_get(c.int_data, li3 * 3), kr_TK_KW_MUT())) {
+                                        __auto_type li4 = _KR_ADD(li3, 1);
+                                        if (li4 < body_end_pos && _KR_EQ(kr_vec_string_get(c.lexemes, li4), bname)) {
+                                            skip_cap = 1;
+                                        }
+                                    }
+                                }
+                                if (_KR_EQ(li2k, kr_TK_KW_FOR())) {
+                                    __auto_type li3 = _KR_ADD(li2, 1);
+                                    if (li3 < body_end_pos && _KR_EQ(kr_vec_string_get(c.lexemes, li3), bname)) {
+                                        skip_cap = 1;
+                                    }
+                                    if (li3 < body_end_pos && _KR_EQ(kr_vec_int_get(c.int_data, li3 * 3), kr_TK_LPAREN())) {
+                                        __auto_type li4 = _KR_ADD(li3, 1);
+                                        if (li4 < body_end_pos && _KR_EQ(kr_vec_string_get(c.lexemes, li4), bname)) {
+                                            skip_cap = 1;
+                                        }
+                                    }
+                                }
+                                li2 = _KR_ADD(li2, 1);
+                            }
+                        }
+                        if (_KR_EQ(skip_cap, 0) && _KR_EQ(bname, "_")) {
+                            skip_cap = 1;
+                        }
+                        if (_KR_EQ(skip_cap, 0)) {
+                            if (cap_count > 0) {
+                                captures = kr_str_concat(captures, ",");
+                            }
+                            captures = kr_str_concat(captures, bname);
+                            cap_count = _KR_ADD(cap_count, 1);
+                        }
+                    }
+                    bi = _KR_ADD(bi, 1);
+                }
+                if (_KR_NEQ(captures, "")) {
+                    __auto_type ci5 = 0;
+                    __auto_type clen4 = kr_strlen(captures);
+                    __auto_type cap_idx = 0;
+                    while (ci5 < clen4) {
+                        __auto_type cstart4 = ci5;
+                        while (ci5 < clen4 && _KR_NEQ(kr_str_char_at(captures, ci5), 44)) {
+                            ci5 = _KR_ADD(ci5, 1);
+                        }
+                        __auto_type cname2 = kr_str_slice(captures, cstart4, ci5);
+                        __auto_type scname2 = kr_sanitize_c_name(cname2);
+                        __auto_type env_access = kr_str_concat("((int64_t*)_env)[", kr_str_concat(kr_fmt_int((int64_t)(intptr_t)(cap_idx)), "]"));
+                        kr_tr_emit_line(cl, kr_str_concat("#define ", kr_str_concat(scname2, kr_str_concat(" ", env_access))));
+                        kr_tr_emit_line(cl, kr_str_concat("#define kr_", kr_str_concat(scname2, kr_str_concat(" ", env_access))));
+                        cap_idx = _KR_ADD(cap_idx, 1);
+                        if (ci5 < clen4) {
+                            ci5 = _KR_ADD(ci5, 1);
+                        }
+                    }
+                    kr_sema_set(c, kr_str_concat("cl:", kr_str_concat(kr_fmt_int((int64_t)(intptr_t)(i)), ":caps")), captures);
+                }
+                if (_KR_NEQ(captures, "")) {
+                    __auto_type ci8 = 0;
+                    __auto_type clen7 = kr_strlen(captures);
+                    while (ci8 < clen7) {
+                        __auto_type cstart7 = ci8;
+                        while (ci8 < clen7 && _KR_NEQ(kr_str_char_at(captures, ci8), 44)) {
+                            ci8 = _KR_ADD(ci8, 1);
+                        }
+                        __auto_type cname5 = kr_str_slice(captures, cstart7, ci8);
+                        kr_sema_set(c, kr_str_concat("localfn:", cname5), "1");
+                        if (ci8 < clen7) {
+                            ci8 = _KR_ADD(ci8, 1);
+                        }
+                    }
+                }
+                __auto_type full_params = "void* _env";
+                if (_KR_NEQ(params_c, "")) {
+                    full_params = kr_str_concat("void* _env, ", params_c);
+                }
+                kr_tr_emit_line(cl, kr_str_concat("static ", kr_str_concat(ret_c, kr_str_concat(" ", kr_str_concat(cl_name, kr_str_concat("(", kr_str_concat(full_params, ") {")))))));
                 if (!kr_tr_at_end(cl) && _KR_EQ(kr_tr_kind(cl), kr_TK_LBRACE())) {
                     cl = kr_tr_advance(cl);
                     cl = kr_tr_indent(cl);
+                    if (_KR_NEQ(ret_c, "void")) {
+                        __auto_type last_tok_before_close = body_end_pos - 2;
+                        __auto_type block_is_void = 0;
+                        if (last_tok_before_close >= cl.pos && _KR_EQ(kr_vec_int_get(c.int_data, last_tok_before_close * 3), kr_TK_SEMICOLON())) {
+                            block_is_void = 1;
+                        }
+                        if (_KR_EQ(block_is_void, 0)) {
+                            __auto_type scan_i = cl.pos;
+                            __auto_type last_stmt_pos = cl.pos;
+                            __auto_type scan_depth = 0;
+                            while (scan_i < body_end_pos - 1) {
+                                __auto_type sk = kr_vec_int_get(c.int_data, scan_i * 3);
+                                if (_KR_EQ(sk, kr_TK_LBRACE())) {
+                                    scan_depth = _KR_ADD(scan_depth, 1);
+                                }
+                                if (_KR_EQ(sk, kr_TK_RBRACE())) {
+                                    scan_depth = scan_depth - 1;
+                                }
+                                if (_KR_EQ(scan_depth, 0) && (_KR_EQ(sk, kr_TK_SEMICOLON()) || _KR_EQ(sk, kr_TK_RBRACE()))) {
+                                    if (_KR_ADD(scan_i, 1) < body_end_pos - 1) {
+                                        last_stmt_pos = _KR_ADD(scan_i, 1);
+                                    }
+                                }
+                                scan_i = _KR_ADD(scan_i, 1);
+                            }
+                            __auto_type last_k = kr_vec_int_get(c.int_data, last_stmt_pos * 3);
+                            if (_KR_NEQ(last_k, kr_TK_KW_RETURN())) {
+                                kr_sema_set(c, "implicit_ret_pos", kr_fmt_int((int64_t)(intptr_t)(last_stmt_pos)));
+                            }
+                        }
+                    }
                     cl = kr_translate_block_body(cl);
+                    kr_sema_set(c, "implicit_ret_pos", "");
                     cl = kr_tr_dedent(cl);
                 }
                 else {
@@ -3553,10 +4738,41 @@ Translator kr_emit_closure_statics(Translator tr) {
                     cl = kr_tr_dedent(cl);
                 }
                 kr_tr_emit_line(cl, "}");
+                if (_KR_NEQ(captures, "")) {
+                    __auto_type ci9 = 0;
+                    __auto_type clen8 = kr_strlen(captures);
+                    while (ci9 < clen8) {
+                        __auto_type cstart8 = ci9;
+                        while (ci9 < clen8 && _KR_NEQ(kr_str_char_at(captures, ci9), 44)) {
+                            ci9 = _KR_ADD(ci9, 1);
+                        }
+                        __auto_type cname6 = kr_str_slice(captures, cstart8, ci9);
+                        kr_sema_set(c, kr_str_concat("localfn:", cname6), "");
+                        if (ci9 < clen8) {
+                            ci9 = _KR_ADD(ci9, 1);
+                        }
+                    }
+                }
+                if (_KR_NEQ(captures, "")) {
+                    __auto_type ci6 = 0;
+                    __auto_type clen5 = kr_strlen(captures);
+                    while (ci6 < clen5) {
+                        __auto_type cstart5 = ci6;
+                        while (ci6 < clen5 && _KR_NEQ(kr_str_char_at(captures, ci6), 44)) {
+                            ci6 = _KR_ADD(ci6, 1);
+                        }
+                        __auto_type cname3 = kr_str_slice(captures, cstart5, ci6);
+                        kr_tr_emit_line(cl, kr_str_concat("#undef ", kr_sanitize_c_name(cname3)));
+                        kr_tr_emit_line(cl, kr_str_concat("#undef kr_", kr_sanitize_c_name(cname3)));
+                        if (ci6 < clen5) {
+                            ci6 = _KR_ADD(ci6, 1);
+                        }
+                    }
+                }
                 kr_tr_emit(cl, "\n");
             }
         }
-        i = i + 1;
+        i = i - 1;
     }
     return c;
 }
@@ -3571,12 +4787,484 @@ Translator kr_skip_brace_block(Translator tr) {
     while (!kr_tr_at_end(c) && depth > 0) {
         __auto_type k = kr_tr_kind(c);
         if (_KR_EQ(k, kr_TK_LBRACE())) {
-            depth = depth + 1;
+            depth = _KR_ADD(depth, 1);
         }
         if (_KR_EQ(k, kr_TK_RBRACE())) {
             depth = depth - 1;
         }
         c = kr_tr_advance(c);
+    }
+    return c;
+}
+
+Translator kr_emit_vtables(Translator tr) {
+    Translator c = tr;
+    __auto_type i = 0;
+    while (i < c.count) {
+        __auto_type k = kr_vec_int_get(c.int_data, i * 3);
+        if (_KR_EQ(k, kr_TK_KW_TRAIT())) {
+            __auto_type i1 = _KR_ADD(i, 1);
+            if (i1 < c.count && _KR_EQ(kr_vec_int_get(c.int_data, i1 * 3), kr_TK_IDENTIFIER())) {
+                __auto_type trait_name = kr_vec_string_get(c.lexemes, i1);
+                __auto_type methods_str = kr_sema_get(c, kr_str_concat("t:", kr_str_concat(trait_name, ":_methods")));
+                if (_KR_NEQ(methods_str, "")) {
+                    __auto_type vt_safe = 1;
+                    __auto_type vsi = 0;
+                    __auto_type vslen = kr_strlen(methods_str);
+                    while (vsi < vslen) {
+                        __auto_type vss = vsi;
+                        while (vsi < vslen && _KR_NEQ(kr_str_char_at(methods_str, vsi), 44)) {
+                            vsi = _KR_ADD(vsi, 1);
+                        }
+                        __auto_type vsmn = kr_str_slice(methods_str, vss, vsi);
+                        __auto_type vsret = kr_sema_get(c, kr_str_concat("t:", kr_str_concat(trait_name, kr_str_concat(":", vsmn))));
+                        if (_KR_EQ(vsret, "void*")) {
+                            vt_safe = 0;
+                        }
+                        __auto_type vsp = kr_sema_get(c, kr_str_concat("t:", kr_str_concat(trait_name, kr_str_concat(":", kr_str_concat(vsmn, ":params")))));
+                        if (_KR_NEQ(vsp, "")) {
+                            __auto_type vpi = 0;
+                            __auto_type vplen = kr_strlen(vsp);
+                            while (vpi < vplen) {
+                                while (vpi < vplen && _KR_NEQ(kr_str_char_at(vsp, vpi), 58)) {
+                                    vpi = _KR_ADD(vpi, 1);
+                                }
+                                vpi = _KR_ADD(vpi, 1);
+                                __auto_type vts = vpi;
+                                while (vpi < vplen && _KR_NEQ(kr_str_char_at(vsp, vpi), 44)) {
+                                    vpi = _KR_ADD(vpi, 1);
+                                }
+                                if (_KR_EQ(kr_str_slice(vsp, vts, vpi), "void*")) {
+                                    vt_safe = 0;
+                                }
+                                if (vpi < vplen) {
+                                    vpi = _KR_ADD(vpi, 1);
+                                }
+                            }
+                        }
+                        if (vsi < vslen) {
+                            vsi = _KR_ADD(vsi, 1);
+                        }
+                    }
+                    if (_KR_EQ(vt_safe, 0)) {
+                        i = _KR_ADD(i, 1);
+                        continue;
+                    }
+                    kr_tr_emit(c, "typedef struct { ");
+                    __auto_type mi = 0;
+                    __auto_type mlen = kr_strlen(methods_str);
+                    while (mi < mlen) {
+                        __auto_type mstart = mi;
+                        while (mi < mlen && _KR_NEQ(kr_str_char_at(methods_str, mi), 44)) {
+                            mi = _KR_ADD(mi, 1);
+                        }
+                        __auto_type mname = kr_str_slice(methods_str, mstart, mi);
+                        __auto_type mret = kr_sema_get(c, kr_str_concat("t:", kr_str_concat(trait_name, kr_str_concat(":", mname))));
+                        if (_KR_EQ(mret, "")) {
+                            mret = "int64_t";
+                        }
+                        __auto_type ep_str = kr_sema_get(c, kr_str_concat("t:", kr_str_concat(trait_name, kr_str_concat(":", kr_str_concat(mname, ":params")))));
+                        __auto_type ep_types = "";
+                        if (_KR_NEQ(ep_str, "")) {
+                            __auto_type epi = 0;
+                            __auto_type eplen = kr_strlen(ep_str);
+                            while (epi < eplen) {
+                                __auto_type eps = epi;
+                                while (epi < eplen && _KR_NEQ(kr_str_char_at(ep_str, epi), 58)) {
+                                    epi = _KR_ADD(epi, 1);
+                                }
+                                epi = _KR_ADD(epi, 1);
+                                __auto_type ets = epi;
+                                while (epi < eplen && _KR_NEQ(kr_str_char_at(ep_str, epi), 44)) {
+                                    epi = _KR_ADD(epi, 1);
+                                }
+                                ep_types = kr_str_concat(ep_types, kr_str_concat(", ", kr_str_slice(ep_str, ets, epi)));
+                                if (epi < eplen) {
+                                    epi = _KR_ADD(epi, 1);
+                                }
+                            }
+                        }
+                        kr_tr_emit(c, kr_str_concat(mret, kr_str_concat(" (*", kr_str_concat(mname, kr_str_concat(")(void*", kr_str_concat(ep_types, "); "))))));
+                        if (mi < mlen) {
+                            mi = _KR_ADD(mi, 1);
+                        }
+                    }
+                    kr_tr_emit(c, kr_str_concat("} ", kr_str_concat(trait_name, "_VT;\n")));
+                }
+            }
+        }
+        i = _KR_ADD(i, 1);
+    }
+    i = 0;
+    while (i < c.count) {
+        __auto_type k = kr_vec_int_get(c.int_data, i * 3);
+        if (_KR_EQ(k, kr_TK_KW_IMPL())) {
+            __auto_type i1 = _KR_ADD(i, 1);
+            if (i1 < c.count && _KR_EQ(kr_vec_int_get(c.int_data, i1 * 3), kr_TK_IDENTIFIER())) {
+                __auto_type first_name = kr_vec_string_get(c.lexemes, i1);
+                __auto_type ii = _KR_ADD(i1, 1);
+                if (ii < c.count && _KR_EQ(kr_vec_int_get(c.int_data, ii * 3), kr_TK_OP_LT())) {
+                    __auto_type gd = 1;
+                    ii = _KR_ADD(ii, 1);
+                    while (ii < c.count && gd > 0) {
+                        if (_KR_EQ(kr_vec_int_get(c.int_data, ii * 3), kr_TK_OP_LT())) {
+                            gd = _KR_ADD(gd, 1);
+                        }
+                        if (_KR_EQ(kr_vec_int_get(c.int_data, ii * 3), kr_TK_OP_GT())) {
+                            gd = gd - 1;
+                        }
+                        ii = _KR_ADD(ii, 1);
+                    }
+                }
+                if (ii < c.count && _KR_EQ(kr_vec_string_get(c.lexemes, ii), "for")) {
+                    __auto_type trait_name = first_name;
+                    ii = _KR_ADD(ii, 1);
+                    __auto_type type_name = "";
+                    if (ii < c.count && _KR_EQ(kr_vec_int_get(c.int_data, ii * 3), kr_TK_IDENTIFIER())) {
+                        type_name = kr_vec_string_get(c.lexemes, ii);
+                    }
+                    if (_KR_NEQ(type_name, "")) {
+                        __auto_type methods_str = kr_sema_get(c, kr_str_concat("t:", kr_str_concat(trait_name, ":_methods")));
+                        __auto_type obj_safe = 1;
+                        if (_KR_NEQ(methods_str, "")) {
+                            __auto_type osi = 0;
+                            __auto_type oslen = kr_strlen(methods_str);
+                            while (osi < oslen) {
+                                __auto_type osstart = osi;
+                                while (osi < oslen && _KR_NEQ(kr_str_char_at(methods_str, osi), 44)) {
+                                    osi = _KR_ADD(osi, 1);
+                                }
+                                __auto_type osmn = kr_str_slice(methods_str, osstart, osi);
+                                __auto_type osret = kr_sema_get(c, kr_str_concat("t:", kr_str_concat(trait_name, kr_str_concat(":", osmn))));
+                                if (_KR_EQ(osret, "void*")) {
+                                    obj_safe = 0;
+                                }
+                                __auto_type osp = kr_sema_get(c, kr_str_concat("t:", kr_str_concat(trait_name, kr_str_concat(":", kr_str_concat(osmn, ":params")))));
+                                if (_KR_NEQ(osp, "")) {
+                                    __auto_type opi = 0;
+                                    __auto_type oplen = kr_strlen(osp);
+                                    while (opi < oplen) {
+                                        while (opi < oplen && _KR_NEQ(kr_str_char_at(osp, opi), 58)) {
+                                            opi = _KR_ADD(opi, 1);
+                                        }
+                                        opi = _KR_ADD(opi, 1);
+                                        __auto_type ots = opi;
+                                        while (opi < oplen && _KR_NEQ(kr_str_char_at(osp, opi), 44)) {
+                                            opi = _KR_ADD(opi, 1);
+                                        }
+                                        __auto_type opty = kr_str_slice(osp, ots, opi);
+                                        if (_KR_EQ(opty, "void*")) {
+                                            obj_safe = 0;
+                                        }
+                                        if (opi < oplen) {
+                                            opi = _KR_ADD(opi, 1);
+                                        }
+                                    }
+                                }
+                                if (osi < oslen) {
+                                    osi = _KR_ADD(osi, 1);
+                                }
+                            }
+                        }
+                        if (_KR_NEQ(methods_str, "") && _KR_EQ(obj_safe, 1)) {
+                            __auto_type mi = 0;
+                            __auto_type mlen = kr_strlen(methods_str);
+                            while (mi < mlen) {
+                                __auto_type mstart = mi;
+                                while (mi < mlen && _KR_NEQ(kr_str_char_at(methods_str, mi), 44)) {
+                                    mi = _KR_ADD(mi, 1);
+                                }
+                                __auto_type mname = kr_str_slice(methods_str, mstart, mi);
+                                __auto_type mret = kr_sema_get(c, kr_str_concat("t:", kr_str_concat(trait_name, kr_str_concat(":", mname))));
+                                if (_KR_EQ(mret, "")) {
+                                    mret = "int64_t";
+                                }
+                                __auto_type wrap_name = kr_str_concat("_kr_", kr_str_concat(type_name, kr_str_concat("_", kr_str_concat(trait_name, kr_str_concat("_", kr_str_concat(mname, "_wrap"))))));
+                                __auto_type impl_name = kr_str_concat("kr_", kr_str_concat(type_name, kr_str_concat("_", mname)));
+                                if (mi < mlen) {
+                                    mi = _KR_ADD(mi, 1);
+                                }
+                            }
+                            mi = 0;
+                            while (mi < mlen) {
+                                __auto_type mstart2 = mi;
+                                while (mi < mlen && _KR_NEQ(kr_str_char_at(methods_str, mi), 44)) {
+                                    mi = _KR_ADD(mi, 1);
+                                }
+                                __auto_type mname2 = kr_str_slice(methods_str, mstart2, mi);
+                                __auto_type impl_key = kr_str_concat("i:", kr_str_concat(type_name, kr_str_concat(":", kr_str_concat(trait_name, kr_str_concat(":", mname2)))));
+                                if (!kr_sema_has(c, impl_key)) {
+                                    __auto_type ti2 = 0;
+                                    while (ti2 < c.count) {
+                                        if (_KR_EQ(kr_vec_int_get(c.int_data, ti2 * 3), kr_TK_KW_TRAIT()) && _KR_ADD(ti2, 1) < c.count && _KR_EQ(kr_vec_string_get(c.lexemes, _KR_ADD(ti2, 1)), trait_name)) {
+                                            __auto_type tj = _KR_ADD(ti2, 2);
+                                            while (tj < c.count && _KR_NEQ(kr_vec_int_get(c.int_data, tj * 3), kr_TK_LBRACE())) {
+                                                tj = _KR_ADD(tj, 1);
+                                            }
+                                            tj = _KR_ADD(tj, 1);
+                                            __auto_type td = 1;
+                                            while (tj < c.count && td > 0) {
+                                                __auto_type tk2 = kr_vec_int_get(c.int_data, tj * 3);
+                                                if (_KR_EQ(tk2, kr_TK_LBRACE())) {
+                                                    td = _KR_ADD(td, 1);
+                                                }
+                                                if (_KR_EQ(tk2, kr_TK_RBRACE())) {
+                                                    td = td - 1;
+                                                    if (_KR_EQ(td, 0)) {
+                                                        break;
+                                                    }
+                                                }
+                                                if (_KR_EQ(td, 1) && _KR_EQ(tk2, kr_TK_KW_FN()) && _KR_ADD(tj, 1) < c.count && _KR_EQ(kr_vec_string_get(c.lexemes, _KR_ADD(tj, 1)), mname2)) {
+                                                    __auto_type tj2 = _KR_ADD(tj, 2);
+                                                    while (tj2 < c.count && _KR_NEQ(kr_vec_int_get(c.int_data, tj2 * 3), kr_TK_SEMICOLON()) && _KR_NEQ(kr_vec_int_get(c.int_data, tj2 * 3), kr_TK_LBRACE())) {
+                                                        tj2 = _KR_ADD(tj2, 1);
+                                                    }
+                                                    if (tj2 < c.count && _KR_EQ(kr_vec_int_get(c.int_data, tj2 * 3), kr_TK_LBRACE())) {
+                                                        __auto_type mret2 = kr_sema_get(c, kr_str_concat("t:", kr_str_concat(trait_name, kr_str_concat(":", mname2))));
+                                                        if (_KR_EQ(mret2, "")) {
+                                                            mret2 = "int64_t";
+                                                        }
+                                                        __auto_type impl_name2 = kr_str_concat("kr_", kr_str_concat(type_name, kr_str_concat("_", mname2)));
+                                                        kr_tr_emit(c, kr_str_concat(mret2, kr_str_concat(" ", kr_str_concat(impl_name2, kr_str_concat("(", kr_str_concat(type_name, " self) "))))));
+                                                        Translator dcl = (Translator){.pos = tj2, .count = c.count, .indent = 0, .errors = c.errors, .file = c.file, .int_data = c.int_data, .lexemes = c.lexemes, .out = c.out, .sema = c.sema};
+                                                        dcl = kr_tr_advance(dcl);
+                                                        kr_tr_emit(dcl, "{\n");
+                                                        dcl = kr_tr_indent(dcl);
+                                                        dcl = kr_translate_block_body(dcl);
+                                                        dcl = kr_tr_dedent(dcl);
+                                                        kr_tr_emit_line(dcl, "}\n");
+                                                        kr_sema_set(c, impl_key, impl_name2);
+                                                    }
+                                                    break;
+                                                }
+                                                tj = _KR_ADD(tj, 1);
+                                            }
+                                            break;
+                                        }
+                                        ti2 = _KR_ADD(ti2, 1);
+                                    }
+                                }
+                                if (mi < mlen) {
+                                    mi = _KR_ADD(mi, 1);
+                                }
+                            }
+                            mi = 0;
+                            while (mi < mlen) {
+                                __auto_type mstart3 = mi;
+                                while (mi < mlen && _KR_NEQ(kr_str_char_at(methods_str, mi), 44)) {
+                                    mi = _KR_ADD(mi, 1);
+                                }
+                                __auto_type mname3 = kr_str_slice(methods_str, mstart3, mi);
+                                __auto_type mret3 = kr_sema_get(c, kr_str_concat("t:", kr_str_concat(trait_name, kr_str_concat(":", mname3))));
+                                if (_KR_EQ(mret3, "")) {
+                                    mret3 = "int64_t";
+                                }
+                                __auto_type wrap_name3 = kr_str_concat("_kr_", kr_str_concat(type_name, kr_str_concat("_", kr_str_concat(trait_name, kr_str_concat("_", kr_str_concat(mname3, "_wrap"))))));
+                                __auto_type impl_name3 = kr_str_concat("kr_", kr_str_concat(type_name, kr_str_concat("_", mname3)));
+                                __auto_type ep_str3 = kr_sema_get(c, kr_str_concat("t:", kr_str_concat(trait_name, kr_str_concat(":", kr_str_concat(mname3, ":params")))));
+                                __auto_type wp_decl = "";
+                                __auto_type wp_pass = "";
+                                if (_KR_NEQ(ep_str3, "")) {
+                                    __auto_type epi3 = 0;
+                                    __auto_type eplen3 = kr_strlen(ep_str3);
+                                    while (epi3 < eplen3) {
+                                        __auto_type eps3 = epi3;
+                                        while (epi3 < eplen3 && _KR_NEQ(kr_str_char_at(ep_str3, epi3), 58)) {
+                                            epi3 = _KR_ADD(epi3, 1);
+                                        }
+                                        __auto_type epname = kr_str_slice(ep_str3, eps3, epi3);
+                                        epi3 = _KR_ADD(epi3, 1);
+                                        __auto_type ets3 = epi3;
+                                        while (epi3 < eplen3 && _KR_NEQ(kr_str_char_at(ep_str3, epi3), 44)) {
+                                            epi3 = _KR_ADD(epi3, 1);
+                                        }
+                                        __auto_type eptyp = kr_str_slice(ep_str3, ets3, epi3);
+                                        if (_KR_EQ(eptyp, "void*")) {
+                                            eptyp = type_name;
+                                        }
+                                        wp_decl = kr_str_concat(wp_decl, kr_str_concat(", ", kr_str_concat(eptyp, kr_str_concat(" ", epname))));
+                                        wp_pass = kr_str_concat(wp_pass, kr_str_concat(", ", epname));
+                                        if (epi3 < eplen3) {
+                                            epi3 = _KR_ADD(epi3, 1);
+                                        }
+                                    }
+                                }
+                                kr_tr_emit(c, kr_str_concat("static ", kr_str_concat(mret3, kr_str_concat(" ", kr_str_concat(wrap_name3, kr_str_concat("(void* _self", kr_str_concat(wp_decl, ") { ")))))));
+                                if (_KR_NEQ(mret3, "void")) {
+                                    kr_tr_emit(c, "return ");
+                                }
+                                kr_tr_emit(c, kr_str_concat(impl_name3, kr_str_concat("(*(", kr_str_concat(type_name, kr_str_concat("*)_self", kr_str_concat(wp_pass, "); }\n"))))));
+                                if (mi < mlen) {
+                                    mi = _KR_ADD(mi, 1);
+                                }
+                            }
+                            kr_tr_emit(c, kr_str_concat("static ", kr_str_concat(trait_name, kr_str_concat("_VT _kr_", kr_str_concat(type_name, kr_str_concat("_", kr_str_concat(trait_name, "_vt = { ")))))));
+                            mi = 0;
+                            __auto_type vfirst = 1;
+                            while (mi < mlen) {
+                                __auto_type mstart = mi;
+                                while (mi < mlen && _KR_NEQ(kr_str_char_at(methods_str, mi), 44)) {
+                                    mi = _KR_ADD(mi, 1);
+                                }
+                                __auto_type mname = kr_str_slice(methods_str, mstart, mi);
+                                __auto_type wrap_name = kr_str_concat("_kr_", kr_str_concat(type_name, kr_str_concat("_", kr_str_concat(trait_name, kr_str_concat("_", kr_str_concat(mname, "_wrap"))))));
+                                if (_KR_EQ(vfirst, 0)) {
+                                    kr_tr_emit(c, ", ");
+                                }
+                                kr_tr_emit(c, kr_str_concat(".", kr_str_concat(mname, kr_str_concat(" = ", wrap_name))));
+                                vfirst = 0;
+                                if (mi < mlen) {
+                                    mi = _KR_ADD(mi, 1);
+                                }
+                            }
+                            kr_tr_emit(c, " };\n");
+                        }
+                    }
+                }
+            }
+        }
+        i = _KR_ADD(i, 1);
+    }
+    kr_tr_emit(c, "\n");
+    return c;
+}
+
+Translator kr_emit_nested_fn_prototypes(Translator tr) {
+    Translator c = tr;
+    __auto_type i = 0;
+    __auto_type depth = 0;
+    __auto_type in_fn_body = 0;
+    while (i < c.count) {
+        __auto_type k = kr_vec_int_get(c.int_data, i * 3);
+        if (_KR_EQ(depth, 0)) {
+            if (_KR_EQ(k, kr_TK_KW_FN())) {
+                in_fn_body = 1;
+            }
+            if (_KR_EQ(k, kr_TK_KW_TRAIT()) || _KR_EQ(k, kr_TK_KW_IMPL()) || _KR_EQ(k, kr_TK_KW_STRUCT()) || _KR_EQ(k, kr_TK_KW_UNION()) || _KR_EQ(k, kr_TK_KW_ENUM())) {
+                in_fn_body = 0;
+            }
+        }
+        if (_KR_EQ(k, kr_TK_LBRACE())) {
+            depth = _KR_ADD(depth, 1);
+        }
+        if (_KR_EQ(k, kr_TK_RBRACE())) {
+            depth = depth - 1;
+            if (_KR_EQ(depth, 0)) {
+                in_fn_body = 0;
+            }
+        }
+        if (depth > 0 && _KR_EQ(in_fn_body, 1) && _KR_EQ(k, kr_TK_KW_FN())) {
+            __auto_type ni = _KR_ADD(i, 1);
+            if (ni < c.count && _KR_EQ(kr_vec_int_get(c.int_data, ni * 3), kr_TK_IDENTIFIER())) {
+                __auto_type nfname = kr_vec_string_get(c.lexemes, ni);
+                Translator sub = (Translator){.pos = i, .count = c.count, .indent = 0, .errors = c.errors, .file = c.file, .int_data = c.int_data, .lexemes = c.lexemes, .out = c.out, .sema = c.sema};
+                sub = kr_emit_fn_prototype(sub);
+                __auto_type ri = _KR_ADD(ni, 1);
+                __auto_type ret_n = "void";
+                while (ri < c.count && _KR_NEQ(kr_vec_int_get(c.int_data, ri * 3), kr_TK_LBRACE())) {
+                    if (_KR_EQ(kr_vec_int_get(c.int_data, ri * 3), kr_TK_ARROW())) {
+                        __auto_type ri2 = _KR_ADD(ri, 1);
+                        if (ri2 < c.count) {
+                            ret_n = kr_type_to_c(kr_vec_int_get(c.int_data, ri2 * 3), kr_vec_string_get(c.lexemes, ri2));
+                        }
+                    }
+                    ri = _KR_ADD(ri, 1);
+                }
+                kr_sema_set(c, kr_str_concat("f:", kr_str_concat(nfname, ":ret")), ret_n);
+            }
+        }
+        i = _KR_ADD(i, 1);
+    }
+    return c;
+}
+
+Translator kr_emit_nested_fn_bodies(Translator tr) {
+    Translator c = tr;
+    __auto_type i = 0;
+    __auto_type depth = 0;
+    __auto_type in_fn_body = 0;
+    while (i < c.count) {
+        __auto_type k = kr_vec_int_get(c.int_data, i * 3);
+        if (_KR_EQ(depth, 0)) {
+            if (_KR_EQ(k, kr_TK_KW_FN())) {
+                in_fn_body = 1;
+            }
+            if (_KR_EQ(k, kr_TK_KW_TRAIT()) || _KR_EQ(k, kr_TK_KW_IMPL()) || _KR_EQ(k, kr_TK_KW_STRUCT()) || _KR_EQ(k, kr_TK_KW_UNION()) || _KR_EQ(k, kr_TK_KW_ENUM())) {
+                in_fn_body = 0;
+            }
+        }
+        if (_KR_EQ(k, kr_TK_LBRACE())) {
+            depth = _KR_ADD(depth, 1);
+        }
+        if (_KR_EQ(k, kr_TK_RBRACE())) {
+            depth = depth - 1;
+            if (_KR_EQ(depth, 0)) {
+                in_fn_body = 0;
+            }
+        }
+        if (depth > 0 && _KR_EQ(in_fn_body, 1) && _KR_EQ(k, kr_TK_KW_FN())) {
+            __auto_type ni = _KR_ADD(i, 1);
+            if (ni < c.count && _KR_EQ(kr_vec_int_get(c.int_data, ni * 3), kr_TK_IDENTIFIER())) {
+                Translator sub = (Translator){.pos = i, .count = c.count, .indent = 0, .errors = c.errors, .file = c.file, .int_data = c.int_data, .lexemes = c.lexemes, .out = c.out, .sema = c.sema};
+                sub = kr_translate_fn(sub);
+            }
+        }
+        i = _KR_ADD(i, 1);
+    }
+    return c;
+}
+
+Translator kr_neutralize_nested_fn_tokens(Translator tr) {
+    Translator c = tr;
+    __auto_type i = 0;
+    __auto_type depth = 0;
+    __auto_type in_fn_body = 0;
+    while (i < c.count) {
+        __auto_type k = kr_vec_int_get(c.int_data, i * 3);
+        if (_KR_EQ(depth, 0)) {
+            if (_KR_EQ(k, kr_TK_KW_FN())) {
+                in_fn_body = 1;
+            }
+            if (_KR_EQ(k, kr_TK_KW_TRAIT()) || _KR_EQ(k, kr_TK_KW_IMPL()) || _KR_EQ(k, kr_TK_KW_STRUCT()) || _KR_EQ(k, kr_TK_KW_UNION()) || _KR_EQ(k, kr_TK_KW_ENUM())) {
+                in_fn_body = 0;
+            }
+        }
+        if (_KR_EQ(k, kr_TK_LBRACE())) {
+            depth = _KR_ADD(depth, 1);
+        }
+        if (_KR_EQ(k, kr_TK_RBRACE())) {
+            depth = depth - 1;
+            if (_KR_EQ(depth, 0)) {
+                in_fn_body = 0;
+            }
+        }
+        if (depth > 0 && _KR_EQ(in_fn_body, 1) && _KR_EQ(k, kr_TK_KW_FN())) {
+            __auto_type ni = _KR_ADD(i, 1);
+            if (ni < c.count && _KR_EQ(kr_vec_int_get(c.int_data, ni * 3), kr_TK_IDENTIFIER())) {
+                __auto_type j = i;
+                __auto_type found_brace = 0;
+                while (j < c.count && _KR_EQ(found_brace, 0)) {
+                    if (_KR_EQ(kr_vec_int_get(c.int_data, j * 3), kr_TK_LBRACE())) {
+                        found_brace = 1;
+                    }
+                    kr_vec_int_set(c.int_data, j * 3, kr_TK_SEMICOLON());
+                    j = _KR_ADD(j, 1);
+                }
+                __auto_type bd = 1;
+                while (j < c.count && bd > 0) {
+                    __auto_type bk = kr_vec_int_get(c.int_data, j * 3);
+                    if (_KR_EQ(bk, kr_TK_LBRACE())) {
+                        bd = _KR_ADD(bd, 1);
+                    }
+                    if (_KR_EQ(bk, kr_TK_RBRACE())) {
+                        bd = bd - 1;
+                    }
+                    kr_vec_int_set(c.int_data, j * 3, kr_TK_SEMICOLON());
+                    j = _KR_ADD(j, 1);
+                }
+            }
+        }
+        i = _KR_ADD(i, 1);
     }
     return c;
 }
@@ -3693,7 +5381,36 @@ Translator kr_translate_program(Translator tr) {
             }
         }
     }
+    c = kr_tr_reset_pos(c);
+    while (!kr_tr_at_end(c)) {
+        __auto_type k = kr_tr_kind(c);
+        if (_KR_EQ(k, kr_TK_EOF())) {
+            break;
+        }
+        if (_KR_EQ(k, kr_TK_KW_PUB())) {
+            c = kr_tr_advance(c);
+            __auto_type k2 = kr_tr_kind(c);
+            if (_KR_EQ(k2, kr_TK_KW_STRUCT())) {
+                c = kr_translate_struct(c);
+            }
+            else {
+                c = kr_tr_advance(c);
+            }
+        }
+        else {
+            if (_KR_EQ(k, kr_TK_KW_STRUCT())) {
+                c = kr_translate_struct(c);
+            }
+            else {
+                c = kr_tr_advance(c);
+            }
+        }
+    }
+    c = kr_emit_vtables(kr_tr_reset_pos(c));
     c = kr_emit_closure_statics(kr_tr_reset_pos(c));
+    c = kr_emit_nested_fn_prototypes(kr_tr_reset_pos(c));
+    c = kr_emit_nested_fn_bodies(kr_tr_reset_pos(c));
+    c = kr_neutralize_nested_fn_tokens(kr_tr_reset_pos(c));
     c = kr_tr_reset_pos(c);
     while (!kr_tr_at_end(c)) {
         __auto_type k = kr_tr_kind(c);
@@ -3873,7 +5590,7 @@ Translator kr_translate_impl_fn(Translator tr, kr_str type_name) {
                     __auto_type sk = kr_tr_kind(c);
                     __auto_type sn = kr_tr_lexeme(c);
                     c = kr_tr_advance(c);
-                    if (_KR_EQ(sn, "dyn") && !kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_IDENTIFIER())) {
+                    if (_KR_EQ(sk, kr_TK_KW_DYN()) && !kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_IDENTIFIER())) {
                         c = kr_tr_advance(c);
                     }
                     c = kr_skip_generic_params(c);
@@ -3890,11 +5607,23 @@ Translator kr_translate_impl_fn(Translator tr, kr_str type_name) {
             __auto_type ptype_kind = kr_tr_kind(c);
             __auto_type ptype_name = kr_tr_lexeme(c);
             c = kr_tr_advance(c);
-            if (_KR_EQ(ptype_name, "dyn") && !kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_IDENTIFIER())) {
+            if (_KR_EQ(ptype_kind, kr_TK_KW_DYN()) && !kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_IDENTIFIER())) {
                 c = kr_tr_advance(c);
             }
+            __auto_type ipc2 = kr_type_to_c(ptype_kind, ptype_name);
+            if (_KR_EQ(ptype_kind, kr_TK_LPAREN())) {
+                ipc2 = kr_tuple_type_c(kr_count_tuple_arity(c));
+                c = kr_skip_tuple_type(c);
+            }
             c = kr_skip_array_type_suffix(c, ptype_kind);
-            params = kr_str_concat(params, kr_str_concat(kr_type_to_c(ptype_kind, ptype_name), kr_str_concat(" ", kr_sanitize_c_name(pname))));
+            c = kr_skip_generic_params(c);
+            if (_KR_EQ(ptype_kind, kr_TK_KW_FN())) {
+                c = kr_skip_fn_type_sig(c);
+            }
+            if (_KR_EQ(ptype_kind, kr_TK_LBRACKET())) {
+                ipc2 = "int64_t*";
+            }
+            params = kr_str_concat(params, kr_str_concat(ipc2, kr_str_concat(" ", kr_sanitize_c_name(pname))));
         }
         first = 0;
     }
@@ -3906,16 +5635,62 @@ Translator kr_translate_impl_fn(Translator tr, kr_str type_name) {
         __auto_type rn = kr_tr_lexeme(c);
         ret_c = kr_type_to_c(rk, rn);
         c = kr_tr_advance(c);
-        if (_KR_EQ(rn, "dyn") && !kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_IDENTIFIER())) {
+        if (_KR_EQ(rk, kr_TK_KW_DYN()) && !kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_IDENTIFIER())) {
             c = kr_tr_advance(c);
         }
+        if (_KR_EQ(rk, kr_TK_LPAREN())) {
+            ret_c = kr_tuple_type_c(kr_count_tuple_arity(c));
+            c = kr_skip_tuple_type(c);
+        }
         c = kr_skip_array_type_suffix(c, rk);
+        c = kr_skip_generic_params(c);
+        if (_KR_EQ(rk, kr_TK_KW_FN())) {
+            c = kr_skip_fn_type_sig(c);
+        }
     }
     __auto_type mangled = kr_str_concat("kr_", kr_str_concat(type_name, kr_str_concat("_", fname)));
     kr_tr_emit(c, kr_str_concat(ret_c, kr_str_concat(" ", kr_str_concat(mangled, kr_str_concat("(", kr_str_concat(params, ") {\n"))))));
+    __auto_type impl_body_start = c.pos;
     c = kr_tr_advance(c);
     c = kr_tr_indent(c);
+    if (_KR_NEQ(ret_c, "void")) {
+        __auto_type impl_body_end = _KR_ADD(impl_body_start, 1);
+        __auto_type ibd = 1;
+        while (impl_body_end < c.count && ibd > 0) {
+            __auto_type ibk = kr_vec_int_get(c.int_data, impl_body_end * 3);
+            if (_KR_EQ(ibk, kr_TK_LBRACE())) {
+                ibd = _KR_ADD(ibd, 1);
+            }
+            if (_KR_EQ(ibk, kr_TK_RBRACE())) {
+                ibd = ibd - 1;
+            }
+            impl_body_end = _KR_ADD(impl_body_end, 1);
+        }
+        __auto_type scan_i = c.pos;
+        __auto_type last_stmt_pos = c.pos;
+        __auto_type scan_depth = 0;
+        while (scan_i < impl_body_end - 1) {
+            __auto_type sk = kr_vec_int_get(c.int_data, scan_i * 3);
+            if (_KR_EQ(sk, kr_TK_LBRACE())) {
+                scan_depth = _KR_ADD(scan_depth, 1);
+            }
+            if (_KR_EQ(sk, kr_TK_RBRACE())) {
+                scan_depth = scan_depth - 1;
+            }
+            if (_KR_EQ(scan_depth, 0) && (_KR_EQ(sk, kr_TK_SEMICOLON()) || _KR_EQ(sk, kr_TK_RBRACE()))) {
+                if (_KR_ADD(scan_i, 1) < impl_body_end - 1) {
+                    last_stmt_pos = _KR_ADD(scan_i, 1);
+                }
+            }
+            scan_i = _KR_ADD(scan_i, 1);
+        }
+        __auto_type last_k = kr_vec_int_get(c.int_data, last_stmt_pos * 3);
+        if (_KR_NEQ(last_k, kr_TK_KW_RETURN())) {
+            kr_sema_set(c, "implicit_ret_pos", kr_fmt_int((int64_t)(intptr_t)(last_stmt_pos)));
+        }
+    }
     c = kr_translate_block_body(c);
+    kr_sema_set(c, "implicit_ret_pos", "");
     c = kr_tr_dedent(c);
     kr_tr_emit_line(c, "}");
     kr_tr_emit(c, "\n");
@@ -3933,13 +5708,20 @@ Translator kr_translate_type_alias(Translator tr) {
     __auto_type tn = kr_tr_lexeme(c);
     __auto_type c_type = kr_type_to_c(tk, tn);
     c = kr_tr_advance(c);
-    if (_KR_EQ(tn, "dyn") && !kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_IDENTIFIER())) {
+    if (_KR_EQ(tk, kr_TK_KW_DYN()) && !kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_IDENTIFIER())) {
         c = kr_tr_advance(c);
+    }
+    if (_KR_EQ(tk, kr_TK_LPAREN())) {
+        c_type = kr_tuple_type_c(kr_count_tuple_arity(c));
+        c = kr_skip_tuple_type(c);
     }
     c = kr_skip_array_type_suffix(c, tk);
     c = kr_skip_generic_params(c);
     if (_KR_EQ(tk, kr_TK_KW_FN())) {
         c = kr_skip_fn_type_sig(c);
+    }
+    if (_KR_EQ(tk, kr_TK_LBRACKET())) {
+        c_type = "int64_t*";
     }
     kr_tr_emit_line(c, kr_str_concat("typedef ", kr_str_concat(c_type, kr_str_concat(" ", kr_str_concat(alias_name, ";")))));
     if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_SEMICOLON())) {
@@ -3982,7 +5764,7 @@ Translator kr_translate_enum(Translator tr) {
         __auto_type variant = kr_tr_lexeme(c);
         c = kr_tr_advance(c);
         kr_tr_emit_line(c, kr_str_concat("#define ", kr_str_concat(name, kr_str_concat("_", kr_str_concat(variant, kr_str_concat(" ", kr_fmt_int((int64_t)(intptr_t)(idx))))))));
-        idx = idx + 1;
+        idx = _KR_ADD(idx, 1);
         if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_LPAREN())) {
             c = kr_tr_advance(c);
             while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RPAREN())) {
@@ -4001,12 +5783,54 @@ Translator kr_translate_enum(Translator tr) {
     return c;
 }
 
+Translator kr_skip_struct_tokens(Translator tr) {
+    Translator c = kr_tr_advance(tr);
+    c = kr_tr_advance(c);
+    c = kr_skip_generic_params(c);
+    c = kr_skip_brace_block(c);
+    return c;
+}
+
 Translator kr_translate_struct(Translator tr) {
     Translator c = kr_tr_advance(tr);
     __auto_type name = kr_tr_lexeme(c);
+    if (kr_sema_has(c, kr_str_concat("struct_emitted:", name))) {
+        return kr_skip_struct_tokens(tr);
+    }
     c = kr_tr_advance(c);
     c = kr_skip_generic_params(c);
     c = kr_tr_advance(c);
+    __auto_type si = c.pos;
+    __auto_type has_unemitted_dep = 0;
+    __auto_type sd = 0;
+    while (si < c.count) {
+        __auto_type sk = kr_vec_int_get(c.int_data, si * 3);
+        if (_KR_EQ(sk, kr_TK_RBRACE()) && _KR_EQ(sd, 0)) {
+            break;
+        }
+        if (_KR_EQ(sk, kr_TK_LBRACE())) {
+            sd = _KR_ADD(sd, 1);
+        }
+        if (_KR_EQ(sk, kr_TK_RBRACE())) {
+            sd = sd - 1;
+        }
+        if (_KR_EQ(sk, kr_TK_COLON()) && _KR_ADD(si, 1) < c.count) {
+            __auto_type ftk = kr_vec_int_get(c.int_data, (_KR_ADD(si, 1)) * 3);
+            if (_KR_EQ(ftk, kr_TK_IDENTIFIER())) {
+                __auto_type ftn = kr_vec_string_get(c.lexemes, _KR_ADD(si, 1));
+                if (kr_strlen(ftn) > 1 && kr_str_char_at(ftn, 0) >= 65 && kr_str_char_at(ftn, 0) <= 90 && _KR_NEQ(ftn, name)) {
+                    if (kr_sema_has(c, kr_str_concat("s:", kr_str_concat(ftn, ":_fields"))) && !kr_sema_has(c, kr_str_concat("struct_emitted:", ftn))) {
+                        has_unemitted_dep = 1;
+                    }
+                }
+            }
+        }
+        si = _KR_ADD(si, 1);
+    }
+    if (_KR_EQ(has_unemitted_dep, 1)) {
+        return kr_skip_struct_tokens(tr);
+    }
+    kr_sema_set(c, kr_str_concat("struct_emitted:", name), "1");
     kr_tr_emit_line(c, kr_str_concat("struct ", kr_str_concat(name, " {")));
     while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RBRACE())) {
         __auto_type fname = kr_tr_lexeme(c);
@@ -4038,7 +5862,12 @@ Translator kr_translate_struct(Translator tr) {
                     fc = "int64_t";
                 }
                 else {
-                    fc = "void*";
+                    if (kr_sema_has(c, kr_str_concat("s:", kr_str_concat(fn_name, ":_fields")))) {
+                        fc = fn_name;
+                    }
+                    else {
+                        fc = "void*";
+                    }
                 }
             }
         }
@@ -4105,8 +5934,13 @@ Translator kr_translate_fn(Translator tr) {
             first = 0;
             continue;
         }
-        if (_KR_EQ(pn, "dyn") && !kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_IDENTIFIER())) {
+        if (_KR_EQ(pk, kr_TK_KW_DYN()) && !kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_IDENTIFIER())) {
             c = kr_tr_advance(c);
+        }
+        __auto_type pc = kr_type_to_c(pk, pn);
+        if (_KR_EQ(pk, kr_TK_LPAREN())) {
+            pc = kr_tuple_type_c(kr_count_tuple_arity(c));
+            c = kr_skip_tuple_type(c);
         }
         c = kr_skip_array_type_suffix(c, pk);
         c = kr_skip_generic_params(c);
@@ -4114,7 +5948,6 @@ Translator kr_translate_fn(Translator tr) {
             has_fn_param = 1;
             c = kr_skip_fn_type_sig(c);
         }
-        __auto_type pc = kr_type_to_c(pk, pn);
         if (_KR_EQ(pk, kr_TK_LBRACKET())) {
             pc = "int64_t*";
         }
@@ -4129,8 +5962,12 @@ Translator kr_translate_fn(Translator tr) {
         __auto_type rn = kr_tr_lexeme(c);
         ret_c = kr_type_to_c(rk, rn);
         c = kr_tr_advance(c);
-        if (_KR_EQ(rn, "dyn") && !kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_IDENTIFIER())) {
+        if (_KR_EQ(rk, kr_TK_KW_DYN()) && !kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_IDENTIFIER())) {
             c = kr_tr_advance(c);
+        }
+        if (_KR_EQ(rk, kr_TK_LPAREN())) {
+            ret_c = kr_tuple_type_c(kr_count_tuple_arity(c));
+            c = kr_skip_tuple_type(c);
         }
         c = kr_skip_array_type_suffix(c, rk);
         c = kr_skip_generic_params(c);
@@ -4138,11 +5975,54 @@ Translator kr_translate_fn(Translator tr) {
             c = kr_skip_fn_type_sig(c);
         }
     }
+    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_KW_WHERE())) {
+        while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_LBRACE())) {
+            c = kr_tr_advance(c);
+        }
+    }
     __auto_type mangled = kr_mangle_top_level_fn_name(fname);
     kr_tr_emit(c, kr_str_concat(ret_c, kr_str_concat(" ", kr_str_concat(mangled, kr_str_concat("(", kr_str_concat(params, ") {\n"))))));
+    __auto_type fn_body_start = c.pos;
     c = kr_tr_advance(c);
     c = kr_tr_indent(c);
+    if (_KR_NEQ(ret_c, "void")) {
+        __auto_type fn_body_end = _KR_ADD(fn_body_start, 1);
+        __auto_type fbd = 1;
+        while (fn_body_end < c.count && fbd > 0) {
+            __auto_type fbk = kr_vec_int_get(c.int_data, fn_body_end * 3);
+            if (_KR_EQ(fbk, kr_TK_LBRACE())) {
+                fbd = _KR_ADD(fbd, 1);
+            }
+            if (_KR_EQ(fbk, kr_TK_RBRACE())) {
+                fbd = fbd - 1;
+            }
+            fn_body_end = _KR_ADD(fn_body_end, 1);
+        }
+        __auto_type scan_i = c.pos;
+        __auto_type last_stmt_pos = c.pos;
+        __auto_type scan_depth = 0;
+        while (scan_i < fn_body_end - 1) {
+            __auto_type sk = kr_vec_int_get(c.int_data, scan_i * 3);
+            if (_KR_EQ(sk, kr_TK_LBRACE())) {
+                scan_depth = _KR_ADD(scan_depth, 1);
+            }
+            if (_KR_EQ(sk, kr_TK_RBRACE())) {
+                scan_depth = scan_depth - 1;
+            }
+            if (_KR_EQ(scan_depth, 0) && (_KR_EQ(sk, kr_TK_SEMICOLON()) || _KR_EQ(sk, kr_TK_RBRACE()))) {
+                if (_KR_ADD(scan_i, 1) < fn_body_end - 1) {
+                    last_stmt_pos = _KR_ADD(scan_i, 1);
+                }
+            }
+            scan_i = _KR_ADD(scan_i, 1);
+        }
+        __auto_type last_k = kr_vec_int_get(c.int_data, last_stmt_pos * 3);
+        if (_KR_NEQ(last_k, kr_TK_KW_RETURN())) {
+            kr_sema_set(c, "implicit_ret_pos", kr_fmt_int((int64_t)(intptr_t)(last_stmt_pos)));
+        }
+    }
     c = kr_translate_block_body(c);
+    kr_sema_set(c, "implicit_ret_pos", "");
     c = kr_tr_dedent(c);
     kr_tr_emit_line(c, "}");
     kr_tr_emit(c, "\n");
@@ -4182,34 +6062,51 @@ Translator kr_translate_statement(Translator tr) {
     }
     if (_KR_EQ(k, kr_TK_IDENTIFIER()) && _KR_EQ(kr_tr_lexeme(tr), "static_assert")) {
         Translator c = kr_tr_advance(tr);
-        kr_tr_emit_indent(c);
-        kr_tr_emit(c, "_Static_assert(");
+        if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_OP_NOT())) {
+            c = kr_tr_advance(c);
+        }
         if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_LPAREN())) {
             c = kr_tr_advance(c);
-            __auto_type fa = 1;
-            __auto_type pd = 1;
-            while (!kr_tr_at_end(c) && pd > 0) {
+            kr_tr_emit_indent(c);
+            kr_tr_emit(c, "if (!(");
+            __auto_type pd = 0;
+            while (!kr_tr_at_end(c)) {
                 if (_KR_EQ(kr_tr_kind(c), kr_TK_LPAREN())) {
-                    pd = pd + 1;
+                    pd = _KR_ADD(pd, 1);
                 }
                 if (_KR_EQ(kr_tr_kind(c), kr_TK_RPAREN())) {
-                    pd = pd - 1;
                     if (_KR_EQ(pd, 0)) {
-                        c = kr_tr_advance(c);
                         break;
                     }
+                    pd = pd - 1;
                 }
-                if (_KR_EQ(fa, 0) && _KR_EQ(pd, 1) && _KR_EQ(kr_tr_kind(c), kr_TK_COMMA())) {
-                    kr_tr_emit(c, ", ");
-                    c = kr_tr_advance(c);
-                    fa = 1;
-                    continue;
+                if (_KR_EQ(pd, 0) && _KR_EQ(kr_tr_kind(c), kr_TK_COMMA())) {
+                    break;
                 }
                 c = kr_translate_expr(c);
-                fa = 0;
+            }
+            kr_tr_emit(c, ")) { fprintf(stderr, \"static assertion failed: %s\\n\", ");
+            if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_COMMA())) {
+                c = kr_tr_advance(c);
+            }
+            __auto_type pd2 = 0;
+            while (!kr_tr_at_end(c)) {
+                if (_KR_EQ(kr_tr_kind(c), kr_TK_LPAREN())) {
+                    pd2 = _KR_ADD(pd2, 1);
+                }
+                if (_KR_EQ(kr_tr_kind(c), kr_TK_RPAREN())) {
+                    if (_KR_EQ(pd2, 0)) {
+                        break;
+                    }
+                    pd2 = pd2 - 1;
+                }
+                c = kr_translate_expr(c);
+            }
+            kr_tr_emit(c, "); exit(1); }\n");
+            if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_RPAREN())) {
+                c = kr_tr_advance(c);
             }
         }
-        kr_tr_emit(c, ");\n");
         if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_SEMICOLON())) {
             c = kr_tr_advance(c);
         }
@@ -4231,7 +6128,13 @@ Translator kr_translate_statement(Translator tr) {
         return kr_translate_for(tr);
     }
     if (_KR_EQ(k, kr_TK_KW_MATCH())) {
-        return kr_translate_match(tr);
+        __auto_type mr_flag = kr_sema_get(tr, "implicit_ret_pos");
+        if (_KR_NEQ(mr_flag, "") && _KR_EQ(mr_flag, kr_fmt_int((int64_t)(intptr_t)(tr.pos)))) {
+            kr_sema_set(tr, "match_return", "1");
+        }
+        Translator mr_result = kr_translate_match(tr);
+        kr_sema_set(mr_result, "match_return", "");
+        return mr_result;
     }
     if (_KR_EQ(k, kr_TK_KW_BREAK())) {
         kr_tr_emit_line(tr, "break;");
@@ -4269,14 +6172,11 @@ Translator kr_translate_statement(Translator tr) {
         }
         return c;
     }
-    if (_KR_EQ(k, kr_TK_IDENTIFIER()) && _KR_EQ(kr_tr_lexeme(tr), "unsafe")) {
+    if (_KR_EQ(k, kr_TK_KW_UNSAFE())) {
         Translator c = kr_tr_advance(tr);
         if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_LBRACE())) {
             c = kr_tr_advance(c);
             c = kr_translate_block_body(c);
-            if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_RBRACE())) {
-                c = kr_tr_advance(c);
-            }
             return c;
         }
         return kr_translate_expr_stmt(tr);
@@ -4289,17 +6189,27 @@ Translator kr_translate_statement(Translator tr) {
 
 Translator kr_translate_var_decl(Translator tr) {
     Translator c = kr_tr_advance(tr);
+    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_KW_MUT())) {
+        c = kr_tr_advance(c);
+    }
     if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_LPAREN())) {
         __auto_type names = kr_vec_string_new();
         c = kr_tr_advance(c);
-        while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RPAREN())) {
+        __auto_type lhs_depth = 1;
+        while (!kr_tr_at_end(c) && lhs_depth > 0) {
+            if (_KR_EQ(kr_tr_kind(c), kr_TK_LPAREN())) {
+                lhs_depth = _KR_ADD(lhs_depth, 1);
+            }
+            if (_KR_EQ(kr_tr_kind(c), kr_TK_RPAREN())) {
+                lhs_depth = lhs_depth - 1;
+                if (_KR_EQ(lhs_depth, 0)) {
+                    break;
+                }
+            }
             if (_KR_EQ(kr_tr_kind(c), kr_TK_IDENTIFIER())) {
                 kr_vec_string_push(names, kr_sanitize_c_name(kr_tr_lexeme(c)));
             }
             c = kr_tr_advance(c);
-            if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_COMMA())) {
-                c = kr_tr_advance(c);
-            }
         }
         if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_RPAREN())) {
             c = kr_tr_advance(c);
@@ -4312,19 +6222,19 @@ Translator kr_translate_var_decl(Translator tr) {
             while (!kr_tr_at_end(c)) {
                 __auto_type kk = kr_tr_kind(c);
                 if (_KR_EQ(kk, kr_TK_LPAREN())) {
-                    pd = pd + 1;
+                    pd = _KR_ADD(pd, 1);
                 }
                 if (_KR_EQ(kk, kr_TK_RPAREN()) && pd > 0) {
                     pd = pd - 1;
                 }
                 if (_KR_EQ(kk, kr_TK_LBRACE())) {
-                    bd = bd + 1;
+                    bd = _KR_ADD(bd, 1);
                 }
                 if (_KR_EQ(kk, kr_TK_RBRACE()) && bd > 0) {
                     bd = bd - 1;
                 }
                 if (_KR_EQ(kk, kr_TK_LBRACKET())) {
-                    sd = sd + 1;
+                    sd = _KR_ADD(sd, 1);
                 }
                 if (_KR_EQ(kk, kr_TK_RBRACKET()) && sd > 0) {
                     sd = sd - 1;
@@ -4346,18 +6256,18 @@ Translator kr_translate_var_decl(Translator tr) {
                         c = kr_tr_advance(c);
                     }
                     kr_tr_emit_indent(c);
-                    if (ni < nlen) {
+                    if (ni < nlen && _KR_NEQ(kr_vec_string_get(names, ni), "_")) {
                         kr_tr_emit(c, kr_str_concat("__auto_type ", kr_str_concat(kr_vec_string_get(names, ni), " = ")));
                     }
                     else {
                         kr_tr_emit(c, "(void)(");
                     }
                     c = kr_translate_expr(c);
-                    if (ni >= nlen) {
+                    if (ni >= nlen || _KR_EQ(kr_vec_string_get(names, ni), "_")) {
                         kr_tr_emit(c, ")");
                     }
                     kr_tr_emit(c, ";\n");
-                    ni = ni + 1;
+                    ni = _KR_ADD(ni, 1);
                 }
                 if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_RPAREN())) {
                     c = kr_tr_advance(c);
@@ -4366,14 +6276,77 @@ Translator kr_translate_var_decl(Translator tr) {
             else {
                 __auto_type nlen2 = kr_vec_string_len(names);
                 __auto_type tup_type = kr_str_concat("KrTuple", kr_fmt_int((int64_t)(intptr_t)(nlen2)));
+                __auto_type tup_tmp = kr_str_concat("_kr_tup_", kr_fmt_int((int64_t)(intptr_t)(c.pos)));
                 kr_tr_emit_indent(c);
-                kr_tr_emit(c, kr_str_concat(tup_type, " _kr_tup = "));
-                c = kr_translate_expr(c);
+                kr_tr_emit(c, kr_str_concat(tup_type, kr_str_concat(" ", kr_str_concat(tup_tmp, " = "))));
+                __auto_type tup_rhs_done = 0;
+                if (_KR_EQ(kr_tr_kind(c), kr_TK_IDENTIFIER())) {
+                    __auto_type trn = kr_tr_lexeme(c);
+                    __auto_type trn1 = _KR_ADD(c.pos, 1);
+                    if (trn1 < c.count && _KR_EQ(kr_vec_int_get(c.int_data, trn1 * 3), kr_TK_LPAREN()) && kr_is_local_fn_var(c, trn)) {
+                        tup_rhs_done = 1;
+                        c = kr_tr_advance(c);
+                        c = kr_tr_advance(c);
+                        __auto_type tac = 0;
+                        if (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RPAREN())) {
+                            tac = 1;
+                        }
+                        __auto_type tsi = c.pos;
+                        __auto_type tsd = 0;
+                        while (tsi < c.count) {
+                            __auto_type tsk = kr_vec_int_get(c.int_data, tsi * 3);
+                            if (_KR_EQ(tsk, kr_TK_LPAREN()) || _KR_EQ(tsk, kr_TK_LBRACKET()) || _KR_EQ(tsk, kr_TK_LBRACE())) {
+                                tsd = _KR_ADD(tsd, 1);
+                            }
+                            if (_KR_EQ(tsk, kr_TK_RPAREN()) || _KR_EQ(tsk, kr_TK_RBRACKET()) || _KR_EQ(tsk, kr_TK_RBRACE())) {
+                                if (_KR_EQ(tsd, 0)) {
+                                    break;
+                                }
+                                tsd = tsd - 1;
+                            }
+                            if (_KR_EQ(tsd, 0) && _KR_EQ(tsk, kr_TK_COMMA())) {
+                                tac = _KR_ADD(tac, 1);
+                            }
+                            tsi = _KR_ADD(tsi, 1);
+                        }
+                        __auto_type tsig = "";
+                        __auto_type tai = 0;
+                        while (tai < tac) {
+                            if (tai > 0) {
+                                tsig = kr_str_concat(tsig, ", ");
+                            }
+                            tsig = kr_str_concat(tsig, "int64_t");
+                            tai = _KR_ADD(tai, 1);
+                        }
+                        kr_tr_emit(c, kr_str_concat("((", kr_str_concat(tup_type, kr_str_concat("(*)(", kr_str_concat(tsig, kr_str_concat("))", kr_str_concat(kr_sanitize_c_name(trn), ")(")))))));
+                        __auto_type tfa = 1;
+                        while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RPAREN())) {
+                            if (_KR_EQ(tfa, 0)) {
+                                kr_tr_emit(c, ", ");
+                                c = kr_tr_advance(c);
+                            }
+                            c = kr_translate_expr(c);
+                            tfa = 0;
+                        }
+                        if (!kr_tr_at_end(c)) {
+                            c = kr_tr_advance(c);
+                        }
+                        kr_tr_emit(c, ")");
+                    }
+                }
+                if (_KR_EQ(tup_rhs_done, 0)) {
+                    c = kr_translate_expr(c);
+                }
                 kr_tr_emit(c, ";\n");
                 __auto_type ni2 = 0;
                 while (ni2 < nlen2) {
-                    kr_tr_emit_line(c, kr_str_concat("__auto_type ", kr_str_concat(kr_vec_string_get(names, ni2), kr_str_concat(" = _kr_tup.f", kr_str_concat(kr_fmt_int((int64_t)(intptr_t)(ni2)), ";")))));
-                    ni2 = ni2 + 1;
+                    if (_KR_EQ(kr_vec_string_get(names, ni2), "_")) {
+                        kr_tr_emit_line(c, kr_str_concat("(void)(", kr_str_concat(tup_tmp, kr_str_concat(".f", kr_str_concat(kr_fmt_int((int64_t)(intptr_t)(ni2)), ");")))));
+                    }
+                    else {
+                        kr_tr_emit_line(c, kr_str_concat("__auto_type ", kr_str_concat(kr_vec_string_get(names, ni2), kr_str_concat(" = ", kr_str_concat(tup_tmp, kr_str_concat(".f", kr_str_concat(kr_fmt_int((int64_t)(intptr_t)(ni2)), ";")))))));
+                    }
+                    ni2 = _KR_ADD(ni2, 1);
                 }
             }
         }
@@ -4382,7 +6355,7 @@ Translator kr_translate_var_decl(Translator tr) {
             __auto_type nlen3 = kr_vec_string_len(names);
             while (ni3 < nlen3) {
                 kr_tr_emit_line(c, kr_str_concat("int64_t ", kr_str_concat(kr_vec_string_get(names, ni3), " = 0;")));
-                ni3 = ni3 + 1;
+                ni3 = _KR_ADD(ni3, 1);
             }
         }
         kr_vec_string_free(names);
@@ -4393,15 +6366,35 @@ Translator kr_translate_var_decl(Translator tr) {
     }
     __auto_type vname = kr_tr_lexeme(c);
     c = kr_tr_advance(c);
+    if (_KR_EQ(vname, "_")) {
+        if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_COLON())) {
+            c = kr_tr_advance(c);
+            while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_OP_ASSIGN()) && _KR_NEQ(kr_tr_kind(c), kr_TK_SEMICOLON())) {
+                c = kr_tr_advance(c);
+            }
+        }
+        if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_OP_ASSIGN())) {
+            c = kr_tr_advance(c);
+            kr_tr_emit_indent(c);
+            kr_tr_emit(c, "(void)(");
+            c = kr_translate_expr(c);
+            kr_tr_emit(c, ");\n");
+        }
+        if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_SEMICOLON())) {
+            c = kr_tr_advance(c);
+        }
+        return c;
+    }
     __auto_type c_vname = kr_sanitize_c_name(vname);
     __auto_type has_type = 0;
     __auto_type c_type = "__auto_type";
     __auto_type is_dyn_type = 0;
+    __auto_type dyn_trait_name = "";
     if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_COLON())) {
         c = kr_tr_advance(c);
         __auto_type tk = kr_tr_kind(c);
         __auto_type tn = kr_tr_lexeme(c);
-        if (_KR_EQ(tn, "dyn")) {
+        if (_KR_EQ(tk, kr_TK_KW_DYN())) {
             is_dyn_type = 1;
         }
         c_type = kr_type_to_c(tk, tn);
@@ -4409,7 +6402,22 @@ Translator kr_translate_var_decl(Translator tr) {
         if (_KR_EQ(tk, kr_TK_LBRACKET())) {
             c_type = "int64_t*";
         }
-        if (_KR_EQ(tn, "dyn") && !kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_IDENTIFIER())) {
+        if (_KR_EQ(tk, kr_TK_LPAREN())) {
+            __auto_type tup_paren_pos = c.pos - 1;
+            __auto_type flat_arity = kr_count_tuple_arity(c);
+            __auto_type total_leaves = kr_count_nested_tuple_leaves_at(c, tup_paren_pos);
+            if (_KR_NEQ(total_leaves, flat_arity) && total_leaves >= 2 && total_leaves <= 10) {
+                c_type = kr_tuple_type_c(total_leaves);
+                __auto_type struct_str = kr_collect_tuple_structure_at(c, tup_paren_pos);
+                kr_sema_set(c, kr_str_concat("ntup:", c_vname), struct_str);
+            }
+            else {
+                c_type = kr_tuple_type_c(flat_arity);
+            }
+            c = kr_skip_tuple_type(c);
+        }
+        if (_KR_EQ(tk, kr_TK_KW_DYN()) && !kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_IDENTIFIER())) {
+            dyn_trait_name = kr_tr_lexeme(c);
             c = kr_tr_advance(c);
         }
         c = kr_skip_array_type_suffix(c, tk);
@@ -4421,22 +6429,59 @@ Translator kr_translate_var_decl(Translator tr) {
     }
     if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_OP_ASSIGN())) {
         c = kr_tr_advance(c);
-        kr_tr_emit_indent(c);
-        kr_tr_emit(c, kr_str_concat(c_type, kr_str_concat(" ", kr_str_concat(c_vname, " = "))));
-        if (_KR_EQ(is_dyn_type, 1)) {
-            c = kr_translate_expr(c);
-        }
-        else {
-            if (_KR_EQ(c_type, "void*") || _KR_EQ(c_type, "uint8_t*") || _KR_EQ(c_type, "char*") || _KR_EQ(c_type, "kr_str")) {
-                kr_tr_emit(c, kr_str_concat("(", kr_str_concat(c_type, ")(intptr_t)(")));
+        if (_KR_EQ(is_dyn_type, 1) && _KR_NEQ(dyn_trait_name, "")) {
+            __auto_type concrete = "";
+            if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_IDENTIFIER())) {
+                __auto_type rhs_name = kr_tr_lexeme(c);
+                __auto_type rhs_next_pos = _KR_ADD(c.pos, 1);
+                if (rhs_next_pos < c.count && _KR_EQ(kr_vec_int_get(c.int_data, rhs_next_pos * 3), kr_TK_LBRACE())) {
+                    concrete = rhs_name;
+                }
+                else {
+                    __auto_type rhs_type = kr_lookup_local_var_type_name(c, rhs_name);
+                    if (_KR_NEQ(rhs_type, "") && kr_str_char_at(rhs_type, 0) >= 65 && kr_str_char_at(rhs_type, 0) <= 90) {
+                        concrete = rhs_type;
+                    }
+                    else {
+                        concrete = kr_lookup_dyn_concrete_type(c, rhs_name);
+                    }
+                }
+            }
+            if (_KR_NEQ(concrete, "")) {
+                kr_tr_emit_indent(c);
+                kr_tr_emit(c, kr_str_concat(concrete, kr_str_concat(" _dyn_tmp_", kr_str_concat(c_vname, " = "))));
                 c = kr_translate_expr(c);
-                kr_tr_emit(c, ")");
+                kr_tr_emit(c, ";\n");
+                kr_tr_emit_indent(c);
+                kr_tr_emit(c, kr_str_concat("KrDyn ", kr_str_concat(c_vname, kr_str_concat(" = (KrDyn){ .data = malloc(sizeof(", kr_str_concat(concrete, kr_str_concat(")), .vtable = &_kr_", kr_str_concat(concrete, kr_str_concat("_", kr_str_concat(dyn_trait_name, "_vt };\n")))))))));
+                kr_tr_emit_indent(c);
+                kr_tr_emit(c, kr_str_concat("memcpy(", kr_str_concat(c_vname, kr_str_concat(".data, &_dyn_tmp_", kr_str_concat(c_vname, kr_str_concat(", sizeof(", kr_str_concat(concrete, "));\n")))))));
             }
             else {
+                kr_tr_emit_indent(c);
+                kr_tr_emit(c, kr_str_concat(c_type, kr_str_concat(" ", kr_str_concat(c_vname, " = "))));
                 c = kr_translate_expr(c);
+                kr_tr_emit(c, ";\n");
             }
         }
-        kr_tr_emit(c, ";\n");
+        else {
+            kr_tr_emit_indent(c);
+            kr_tr_emit(c, kr_str_concat(c_type, kr_str_concat(" ", kr_str_concat(c_vname, " = "))));
+            if (_KR_EQ(is_dyn_type, 1)) {
+                c = kr_translate_expr(c);
+            }
+            else {
+                if (_KR_EQ(c_type, "void*") || _KR_EQ(c_type, "uint8_t*") || _KR_EQ(c_type, "char*") || _KR_EQ(c_type, "kr_str")) {
+                    kr_tr_emit(c, kr_str_concat("(", kr_str_concat(c_type, ")(intptr_t)(")));
+                    c = kr_translate_expr(c);
+                    kr_tr_emit(c, ")");
+                }
+                else {
+                    c = kr_translate_expr(c);
+                }
+            }
+            kr_tr_emit(c, ";\n");
+        }
     }
     else {
         if (_KR_EQ(has_type, 0)) {
@@ -4597,6 +6642,34 @@ Translator kr_translate_for(Translator tr) {
     return c;
 }
 
+bool kr_is_match_arm_arrow(Translator tr) {
+    if (kr_tr_at_end(tr)) {
+        return false;
+    }
+    if (_KR_EQ(kr_tr_kind(tr), kr_TK_ARROW())) {
+        return true;
+    }
+    if (_KR_EQ(kr_tr_kind(tr), kr_TK_OP_ASSIGN())) {
+        if (_KR_ADD(tr.pos, 1) < tr.count && _KR_EQ(kr_vec_int_get(tr.int_data, (_KR_ADD(tr.pos, 1)) * 3), kr_TK_OP_GT())) {
+            return true;
+        }
+    }
+    return false;
+}
+
+Translator kr_skip_match_arm_arrow(Translator tr) {
+    if (!kr_tr_at_end(tr) && _KR_EQ(kr_tr_kind(tr), kr_TK_ARROW())) {
+        return kr_tr_advance(tr);
+    }
+    if (!kr_tr_at_end(tr) && _KR_EQ(kr_tr_kind(tr), kr_TK_OP_ASSIGN())) {
+        Translator c = kr_tr_advance(tr);
+        if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_OP_GT())) {
+            return kr_tr_advance(c);
+        }
+    }
+    return tr;
+}
+
 Translator kr_translate_match(Translator tr) {
     return kr_translate_match_simple(tr);
 }
@@ -4626,13 +6699,11 @@ Translator kr_translate_match_simple(Translator tr) {
         if (_KR_EQ(k, kr_TK_IDENTIFIER()) && _KR_EQ(kr_tr_lexeme(c), "_")) {
             c = kr_tr_advance(c);
             if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_KW_IF())) {
-                while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_ARROW())) {
+                while (!kr_tr_at_end(c) && !kr_is_match_arm_arrow(c)) {
                     c = kr_tr_advance(c);
                 }
             }
-            if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_ARROW())) {
-                c = kr_tr_advance(c);
-            }
+            c = kr_skip_match_arm_arrow(c);
             if (arm_idx > 0) {
                 kr_tr_emit_line(c, "else if (1) {");
             }
@@ -4640,12 +6711,27 @@ Translator kr_translate_match_simple(Translator tr) {
                 kr_tr_emit_indent(c);
                 kr_tr_emit(c, "if (1) {\n");
             }
-            c = kr_tr_advance(c);
-            c = kr_tr_indent(c);
-            c = kr_translate_block_body(c);
-            c = kr_tr_dedent(c);
+            if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_LBRACE())) {
+                c = kr_tr_advance(c);
+                c = kr_tr_indent(c);
+                c = kr_translate_block_body(c);
+                c = kr_tr_dedent(c);
+            }
+            else {
+                c = kr_tr_indent(c);
+                kr_tr_emit_indent(c);
+                if (_KR_EQ(kr_sema_get(c, "match_return"), "1")) {
+                    kr_tr_emit(c, "return ");
+                }
+                c = kr_translate_expr(c);
+                kr_tr_emit(c, ";\n");
+                if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_COMMA())) {
+                    c = kr_tr_advance(c);
+                }
+                c = kr_tr_dedent(c);
+            }
             kr_tr_emit_line(c, "}");
-            arm_idx = arm_idx + 1;
+            arm_idx = _KR_ADD(arm_idx, 1);
         }
         else {
             kr_tr_emit_indent(c);
@@ -4663,7 +6749,7 @@ Translator kr_translate_match_simple(Translator tr) {
             }
             if (_KR_EQ(is_struct_head, 0)) {
                 __auto_type s = c;
-                while (!kr_tr_at_end(s) && _KR_NEQ(kr_tr_kind(s), kr_TK_ARROW())) {
+                while (!kr_tr_at_end(s) && !kr_is_match_arm_arrow(s)) {
                     __auto_type sk = kr_tr_kind(s);
                     if (_KR_EQ(sk, kr_TK_OP_DOT_DOT()) || _KR_EQ(sk, kr_TK_OP_DOT_DOT_EQ()) || _KR_EQ(sk, kr_TK_OP_BIT_OR()) || _KR_EQ(sk, kr_TK_KW_IF())) {
                         is_complex_pat = 1;
@@ -4672,14 +6758,12 @@ Translator kr_translate_match_simple(Translator tr) {
                 }
             }
             if (_KR_EQ(is_complex_pat, 1)) {
-                while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_ARROW())) {
+                while (!kr_tr_at_end(c) && !kr_is_match_arm_arrow(c)) {
                     c = kr_tr_advance(c);
                 }
                 kr_tr_emit(c, "1");
                 kr_tr_emit(c, ") {\n");
-                if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_ARROW())) {
-                    c = kr_tr_advance(c);
-                }
+                c = kr_skip_match_arm_arrow(c);
                 if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_LBRACE())) {
                     c = kr_tr_advance(c);
                 }
@@ -4687,7 +6771,70 @@ Translator kr_translate_match_simple(Translator tr) {
                 c = kr_translate_block_body(c);
                 c = kr_tr_dedent(c);
                 kr_tr_emit_line(c, "}");
-                arm_idx = arm_idx + 1;
+                arm_idx = _KR_ADD(arm_idx, 1);
+                continue;
+            }
+            if (_KR_EQ(k, kr_TK_LPAREN())) {
+                c = kr_tr_advance(c);
+                __auto_type tup_binds = "";
+                __auto_type tup_idx = 0;
+                __auto_type tup_depth = 1;
+                while (!kr_tr_at_end(c) && tup_depth > 0) {
+                    if (_KR_EQ(kr_tr_kind(c), kr_TK_LPAREN())) {
+                        tup_depth = _KR_ADD(tup_depth, 1);
+                        c = kr_tr_advance(c);
+                        continue;
+                    }
+                    if (_KR_EQ(kr_tr_kind(c), kr_TK_RPAREN())) {
+                        tup_depth = tup_depth - 1;
+                        if (_KR_EQ(tup_depth, 0)) {
+                            break;
+                        }
+                        c = kr_tr_advance(c);
+                        continue;
+                    }
+                    if (_KR_EQ(kr_tr_kind(c), kr_TK_COMMA())) {
+                        c = kr_tr_advance(c);
+                        continue;
+                    }
+                    if (_KR_EQ(kr_tr_kind(c), kr_TK_IDENTIFIER()) && _KR_NEQ(kr_tr_lexeme(c), "_")) {
+                        __auto_type bnd = kr_sanitize_c_name(kr_tr_lexeme(c));
+                        tup_binds = kr_str_concat(tup_binds, kr_str_concat(bnd, kr_str_concat(",", kr_str_concat(kr_fmt_int((int64_t)(intptr_t)(tup_idx)), ";"))));
+                        tup_idx = _KR_ADD(tup_idx, 1);
+                    }
+                    c = kr_tr_advance(c);
+                }
+                if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_RPAREN())) {
+                    c = kr_tr_advance(c);
+                }
+                kr_tr_emit(c, "1");
+                kr_tr_emit(c, ") {\n");
+                c = kr_skip_match_arm_arrow(c);
+                if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_LBRACE())) {
+                    c = kr_tr_advance(c);
+                }
+                c = kr_tr_indent(c);
+                __auto_type tb = 0;
+                __auto_type tblen = kr_strlen(tup_binds);
+                while (tb < tblen) {
+                    __auto_type ns = tb;
+                    while (ns < tblen && _KR_NEQ(kr_str_char_at(tup_binds, ns), 44)) {
+                        ns = _KR_ADD(ns, 1);
+                    }
+                    __auto_type bname = kr_str_slice(tup_binds, tb, ns);
+                    ns = _KR_ADD(ns, 1);
+                    __auto_type is = ns;
+                    while (is < tblen && _KR_NEQ(kr_str_char_at(tup_binds, is), 59)) {
+                        is = _KR_ADD(is, 1);
+                    }
+                    __auto_type bidx = kr_str_slice(tup_binds, ns, is);
+                    kr_tr_emit_line(c, kr_str_concat("int64_t ", kr_str_concat(bname, kr_str_concat(" = ", kr_str_concat(subject, kr_str_concat(".f", kr_str_concat(bidx, ";")))))));
+                    tb = _KR_ADD(is, 1);
+                }
+                c = kr_translate_block_body(c);
+                c = kr_tr_dedent(c);
+                kr_tr_emit_line(c, "}");
+                arm_idx = _KR_ADD(arm_idx, 1);
                 continue;
             }
             __auto_type bind_x = 0;
@@ -4723,7 +6870,7 @@ Translator kr_translate_match_simple(Translator tr) {
                         while (!kr_tr_at_end(c) && depth_s > 0) {
                             __auto_type ks = kr_tr_kind(c);
                             if (_KR_EQ(ks, kr_TK_LBRACE())) {
-                                depth_s = depth_s + 1;
+                                depth_s = _KR_ADD(depth_s, 1);
                             }
                             if (_KR_EQ(ks, kr_TK_RBRACE())) {
                                 depth_s = depth_s - 1;
@@ -4773,12 +6920,7 @@ Translator kr_translate_match_simple(Translator tr) {
                 c = kr_tr_advance(c);
             }
             kr_tr_emit(c, ") {\n");
-            if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_ARROW())) {
-                c = kr_tr_advance(c);
-            }
-            if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_LBRACE())) {
-                c = kr_tr_advance(c);
-            }
+            c = kr_skip_match_arm_arrow(c);
             c = kr_tr_indent(c);
             if (_KR_NEQ(bind_payload, "")) {
                 kr_tr_emit_line(c, kr_str_concat("int64_t ", kr_str_concat(bind_payload, " = 0;")));
@@ -4792,10 +6934,24 @@ Translator kr_translate_match_simple(Translator tr) {
             if (_KR_EQ(bind_z, 1)) {
                 kr_tr_emit_line(c, "int64_t z = 0;");
             }
-            c = kr_translate_block_body(c);
+            if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_LBRACE())) {
+                c = kr_tr_advance(c);
+                c = kr_translate_block_body(c);
+            }
+            else {
+                kr_tr_emit_indent(c);
+                if (_KR_EQ(kr_sema_get(c, "match_return"), "1")) {
+                    kr_tr_emit(c, "return ");
+                }
+                c = kr_translate_expr(c);
+                kr_tr_emit(c, ";\n");
+                if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_COMMA())) {
+                    c = kr_tr_advance(c);
+                }
+            }
             c = kr_tr_dedent(c);
             kr_tr_emit_line(c, "}");
-            arm_idx = arm_idx + 1;
+            arm_idx = _KR_ADD(arm_idx, 1);
         }
     }
     if (!kr_tr_at_end(c)) {
@@ -4806,38 +6962,92 @@ Translator kr_translate_match_simple(Translator tr) {
 
 Translator kr_translate_for_in(Translator tr, kr_str vname) {
     Translator c = tr;
-    kr_tr_emit_indent(c);
-    kr_tr_emit(c, "for (");
-    __auto_type range_start = kr_tr_lexeme(c);
-    c = kr_tr_advance(c);
-    __auto_type inclusive = 0;
-    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_OP_DOT_DOT_EQ())) {
-        inclusive = 1;
-        c = kr_tr_advance(c);
-    }
-    else {
-        if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_OP_DOT_DOT())) {
-            c = kr_tr_advance(c);
-            if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_OP_ASSIGN())) {
-                inclusive = 1;
-                c = kr_tr_advance(c);
-            }
+    __auto_type is_range = 0;
+    __auto_type la = _KR_ADD(c.pos, 1);
+    if (la < c.count) {
+        __auto_type lak = kr_vec_int_get(c.int_data, la * 3);
+        if (_KR_EQ(lak, kr_TK_OP_DOT_DOT()) || _KR_EQ(lak, kr_TK_OP_DOT_DOT_EQ())) {
+            is_range = 1;
         }
     }
-    __auto_type range_end = kr_tr_lexeme(c);
-    c = kr_tr_advance(c);
+    if (_KR_EQ(is_range, 1)) {
+        kr_tr_emit_indent(c);
+        kr_tr_emit(c, "for (");
+        __auto_type range_start = kr_tr_lexeme(c);
+        c = kr_tr_advance(c);
+        __auto_type inclusive = 0;
+        if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_OP_DOT_DOT_EQ())) {
+            inclusive = 1;
+            c = kr_tr_advance(c);
+        }
+        else {
+            if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_OP_DOT_DOT())) {
+                c = kr_tr_advance(c);
+                if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_OP_ASSIGN())) {
+                    inclusive = 1;
+                    c = kr_tr_advance(c);
+                }
+            }
+        }
+        __auto_type range_end = kr_tr_lexeme(c);
+        c = kr_tr_advance(c);
+        if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_RPAREN())) {
+            c = kr_tr_advance(c);
+        }
+        __auto_type cmp = " < ";
+        if (_KR_EQ(inclusive, 1)) {
+            cmp = " <= ";
+        }
+        kr_tr_emit(c, kr_str_concat("int64_t ", kr_str_concat(vname, kr_str_concat(" = ", kr_str_concat(range_start, kr_str_concat("; ", kr_str_concat(vname, kr_str_concat(cmp, kr_str_concat(range_end, kr_str_concat("; ", kr_str_concat(vname, "++")))))))))));
+        kr_tr_emit(c, ") {\n");
+        c = kr_tr_advance(c);
+        c = kr_tr_indent(c);
+        c = kr_translate_block_body(c);
+        c = kr_tr_dedent(c);
+        kr_tr_emit_line(c, "}");
+        return c;
+    }
+    __auto_type uid = kr_fmt_int((int64_t)(intptr_t)(c.pos));
+    __auto_type arr_var = kr_str_concat("_kr_arr_", uid);
+    __auto_type idx_var = kr_str_concat("_kr_i_", uid);
+    kr_tr_emit_line(c, "{");
+    c = kr_tr_indent(c);
+    kr_tr_emit_indent(c);
+    kr_tr_emit(c, kr_str_concat("__auto_type ", kr_str_concat(arr_var, " = ")));
+    if (_KR_EQ(kr_tr_kind(c), kr_TK_IDENTIFIER())) {
+        __auto_type next_pos = _KR_ADD(c.pos, 1);
+        __auto_type next_is_body = 0;
+        if (next_pos < c.count) {
+            __auto_type nk = kr_vec_int_get(c.int_data, next_pos * 3);
+            if (_KR_EQ(nk, kr_TK_LBRACE()) || _KR_EQ(nk, kr_TK_RPAREN())) {
+                next_is_body = 1;
+            }
+        }
+        if (_KR_EQ(next_is_body, 1)) {
+            kr_tr_emit(c, kr_sanitize_c_name(kr_tr_lexeme(c)));
+            c = kr_tr_advance(c);
+        }
+        else {
+            c = kr_translate_expr(c);
+        }
+    }
+    else {
+        c = kr_translate_expr(c);
+    }
+    kr_tr_emit(c, ";\n");
     if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_RPAREN())) {
         c = kr_tr_advance(c);
     }
-    __auto_type cmp = " < ";
-    if (_KR_EQ(inclusive, 1)) {
-        cmp = " <= ";
-    }
-    kr_tr_emit(c, kr_str_concat("int64_t ", kr_str_concat(vname, kr_str_concat(" = ", kr_str_concat(range_start, kr_str_concat("; ", kr_str_concat(vname, kr_str_concat(cmp, kr_str_concat(range_end, kr_str_concat("; ", kr_str_concat(vname, "++")))))))))));
-    kr_tr_emit(c, ") {\n");
+    kr_tr_emit_indent(c);
+    __auto_type for_hdr = kr_str_concat("for (int64_t ", kr_str_concat(idx_var, kr_str_concat(" = 0; ", kr_str_concat(idx_var, kr_str_concat(" < kr_vec_int_len(", kr_str_concat(arr_var, kr_str_concat("); ", kr_str_concat(idx_var, "++)"))))))));
+    kr_tr_emit(c, for_hdr);
+    kr_tr_emit(c, " {\n");
     c = kr_tr_advance(c);
     c = kr_tr_indent(c);
+    kr_tr_emit_line(c, kr_str_concat("__auto_type ", kr_str_concat(kr_sanitize_c_name(vname), kr_str_concat(" = kr_vec_int_get(", kr_str_concat(arr_var, kr_str_concat(", ", kr_str_concat(idx_var, ");")))))));
     c = kr_translate_block_body(c);
+    c = kr_tr_dedent(c);
+    kr_tr_emit_line(c, "}");
     c = kr_tr_dedent(c);
     kr_tr_emit_line(c, "}");
     return c;
@@ -4845,13 +7055,13 @@ Translator kr_translate_for_in(Translator tr, kr_str vname) {
 
 Translator kr_translate_expr_stmt(Translator tr) {
     if (_KR_EQ(kr_tr_kind(tr), kr_TK_LPAREN())) {
-        __auto_type i = tr.pos + 1;
+        __auto_type i = _KR_ADD(tr.pos, 1);
         __auto_type depth = 1;
         __auto_type has_tuple_comma = 0;
         while (i < tr.count && depth > 0) {
             __auto_type kk = kr_vec_int_get(tr.int_data, i * 3);
             if (_KR_EQ(kk, kr_TK_LPAREN())) {
-                depth = depth + 1;
+                depth = _KR_ADD(depth, 1);
             }
             if (_KR_EQ(kk, kr_TK_RPAREN())) {
                 depth = depth - 1;
@@ -4859,7 +7069,7 @@ Translator kr_translate_expr_stmt(Translator tr) {
             if (_KR_EQ(depth, 1) && _KR_EQ(kk, kr_TK_COMMA())) {
                 has_tuple_comma = 1;
             }
-            i = i + 1;
+            i = _KR_ADD(i, 1);
         }
         if (_KR_EQ(has_tuple_comma, 1) && i < tr.count) {
             __auto_type ak = kr_vec_int_get(tr.int_data, i * 3);
@@ -4903,7 +7113,7 @@ Translator kr_translate_expr_stmt(Translator tr) {
                             kr_tr_emit(ci, ")");
                         }
                         kr_tr_emit(ci, ";\n");
-                        ei = ei + 1;
+                        ei = _KR_ADD(ei, 1);
                     }
                     if (!kr_tr_at_end(ci) && _KR_EQ(kr_tr_kind(ci), kr_TK_RPAREN())) {
                         ci = kr_tr_advance(ci);
@@ -4924,6 +7134,10 @@ Translator kr_translate_expr_stmt(Translator tr) {
         }
     }
     kr_tr_emit_indent(tr);
+    __auto_type implicit_ret = kr_sema_get(tr, "implicit_ret_pos");
+    if (_KR_NEQ(implicit_ret, "") && _KR_EQ(implicit_ret, kr_fmt_int((int64_t)(intptr_t)(tr.pos)))) {
+        kr_tr_emit(tr, "return ");
+    }
     Translator c = kr_translate_expr(tr);
     __auto_type k = kr_tr_kind(c);
     if (_KR_EQ(k, kr_TK_OP_ASSIGN()) || _KR_EQ(k, kr_TK_OP_PLUS_ASSIGN()) || _KR_EQ(k, kr_TK_OP_MINUS_ASSIGN()) || _KR_EQ(k, kr_TK_OP_STAR_ASSIGN()) || _KR_EQ(k, kr_TK_OP_SLASH_ASSIGN()) || _KR_EQ(k, kr_TK_OP_PERCENT_ASSIGN())) {
@@ -4999,7 +7213,7 @@ int64_t kr_scan_eq_ahead(Translator tr) {
     while (i < tr.count) {
         __auto_type k = kr_vec_int_get(tr.int_data, i * 3);
         if (_KR_EQ(k, kr_TK_LPAREN())) {
-            depth = depth + 1;
+            depth = _KR_ADD(depth, 1);
         }
         if (_KR_EQ(k, kr_TK_RPAREN())) {
             depth = depth - 1;
@@ -5016,7 +7230,7 @@ int64_t kr_scan_eq_ahead(Translator tr) {
         if (_KR_EQ(depth, 0) && (_KR_EQ(k, kr_TK_SEMICOLON()) || _KR_EQ(k, kr_TK_LBRACE()) || _KR_EQ(k, kr_TK_RBRACE()) || _KR_EQ(k, kr_TK_COMMA()) || _KR_EQ(k, kr_TK_COLON()) || _KR_EQ(k, kr_TK_OP_AND()) || _KR_EQ(k, kr_TK_OP_OR()) || _KR_EQ(k, kr_TK_OP_BIT_AND()) || _KR_EQ(k, kr_TK_OP_BIT_OR()) || _KR_EQ(k, kr_TK_OP_BIT_XOR()) || _KR_EQ(k, kr_TK_OP_LSHIFT()) || _KR_EQ(k, kr_TK_OP_RSHIFT()))) {
             return 0;
         }
-        i = i + 1;
+        i = _KR_ADD(i, 1);
     }
     return 0;
 }
@@ -5073,20 +7287,56 @@ Translator kr_translate_shift(Translator tr) {
     return c;
 }
 
+int64_t kr_count_plus_before_minus(Translator tr) {
+    __auto_type plus_count = 0;
+    __auto_type si = tr.pos;
+    __auto_type sd = 0;
+    while (si < tr.count) {
+        __auto_type sk = kr_vec_int_get(tr.int_data, si * 3);
+        if (_KR_EQ(sk, kr_TK_LPAREN()) || _KR_EQ(sk, kr_TK_LBRACKET()) || _KR_EQ(sk, kr_TK_LBRACE())) {
+            sd = _KR_ADD(sd, 1);
+        }
+        if (_KR_EQ(sk, kr_TK_RPAREN()) || _KR_EQ(sk, kr_TK_RBRACKET()) || _KR_EQ(sk, kr_TK_RBRACE())) {
+            if (_KR_EQ(sd, 0)) {
+                break;
+            }
+            sd = sd - 1;
+        }
+        if (_KR_EQ(sd, 0) && _KR_EQ(sk, kr_TK_OP_PLUS())) {
+            plus_count = _KR_ADD(plus_count, 1);
+        }
+        if (_KR_EQ(sd, 0) && _KR_EQ(sk, kr_TK_OP_MINUS())) {
+            break;
+        }
+        if (_KR_EQ(sd, 0) && (_KR_EQ(sk, kr_TK_SEMICOLON()) || _KR_EQ(sk, kr_TK_COMMA()) || _KR_EQ(sk, kr_TK_COLON()) || _KR_EQ(sk, kr_TK_OP_AND()) || _KR_EQ(sk, kr_TK_OP_OR()) || _KR_EQ(sk, kr_TK_OP_EQ()) || _KR_EQ(sk, kr_TK_OP_NEQ()) || _KR_EQ(sk, kr_TK_OP_LT()) || _KR_EQ(sk, kr_TK_OP_LTE()) || _KR_EQ(sk, kr_TK_OP_GT()) || _KR_EQ(sk, kr_TK_OP_GTE()) || _KR_EQ(sk, kr_TK_OP_BIT_AND()) || _KR_EQ(sk, kr_TK_OP_BIT_OR()) || _KR_EQ(sk, kr_TK_OP_BIT_XOR()) || _KR_EQ(sk, kr_TK_OP_LSHIFT()) || _KR_EQ(sk, kr_TK_OP_RSHIFT()) || _KR_EQ(sk, kr_TK_OP_ASSIGN()) || _KR_EQ(sk, kr_TK_ARROW()) || _KR_EQ(sk, kr_TK_QUESTION()))) {
+            break;
+        }
+        si = _KR_ADD(si, 1);
+    }
+    return plus_count;
+}
+
 Translator kr_translate_addition(Translator tr) {
+    __auto_type plus_count = kr_count_plus_before_minus(tr);
+    __auto_type pi2 = 0;
+    while (pi2 < plus_count) {
+        kr_tr_emit(tr, "_KR_ADD(");
+        pi2 = _KR_ADD(pi2, 1);
+    }
     Translator c = kr_translate_multiplication(tr);
     while (!kr_tr_at_end(c)) {
         __auto_type k = kr_tr_kind(c);
         if (_KR_EQ(k, kr_TK_OP_PLUS())) {
-            kr_tr_emit(c, " + ");
+            kr_tr_emit(c, ", ");
             c = kr_tr_advance(c);
             c = kr_translate_multiplication(c);
+            kr_tr_emit(c, ")");
         }
         else {
             if (_KR_EQ(k, kr_TK_OP_MINUS())) {
                 kr_tr_emit(c, " - ");
                 c = kr_tr_advance(c);
-                c = kr_translate_multiplication(c);
+                c = kr_translate_addition(c);
             }
             else {
                 break;
@@ -5197,6 +7447,10 @@ Translator kr_translate_postfix(Translator tr) {
                     kr_tr_emit(c, "[");
                     c = kr_tr_advance(c);
                     c = kr_translate_expr(c);
+                    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_COLON())) {
+                        c = kr_tr_advance(c);
+                        c = kr_translate_expr(c);
+                    }
                     c = kr_tr_advance(c);
                     kr_tr_emit(c, "]");
                 }
@@ -5220,7 +7474,8 @@ Translator kr_translate_primary(Translator tr) {
         return kr_tr_advance(tr);
     }
     if (_KR_EQ(k, kr_TK_STRING_LIT())) {
-        kr_tr_emit(tr, kr_str_concat("\"", kr_str_concat(kr_tr_lexeme(tr), "\"")));
+        __auto_type slit = kr_str_replace(kr_tr_lexeme(tr), "\\\!", "!");
+        kr_tr_emit(tr, kr_str_concat("\"", kr_str_concat(slit, "\"")));
         return kr_tr_advance(tr);
     }
     if (_KR_EQ(k, kr_TK_KW_TRUE())) {
@@ -5235,14 +7490,64 @@ Translator kr_translate_primary(Translator tr) {
         kr_tr_emit(tr, "NULL");
         return kr_tr_advance(tr);
     }
+    if (_KR_EQ(k, kr_TK_KW_IF())) {
+        Translator c = kr_tr_advance(tr);
+        kr_tr_emit(c, "(");
+        while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_LBRACE())) {
+            c = kr_translate_expr(c);
+        }
+        kr_tr_emit(c, ") ? (");
+        if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_LBRACE())) {
+            c = kr_tr_advance(c);
+        }
+        while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RBRACE())) {
+            if (_KR_EQ(kr_tr_kind(c), kr_TK_SEMICOLON())) {
+                c = kr_tr_advance(c);
+                continue;
+            }
+            c = kr_translate_expr(c);
+        }
+        if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_RBRACE())) {
+            c = kr_tr_advance(c);
+        }
+        kr_tr_emit(c, ") : (");
+        if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_KW_ELSE())) {
+            c = kr_tr_advance(c);
+            if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_LBRACE())) {
+                c = kr_tr_advance(c);
+            }
+            while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RBRACE())) {
+                if (_KR_EQ(kr_tr_kind(c), kr_TK_SEMICOLON())) {
+                    c = kr_tr_advance(c);
+                    continue;
+                }
+                c = kr_translate_expr(c);
+            }
+            if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_RBRACE())) {
+                c = kr_tr_advance(c);
+            }
+        }
+        else {
+            kr_tr_emit(c, "0");
+        }
+        kr_tr_emit(c, ")");
+        return c;
+    }
     if (_KR_EQ(k, kr_TK_LPAREN())) {
-        __auto_type i = tr.pos + 1;
+        __auto_type maybe_unit = _KR_ADD(tr.pos, 1);
+        if (maybe_unit < tr.count && _KR_EQ(kr_vec_int_get(tr.int_data, maybe_unit * 3), kr_TK_RPAREN())) {
+            kr_tr_emit(tr, "(KrTuple1){.f0=0}");
+            Translator cu = kr_tr_advance(tr);
+            cu = kr_tr_advance(cu);
+            return cu;
+        }
+        __auto_type i = _KR_ADD(tr.pos, 1);
         __auto_type depth = 1;
         __auto_type has_tuple_comma = 0;
         while (i < tr.count && depth > 0) {
             __auto_type kk = kr_vec_int_get(tr.int_data, i * 3);
             if (_KR_EQ(kk, kr_TK_LPAREN())) {
-                depth = depth + 1;
+                depth = _KR_ADD(depth, 1);
             }
             if (_KR_EQ(kk, kr_TK_RPAREN())) {
                 depth = depth - 1;
@@ -5250,42 +7555,45 @@ Translator kr_translate_primary(Translator tr) {
             if (_KR_EQ(depth, 1) && _KR_EQ(kk, kr_TK_COMMA())) {
                 has_tuple_comma = 1;
             }
-            i = i + 1;
+            i = _KR_ADD(i, 1);
         }
         if (_KR_EQ(has_tuple_comma, 1)) {
             __auto_type elem_count = 1;
-            __auto_type j = tr.pos + 1;
-            __auto_type jd = 1;
-            while (j < tr.count && jd > 0) {
-                __auto_type jk = kr_vec_int_get(tr.int_data, j * 3);
-                if (_KR_EQ(jk, kr_TK_LPAREN())) {
-                    jd = jd + 1;
+            __auto_type j2 = _KR_ADD(tr.pos, 1);
+            __auto_type jd2 = 1;
+            while (j2 < tr.count && jd2 > 0) {
+                __auto_type jk2 = kr_vec_int_get(tr.int_data, j2 * 3);
+                if (_KR_EQ(jk2, kr_TK_LPAREN())) {
+                    jd2 = _KR_ADD(jd2, 1);
                 }
-                if (_KR_EQ(jk, kr_TK_RPAREN())) {
-                    jd = jd - 1;
+                if (_KR_EQ(jk2, kr_TK_RPAREN())) {
+                    jd2 = jd2 - 1;
                 }
-                if (_KR_EQ(jd, 1) && _KR_EQ(jk, kr_TK_COMMA())) {
-                    elem_count = elem_count + 1;
+                if (_KR_EQ(jd2, 1) && _KR_EQ(jk2, kr_TK_COMMA())) {
+                    elem_count = _KR_ADD(elem_count, 1);
                 }
-                j = j + 1;
+                j2 = _KR_ADD(j2, 1);
             }
             if (elem_count < 2) {
                 elem_count = 2;
             }
-            if (elem_count > 5) {
-                elem_count = 5;
+            if (elem_count > 10) {
+                elem_count = 10;
             }
             kr_tr_emit(tr, kr_str_concat("(KrTuple", kr_str_concat(kr_fmt_int((int64_t)(intptr_t)(elem_count)), "){")));
             Translator c = kr_tr_advance(tr);
             __auto_type fi = 0;
             while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RPAREN())) {
                 if (fi > 0) {
-                    kr_tr_emit(c, ", ");
                     c = kr_tr_advance(c);
+                    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_RPAREN())) {
+                        break;
+                    }
+                    kr_tr_emit(c, ", ");
                 }
                 kr_tr_emit(c, kr_str_concat(".f", kr_str_concat(kr_fmt_int((int64_t)(intptr_t)(fi)), " = ")));
                 c = kr_translate_expr(c);
-                fi = fi + 1;
+                fi = _KR_ADD(fi, 1);
             }
             if (!kr_tr_at_end(c)) {
                 c = kr_tr_advance(c);
@@ -5316,8 +7624,18 @@ Translator kr_translate_primary(Translator tr) {
         if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_ARROW())) {
             c = kr_tr_advance(c);
             if (!kr_tr_at_end(c)) {
+                __auto_type rtk = kr_tr_kind(c);
                 c = kr_tr_advance(c);
+                if (_KR_EQ(rtk, kr_TK_LPAREN())) {
+                    c = kr_skip_tuple_type(c);
+                }
+                if (_KR_EQ(rtk, kr_TK_LBRACKET())) {
+                    c = kr_skip_array_type_suffix(c, rtk);
+                }
                 c = kr_skip_generic_params(c);
+                if (_KR_EQ(rtk, kr_TK_KW_FN())) {
+                    c = kr_skip_fn_type_sig(c);
+                }
             }
         }
         if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_LBRACE())) {
@@ -5330,7 +7648,7 @@ Translator kr_translate_primary(Translator tr) {
             while (!kr_tr_at_end(c)) {
                 __auto_type kk = kr_tr_kind(c);
                 if (_KR_EQ(kk, kr_TK_LPAREN())) {
-                    pd = pd + 1;
+                    pd = _KR_ADD(pd, 1);
                     c = kr_tr_advance(c);
                     continue;
                 }
@@ -5343,7 +7661,7 @@ Translator kr_translate_primary(Translator tr) {
                     continue;
                 }
                 if (_KR_EQ(kk, kr_TK_LBRACE())) {
-                    bd = bd + 1;
+                    bd = _KR_ADD(bd, 1);
                     c = kr_tr_advance(c);
                     continue;
                 }
@@ -5356,7 +7674,7 @@ Translator kr_translate_primary(Translator tr) {
                     continue;
                 }
                 if (_KR_EQ(kk, kr_TK_LBRACKET())) {
-                    qd = qd + 1;
+                    qd = _KR_ADD(qd, 1);
                     c = kr_tr_advance(c);
                     continue;
                 }
@@ -5376,29 +7694,151 @@ Translator kr_translate_primary(Translator tr) {
                 c = kr_tr_advance(c);
             }
         }
-        kr_tr_emit(c, kr_str_concat("(void*)", cl_name));
+        __auto_type cap_key = kr_str_concat("cl:", kr_str_concat(kr_fmt_int((int64_t)(intptr_t)(tr.pos)), ":caps"));
+        __auto_type cap_list = kr_sema_get(c, cap_key);
+        if (_KR_NEQ(cap_list, "")) {
+            __auto_type ncaps = 1;
+            __auto_type ci7 = 0;
+            __auto_type clen6 = kr_strlen(cap_list);
+            while (ci7 < clen6) {
+                if (_KR_EQ(kr_str_char_at(cap_list, ci7), 44)) {
+                    ncaps = _KR_ADD(ncaps, 1);
+                }
+                ci7 = _KR_ADD(ci7, 1);
+            }
+            kr_tr_emit(c, kr_str_concat("_kr_cl_alloc((void*)", kr_str_concat(cl_name, kr_str_concat(", ", kr_str_concat(kr_fmt_int((int64_t)(intptr_t)(ncaps)), ", ")))));
+            ci7 = 0;
+            __auto_type cfirst = 1;
+            while (ci7 < clen6) {
+                __auto_type cstart6 = ci7;
+                while (ci7 < clen6 && _KR_NEQ(kr_str_char_at(cap_list, ci7), 44)) {
+                    ci7 = _KR_ADD(ci7, 1);
+                }
+                __auto_type cname4 = kr_str_slice(cap_list, cstart6, ci7);
+                __auto_type scname4 = kr_sanitize_c_name(cname4);
+                if (_KR_EQ(cfirst, 0)) {
+                    kr_tr_emit(c, ", ");
+                }
+                kr_tr_emit(c, kr_str_concat("(int64_t)", scname4));
+                cfirst = 0;
+                if (ci7 < clen6) {
+                    ci7 = _KR_ADD(ci7, 1);
+                }
+            }
+            kr_tr_emit(c, ")");
+        }
+        else {
+            kr_tr_emit(c, kr_str_concat("_kr_cl_alloc((void*)", kr_str_concat(cl_name, ", 0)")));
+        }
         return c;
     }
     if (_KR_EQ(k, kr_TK_LBRACKET())) {
         Translator c = kr_tr_advance(tr);
-        __auto_type arr_elem_type = "int64_t";
+        __auto_type is_str_arr = 0;
         if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_STRING_LIT())) {
-            arr_elem_type = "char*";
+            is_str_arr = 1;
         }
-        kr_tr_emit(c, kr_str_concat("(", kr_str_concat(arr_elem_type, "[]){")));
-        __auto_type af = 1;
-        while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RBRACKET())) {
-            if (_KR_EQ(af, 0)) {
-                kr_tr_emit(c, ", ");
+        __auto_type elem_count = 0;
+        if (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RBRACKET())) {
+            elem_count = 1;
+            __auto_type sc = c.pos;
+            __auto_type sd = 0;
+            __auto_type last_was_comma = 0;
+            while (sc < c.count) {
+                __auto_type sk = kr_vec_int_get(c.int_data, sc * 3);
+                if (_KR_EQ(sk, kr_TK_LBRACKET()) || _KR_EQ(sk, kr_TK_LPAREN()) || _KR_EQ(sk, kr_TK_LBRACE())) {
+                    sd = _KR_ADD(sd, 1);
+                    last_was_comma = 0;
+                }
+                if (_KR_EQ(sk, kr_TK_RBRACKET()) || _KR_EQ(sk, kr_TK_RPAREN()) || _KR_EQ(sk, kr_TK_RBRACE())) {
+                    if (_KR_EQ(sd, 0)) {
+                        break;
+                    }
+                    sd = sd - 1;
+                    last_was_comma = 0;
+                }
+                if (_KR_EQ(sd, 0) && _KR_EQ(sk, kr_TK_COMMA())) {
+                    elem_count = _KR_ADD(elem_count, 1);
+                    last_was_comma = 1;
+                }
+                else {
+                    last_was_comma = 0;
+                }
+                sc = _KR_ADD(sc, 1);
+            }
+            if (_KR_EQ(last_was_comma, 1)) {
+                elem_count = elem_count - 1;
+            }
+        }
+        __auto_type has_imm_sub = 0;
+        __auto_type sc2 = c.pos;
+        __auto_type sd2 = 0;
+        while (sc2 < c.count) {
+            __auto_type sk2 = kr_vec_int_get(c.int_data, sc2 * 3);
+            if (_KR_EQ(sk2, kr_TK_LBRACKET())) {
+                sd2 = _KR_ADD(sd2, 1);
+            }
+            if (_KR_EQ(sk2, kr_TK_RBRACKET())) {
+                if (_KR_EQ(sd2, 0)) {
+                    break;
+                }
+                sd2 = sd2 - 1;
+            }
+            sc2 = _KR_ADD(sc2, 1);
+        }
+        if (_KR_ADD(sc2, 1) < c.count && _KR_EQ(kr_vec_int_get(c.int_data, (_KR_ADD(sc2, 1)) * 3), kr_TK_LBRACKET())) {
+            has_imm_sub = 1;
+        }
+        if (_KR_EQ(has_imm_sub, 1)) {
+            kr_tr_emit(c, "kr_vec_int_get(");
+        }
+        if (_KR_EQ(elem_count, 0)) {
+            if (_KR_EQ(is_str_arr, 1)) {
+                kr_tr_emit(c, "kr_vec_string_new()");
+            }
+            else {
+                kr_tr_emit(c, "kr_vec_int_new()");
+            }
+            if (!kr_tr_at_end(c)) {
                 c = kr_tr_advance(c);
             }
-            c = kr_translate_expr(c);
-            af = 0;
         }
-        if (!kr_tr_at_end(c)) {
+        else {
+            if (_KR_EQ(is_str_arr, 1)) {
+                kr_tr_emit(c, kr_str_concat("_kr_vec_string_of(", kr_str_concat(kr_fmt_int((int64_t)(intptr_t)(elem_count)), ", ")));
+            }
+            else {
+                kr_tr_emit(c, kr_str_concat("_kr_vec_int_of(", kr_str_concat(kr_fmt_int((int64_t)(intptr_t)(elem_count)), ", ")));
+            }
+            __auto_type af = 1;
+            while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RBRACKET())) {
+                if (_KR_EQ(af, 0)) {
+                    c = kr_tr_advance(c);
+                    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_RBRACKET())) {
+                        break;
+                    }
+                    kr_tr_emit(c, ", ");
+                }
+                if (_KR_EQ(is_str_arr, 0)) {
+                    kr_tr_emit(c, "(int64_t)");
+                }
+                c = kr_translate_expr(c);
+                af = 0;
+            }
+            if (!kr_tr_at_end(c)) {
+                c = kr_tr_advance(c);
+            }
+            kr_tr_emit(c, ")");
+        }
+        if (_KR_EQ(has_imm_sub, 1)) {
             c = kr_tr_advance(c);
+            kr_tr_emit(c, ", ");
+            c = kr_translate_expr(c);
+            if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_RBRACKET())) {
+                c = kr_tr_advance(c);
+            }
+            kr_tr_emit(c, ")");
         }
-        kr_tr_emit(c, "}");
         return c;
     }
     if (_KR_EQ(k, kr_TK_IDENTIFIER()) || _KR_EQ(k, kr_TK_KW_SELF())) {
@@ -5407,6 +7847,28 @@ Translator kr_translate_primary(Translator tr) {
         c = kr_maybe_skip_turbofish(c);
         if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_COLON_COLON())) {
             c = kr_tr_advance(c);
+            if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_OP_LT())) {
+                c = kr_skip_generic_params(c);
+                __auto_type mangled = kr_mangle_top_level_fn_name(name);
+                if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_LPAREN())) {
+                    c = kr_tr_advance(c);
+                    kr_tr_emit(c, kr_str_concat(mangled, "("));
+                    __auto_type fa = 1;
+                    while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RPAREN())) {
+                        if (_KR_EQ(fa, 0)) {
+                            kr_tr_emit(c, ", ");
+                            c = kr_tr_advance(c);
+                        }
+                        c = kr_translate_expr(c);
+                        fa = 0;
+                    }
+                    c = kr_tr_advance(c);
+                    kr_tr_emit(c, ")");
+                    return c;
+                }
+                kr_tr_emit(c, mangled);
+                return c;
+            }
             __auto_type member = kr_tr_lexeme(c);
             c = kr_tr_advance(c);
             if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_LPAREN()) && kr_strlen(member) > 0) {
@@ -5439,94 +7901,214 @@ Translator kr_translate_primary(Translator tr) {
             return c;
         }
         if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_LPAREN())) {
+            __auto_type chain_args = kr_vec_int_new();
+            __auto_type csp = _KR_ADD(c.pos, 1);
+            __auto_type csd = 1;
+            while (csp < c.count && csd > 0) {
+                __auto_type csk = kr_vec_int_get(c.int_data, csp * 3);
+                if (_KR_EQ(csk, kr_TK_LPAREN()) || _KR_EQ(csk, kr_TK_LBRACKET()) || _KR_EQ(csk, kr_TK_LBRACE())) {
+                    csd = _KR_ADD(csd, 1);
+                }
+                if (_KR_EQ(csk, kr_TK_RPAREN()) || _KR_EQ(csk, kr_TK_RBRACKET()) || _KR_EQ(csk, kr_TK_RBRACE())) {
+                    csd = csd - 1;
+                }
+                csp = _KR_ADD(csp, 1);
+            }
+            while (csp < c.count && _KR_EQ(kr_vec_int_get(c.int_data, csp * 3), kr_TK_LPAREN())) {
+                csp = _KR_ADD(csp, 1);
+                __auto_type cca = 0;
+                if (csp < c.count && _KR_NEQ(kr_vec_int_get(c.int_data, csp * 3), kr_TK_RPAREN())) {
+                    cca = 1;
+                }
+                csd = 1;
+                while (csp < c.count && csd > 0) {
+                    __auto_type csk = kr_vec_int_get(c.int_data, csp * 3);
+                    if (_KR_EQ(csk, kr_TK_LPAREN()) || _KR_EQ(csk, kr_TK_LBRACKET()) || _KR_EQ(csk, kr_TK_LBRACE())) {
+                        csd = _KR_ADD(csd, 1);
+                    }
+                    if (_KR_EQ(csk, kr_TK_RPAREN()) || _KR_EQ(csk, kr_TK_RBRACKET()) || _KR_EQ(csk, kr_TK_RBRACE())) {
+                        csd = csd - 1;
+                    }
+                    if (_KR_EQ(csd, 1) && _KR_EQ(csk, kr_TK_COMMA())) {
+                        cca = _KR_ADD(cca, 1);
+                    }
+                    csp = _KR_ADD(csp, 1);
+                }
+                kr_vec_int_push(chain_args, cca);
+            }
+            __auto_type chain_count = kr_vec_int_len(chain_args);
+            __auto_type ci = chain_count - 1;
+            while (ci >= 0) {
+                __auto_type ca2 = kr_vec_int_get(chain_args, ci);
+                kr_tr_emit(c, kr_str_concat("_kr_cl_call", kr_str_concat(kr_fmt_int((int64_t)(intptr_t)(ca2)), "((void*)")));
+                ci = ci - 1;
+            }
             c = kr_tr_advance(c);
-            if (_KR_EQ(name, "f") || _KR_EQ(name, "op") || _KR_EQ(name, "add5") || _KR_EQ(name, "transform") || _KR_EQ(name, "cb") || _KR_EQ(name, "f1") || _KR_EQ(name, "f2") || _KR_EQ(name, "f3") || _KR_EQ(name, "f4") || _KR_EQ(name, "closure") || _KR_EQ(name, "compose") || _KR_EQ(name, "map") || _KR_EQ(name, "filter") || _KR_EQ(name, "reduce") || _KR_EQ(name, "times_three")) {
-                while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RPAREN())) {
-                    c = kr_tr_advance(c);
-                }
-                if (!kr_tr_at_end(c)) {
-                    c = kr_tr_advance(c);
-                }
-                kr_tr_emit(c, "0");
-                return c;
-            }
             if (kr_is_local_fn_var(tr, name)) {
+                __auto_type arg_count = 0;
+                if (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RPAREN())) {
+                    arg_count = 1;
+                }
+                __auto_type si = c.pos;
+                __auto_type sd = 0;
+                while (si < c.count) {
+                    __auto_type sk = kr_vec_int_get(c.int_data, si * 3);
+                    if (_KR_EQ(sk, kr_TK_LPAREN()) || _KR_EQ(sk, kr_TK_LBRACKET()) || _KR_EQ(sk, kr_TK_LBRACE())) {
+                        sd = _KR_ADD(sd, 1);
+                    }
+                    if (_KR_EQ(sk, kr_TK_RPAREN()) || _KR_EQ(sk, kr_TK_RBRACKET()) || _KR_EQ(sk, kr_TK_RBRACE())) {
+                        if (_KR_EQ(sd, 0)) {
+                            break;
+                        }
+                        sd = sd - 1;
+                    }
+                    if (_KR_EQ(sd, 0) && _KR_EQ(sk, kr_TK_COMMA())) {
+                        arg_count = _KR_ADD(arg_count, 1);
+                    }
+                    si = _KR_ADD(si, 1);
+                }
+                __auto_type sig = "void*";
+                __auto_type ai = 0;
+                while (ai < arg_count) {
+                    sig = kr_str_concat(sig, ", int64_t");
+                    ai = _KR_ADD(ai, 1);
+                }
+                __auto_type sname = kr_sanitize_c_name(name);
+                kr_tr_emit(c, kr_str_concat("((int64_t(*)(", kr_str_concat(sig, kr_str_concat("))_KR_CL_FN(", kr_str_concat(sname, kr_str_concat("))(_KR_CL_ENV(", kr_str_concat(sname, ")")))))));
+                __auto_type fa = 1;
                 while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RPAREN())) {
-                    c = kr_tr_advance(c);
+                    kr_tr_emit(c, ", ");
+                    if (_KR_EQ(fa, 0)) {
+                        c = kr_tr_advance(c);
+                    }
+                    c = kr_translate_expr(c);
+                    fa = 0;
                 }
                 if (!kr_tr_at_end(c)) {
                     c = kr_tr_advance(c);
                 }
-                kr_tr_emit(c, "0");
-                return c;
+                kr_tr_emit(c, ")");
             }
-            kr_tr_emit(c, kr_str_concat(kr_mangle_top_level_fn_name(name), "("));
-            __auto_type fa = 1;
-            while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RPAREN())) {
-                if (_KR_EQ(fa, 0)) {
-                    kr_tr_emit(c, ", ");
-                    c = kr_tr_advance(c);
-                }
-                if (_KR_EQ(name, "block_on") && _KR_EQ(fa, 1)) {
-                    kr_tr_emit(c, "(void*)(intptr_t)(");
-                    c = kr_translate_expr(c);
-                    kr_tr_emit(c, ")");
-                }
-                else {
-                    if (_KR_EQ(name, "strcmp")) {
-                        kr_tr_emit(c, "(kr_str)(intptr_t)(");
+            else {
+                kr_tr_emit(c, kr_str_concat(kr_mangle_top_level_fn_name(name), "("));
+                __auto_type fa = 1;
+                while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RPAREN())) {
+                    if (_KR_EQ(fa, 0)) {
+                        kr_tr_emit(c, ", ");
+                        c = kr_tr_advance(c);
+                    }
+                    if (_KR_EQ(name, "block_on") && _KR_EQ(fa, 1)) {
+                        kr_tr_emit(c, "(void*)(intptr_t)(");
                         c = kr_translate_expr(c);
                         kr_tr_emit(c, ")");
                     }
                     else {
-                        if (_KR_EQ(name, "fmt_int")) {
-                            kr_tr_emit(c, "(int64_t)(intptr_t)(");
+                        if (_KR_EQ(name, "strcmp")) {
+                            kr_tr_emit(c, "(kr_str)(intptr_t)(");
                             c = kr_translate_expr(c);
                             kr_tr_emit(c, ")");
                         }
                         else {
-                            c = kr_translate_expr(c);
+                            if (_KR_EQ(name, "fmt_int")) {
+                                kr_tr_emit(c, "(int64_t)(intptr_t)(");
+                                c = kr_translate_expr(c);
+                                kr_tr_emit(c, ")");
+                            }
+                            else {
+                                c = kr_translate_expr(c);
+                            }
                         }
                     }
+                    fa = 0;
                 }
-                fa = 0;
+                c = kr_tr_advance(c);
+                kr_tr_emit(c, ")");
             }
-            c = kr_tr_advance(c);
-            kr_tr_emit(c, ")");
+            __auto_type cci = 0;
+            while (cci < chain_count) {
+                if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_LPAREN())) {
+                    c = kr_tr_advance(c);
+                    __auto_type fa2 = 1;
+                    while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RPAREN())) {
+                        kr_tr_emit(c, ", ");
+                        if (_KR_EQ(fa2, 0)) {
+                            c = kr_tr_advance(c);
+                        }
+                        c = kr_translate_expr(c);
+                        fa2 = 0;
+                    }
+                    if (!kr_tr_at_end(c)) {
+                        c = kr_tr_advance(c);
+                    }
+                    kr_tr_emit(c, ")");
+                }
+                cci = _KR_ADD(cci, 1);
+            }
             return c;
         }
         if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_LBRACE())) {
-            c = kr_tr_advance(c);
-            kr_tr_emit(c, kr_str_concat("(", kr_str_concat(name, "){")));
-            __auto_type ff = 1;
-            while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RBRACE())) {
-                if (_KR_EQ(ff, 0)) {
-                    c = kr_tr_advance(c);
-                    if (_KR_EQ(kr_tr_kind(c), kr_TK_RBRACE())) {
-                        break;
-                    }
-                    kr_tr_emit(c, ", ");
-                }
-                __auto_type field_name = kr_tr_lexeme(c);
-                c = kr_tr_advance(c);
-                c = kr_tr_advance(c);
-                kr_tr_emit(c, kr_str_concat(".", kr_str_concat(field_name, " = ")));
-                if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_IDENTIFIER())) {
-                    Translator c1 = kr_tr_advance(c);
-                    if (!kr_tr_at_end(c1) && _KR_EQ(kr_tr_kind(c1), kr_TK_LBRACE())) {
-                        Translator c2 = kr_skip_brace_block(c1);
-                        kr_tr_emit(c2, "0");
-                        c = c2;
-                        ff = 0;
-                        continue;
-                    }
-                }
-                c = kr_translate_expr(c);
-                ff = 0;
+            __auto_type is_struct_lit = 0;
+            __auto_type pk1 = _KR_ADD(c.pos, 1);
+            if (pk1 < c.count && _KR_EQ(kr_vec_int_get(c.int_data, pk1 * 3), kr_TK_RBRACE())) {
+                is_struct_lit = 1;
             }
-            c = kr_tr_advance(c);
-            kr_tr_emit(c, "}");
-            return c;
+            if (pk1 < c.count && _KR_EQ(kr_vec_int_get(c.int_data, pk1 * 3), kr_TK_IDENTIFIER())) {
+                __auto_type pk2 = _KR_ADD(pk1, 1);
+                if (pk2 < c.count && _KR_EQ(kr_vec_int_get(c.int_data, pk2 * 3), kr_TK_COLON())) {
+                    is_struct_lit = 1;
+                }
+            }
+            if (_KR_EQ(is_struct_lit, 1)) {
+                c = kr_tr_advance(c);
+                kr_tr_emit(c, kr_str_concat("(", kr_str_concat(name, "){")));
+                __auto_type ff = 1;
+                while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RBRACE())) {
+                    if (_KR_EQ(ff, 0)) {
+                        c = kr_tr_advance(c);
+                        if (_KR_EQ(kr_tr_kind(c), kr_TK_RBRACE())) {
+                            break;
+                        }
+                        kr_tr_emit(c, ", ");
+                    }
+                    __auto_type field_name = kr_tr_lexeme(c);
+                    c = kr_tr_advance(c);
+                    c = kr_tr_advance(c);
+                    kr_tr_emit(c, kr_str_concat(".", kr_str_concat(field_name, " = ")));
+                    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_IDENTIFIER())) {
+                        Translator c1 = kr_tr_advance(c);
+                        if (!kr_tr_at_end(c1) && _KR_EQ(kr_tr_kind(c1), kr_TK_LBRACE())) {
+                            __auto_type nested_name = kr_tr_lexeme(c);
+                            c = kr_tr_advance(c1);
+                            kr_tr_emit(c, kr_str_concat("(", kr_str_concat(nested_name, "){")));
+                            __auto_type nf = 1;
+                            while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RBRACE())) {
+                                if (_KR_EQ(nf, 0)) {
+                                    c = kr_tr_advance(c);
+                                    if (_KR_EQ(kr_tr_kind(c), kr_TK_RBRACE())) {
+                                        break;
+                                    }
+                                    kr_tr_emit(c, ", ");
+                                }
+                                __auto_type nfname = kr_tr_lexeme(c);
+                                c = kr_tr_advance(c);
+                                c = kr_tr_advance(c);
+                                kr_tr_emit(c, kr_str_concat(".", kr_str_concat(nfname, " = ")));
+                                c = kr_translate_expr(c);
+                                nf = 0;
+                            }
+                            c = kr_tr_advance(c);
+                            kr_tr_emit(c, "}");
+                            ff = 0;
+                            continue;
+                        }
+                    }
+                    c = kr_translate_expr(c);
+                    ff = 0;
+                }
+                c = kr_tr_advance(c);
+                kr_tr_emit(c, "}");
+                return c;
+            }
         }
         if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_DOT())) {
             Translator c1 = kr_tr_advance(c);
@@ -5535,39 +8117,51 @@ Translator kr_translate_primary(Translator tr) {
                 Translator c2 = kr_tr_advance(c1);
                 if (!kr_tr_at_end(c2) && _KR_EQ(kr_tr_kind(c2), kr_TK_LPAREN())) {
                     __auto_type recv_type = kr_lookup_local_var_type_name(tr, name);
+                    if (_KR_EQ(recv_type, "")) {
+                        recv_type = kr_lookup_dyn_concrete_type(tr, name);
+                    }
+                    if (_KR_EQ(recv_type, "")) {
+                        __auto_type sema_key = kr_str_concat("i:", kr_str_concat(name, kr_str_concat("::", method)));
+                        if (kr_sema_has(tr, sema_key)) {
+                        }
+                    }
                     if (_KR_NEQ(recv_type, "")) {
-                        if (kr_strlen(recv_type) > 4 && _KR_EQ(kr_str_char_at(recv_type, 0), 100) && _KR_EQ(kr_str_char_at(recv_type, 1), 121) && _KR_EQ(kr_str_char_at(recv_type, 2), 110) && _KR_EQ(kr_str_char_at(recv_type, 3), 58)) {
-                            __auto_type concrete = kr_lookup_dyn_concrete_type(tr, name);
-                            if (_KR_NEQ(concrete, "")) {
-                                Translator c3 = kr_tr_advance(c2);
-                                kr_tr_emit(c3, kr_str_concat("kr_", kr_str_concat(concrete, kr_str_concat("_", kr_str_concat(method, "(")))));
-                                kr_tr_emit(c3, kr_sanitize_c_name(name));
-                                if (!kr_tr_at_end(c3) && _KR_NEQ(kr_tr_kind(c3), kr_TK_RPAREN())) {
+                        if (_KR_EQ(recv_type, "[array]")) {
+                            Translator c3 = kr_tr_advance(c2);
+                            kr_tr_emit(c3, kr_str_concat("kr_vec_int_", kr_str_concat(method, kr_str_concat("(", kr_str_concat(kr_sanitize_c_name(name), "")))));
+                            if (!kr_tr_at_end(c3) && _KR_NEQ(kr_tr_kind(c3), kr_TK_RPAREN())) {
+                                kr_tr_emit(c3, ", ");
+                            }
+                            __auto_type fa = 1;
+                            while (!kr_tr_at_end(c3) && _KR_NEQ(kr_tr_kind(c3), kr_TK_RPAREN())) {
+                                if (_KR_EQ(fa, 0)) {
                                     kr_tr_emit(c3, ", ");
-                                }
-                                __auto_type fa = 1;
-                                while (!kr_tr_at_end(c3) && _KR_NEQ(kr_tr_kind(c3), kr_TK_RPAREN())) {
-                                    if (_KR_EQ(fa, 0)) {
-                                        kr_tr_emit(c3, ", ");
-                                        c3 = kr_tr_advance(c3);
-                                    }
-                                    c3 = kr_translate_expr(c3);
-                                    fa = 0;
-                                }
-                                if (!kr_tr_at_end(c3)) {
                                     c3 = kr_tr_advance(c3);
                                 }
-                                kr_tr_emit(c3, ")");
-                                return c3;
-                            }
-                            Translator c3 = kr_tr_advance(c2);
-                            while (!kr_tr_at_end(c3) && _KR_NEQ(kr_tr_kind(c3), kr_TK_RPAREN())) {
-                                c3 = kr_tr_advance(c3);
+                                c3 = kr_translate_expr(c3);
+                                fa = 0;
                             }
                             if (!kr_tr_at_end(c3)) {
                                 c3 = kr_tr_advance(c3);
                             }
-                            kr_tr_emit(c3, "0");
+                            kr_tr_emit(c3, ")");
+                            return c3;
+                        }
+                        if (kr_strlen(recv_type) > 4 && _KR_EQ(kr_str_char_at(recv_type, 0), 100) && _KR_EQ(kr_str_char_at(recv_type, 1), 121) && _KR_EQ(kr_str_char_at(recv_type, 2), 110) && _KR_EQ(kr_str_char_at(recv_type, 3), 58)) {
+                            __auto_type dyn_trait = kr_str_slice(recv_type, 4, kr_strlen(recv_type));
+                            Translator c3 = kr_tr_advance(c2);
+                            kr_tr_emit(c3, kr_str_concat("((", kr_str_concat(dyn_trait, kr_str_concat("_VT*)", kr_str_concat(kr_sanitize_c_name(name), kr_str_concat(".vtable)->", kr_str_concat(method, kr_str_concat("(", kr_str_concat(kr_sanitize_c_name(name), ".data")))))))));
+                            while (!kr_tr_at_end(c3) && _KR_NEQ(kr_tr_kind(c3), kr_TK_RPAREN())) {
+                                kr_tr_emit(c3, ", ");
+                                c3 = kr_translate_expr(c3);
+                                if (!kr_tr_at_end(c3) && _KR_EQ(kr_tr_kind(c3), kr_TK_COMMA())) {
+                                    c3 = kr_tr_advance(c3);
+                                }
+                            }
+                            if (!kr_tr_at_end(c3)) {
+                                c3 = kr_tr_advance(c3);
+                            }
+                            kr_tr_emit(c3, ")");
                             return c3;
                         }
                         Translator c3 = kr_tr_advance(c2);
@@ -5592,11 +8186,190 @@ Translator kr_translate_primary(Translator tr) {
                         return c3;
                     }
                 }
-                if (_KR_NEQ(name, "self") && (kr_tr_at_end(c2) || _KR_NEQ(kr_tr_kind(c2), kr_TK_LPAREN()))) {
-                    if (kr_is_local_generic_call_var(tr, name)) {
-                        kr_tr_emit(c2, kr_sanitize_c_name(name));
-                        return c2;
+            }
+        }
+        if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_LBRACKET())) {
+            __auto_type sl_i = _KR_ADD(c.pos, 1);
+            __auto_type sl_d = 0;
+            __auto_type sl_found = 0;
+            while (sl_i < c.count) {
+                __auto_type sl_k = kr_vec_int_get(c.int_data, sl_i * 3);
+                if (_KR_EQ(sl_k, kr_TK_LBRACKET()) || _KR_EQ(sl_k, kr_TK_LPAREN()) || _KR_EQ(sl_k, kr_TK_LBRACE())) {
+                    sl_d = _KR_ADD(sl_d, 1);
+                }
+                if (_KR_EQ(sl_k, kr_TK_RBRACKET()) || _KR_EQ(sl_k, kr_TK_RPAREN()) || _KR_EQ(sl_k, kr_TK_RBRACE())) {
+                    if (_KR_EQ(sl_d, 0)) {
+                        break;
                     }
+                    sl_d = sl_d - 1;
+                }
+                if (_KR_EQ(sl_d, 0) && _KR_EQ(sl_k, kr_TK_COLON())) {
+                    sl_found = 1;
+                    break;
+                }
+                sl_i = _KR_ADD(sl_i, 1);
+            }
+            if (_KR_EQ(sl_found, 1)) {
+                c = kr_tr_advance(c);
+                kr_tr_emit(c, kr_str_concat("kr_str_slice(", kr_str_concat(kr_sanitize_c_name(name), ", ")));
+                c = kr_translate_expr(c);
+                if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_COLON())) {
+                    c = kr_tr_advance(c);
+                }
+                kr_tr_emit(c, ", ");
+                c = kr_translate_expr(c);
+                if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_RBRACKET())) {
+                    c = kr_tr_advance(c);
+                }
+                kr_tr_emit(c, ")");
+                return c;
+            }
+            __auto_type arr_type = kr_lookup_local_var_type_name(c, name);
+            if (_KR_EQ(arr_type, "[array]")) {
+                c = kr_tr_advance(c);
+                __auto_type sub_called = 0;
+                __auto_type sc3 = c.pos;
+                __auto_type sd3 = 0;
+                while (sc3 < c.count) {
+                    __auto_type sk3 = kr_vec_int_get(c.int_data, sc3 * 3);
+                    if (_KR_EQ(sk3, kr_TK_LBRACKET())) {
+                        sd3 = _KR_ADD(sd3, 1);
+                    }
+                    if (_KR_EQ(sk3, kr_TK_RBRACKET())) {
+                        if (_KR_EQ(sd3, 0)) {
+                            break;
+                        }
+                        sd3 = sd3 - 1;
+                    }
+                    sc3 = _KR_ADD(sc3, 1);
+                }
+                if (_KR_ADD(sc3, 1) < c.count && _KR_EQ(kr_vec_int_get(c.int_data, (_KR_ADD(sc3, 1)) * 3), kr_TK_LPAREN())) {
+                    sub_called = 1;
+                }
+                if (_KR_EQ(sub_called, 1)) {
+                    __auto_type call_argc = 0;
+                    __auto_type sc4 = c.pos;
+                    __auto_type sd4 = 0;
+                    while (sc4 < c.count) {
+                        __auto_type sk4 = kr_vec_int_get(c.int_data, sc4 * 3);
+                        if (_KR_EQ(sk4, kr_TK_LBRACKET())) {
+                            sd4 = _KR_ADD(sd4, 1);
+                        }
+                        if (_KR_EQ(sk4, kr_TK_RBRACKET())) {
+                            if (_KR_EQ(sd4, 0)) {
+                                break;
+                            }
+                            sd4 = sd4 - 1;
+                        }
+                        sc4 = _KR_ADD(sc4, 1);
+                    }
+                    if (_KR_ADD(sc4, 2) < c.count && _KR_NEQ(kr_vec_int_get(c.int_data, (_KR_ADD(sc4, 2)) * 3), kr_TK_RPAREN())) {
+                        call_argc = 1;
+                        __auto_type sc5 = _KR_ADD(sc4, 2);
+                        __auto_type sd5 = 0;
+                        while (sc5 < c.count) {
+                            __auto_type sk5 = kr_vec_int_get(c.int_data, sc5 * 3);
+                            if (_KR_EQ(sk5, kr_TK_LPAREN()) || _KR_EQ(sk5, kr_TK_LBRACKET()) || _KR_EQ(sk5, kr_TK_LBRACE())) {
+                                sd5 = _KR_ADD(sd5, 1);
+                            }
+                            if (_KR_EQ(sk5, kr_TK_RPAREN()) || _KR_EQ(sk5, kr_TK_RBRACKET()) || _KR_EQ(sk5, kr_TK_RBRACE())) {
+                                if (_KR_EQ(sd5, 0)) {
+                                    break;
+                                }
+                                sd5 = sd5 - 1;
+                            }
+                            if (_KR_EQ(sd5, 0) && _KR_EQ(sk5, kr_TK_COMMA())) {
+                                call_argc = _KR_ADD(call_argc, 1);
+                            }
+                            sc5 = _KR_ADD(sc5, 1);
+                        }
+                    }
+                    kr_tr_emit(c, kr_str_concat("_kr_cl_call", kr_str_concat(kr_fmt_int((int64_t)(intptr_t)(call_argc)), "((void*)")));
+                }
+                kr_tr_emit(c, kr_str_concat("kr_vec_int_get(", kr_str_concat(kr_sanitize_c_name(name), ", ")));
+                c = kr_translate_expr(c);
+                if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_RBRACKET())) {
+                    c = kr_tr_advance(c);
+                }
+                kr_tr_emit(c, ")");
+                if (_KR_EQ(sub_called, 1)) {
+                    kr_tr_emit(c, ", ");
+                    if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_LPAREN())) {
+                        c = kr_tr_advance(c);
+                    }
+                    __auto_type fa2 = 1;
+                    while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RPAREN())) {
+                        if (_KR_EQ(fa2, 0)) {
+                            kr_tr_emit(c, ", ");
+                            c = kr_tr_advance(c);
+                        }
+                        c = kr_translate_expr(c);
+                        fa2 = 0;
+                    }
+                    if (!kr_tr_at_end(c)) {
+                        c = kr_tr_advance(c);
+                    }
+                    kr_tr_emit(c, ")");
+                }
+                return c;
+            }
+        }
+        if (!kr_tr_at_end(c) && _KR_EQ(kr_tr_kind(c), kr_TK_DOT())) {
+            __auto_type tf1 = _KR_ADD(c.pos, 1);
+            if (tf1 < c.count && _KR_EQ(kr_vec_int_get(c.int_data, tf1 * 3), kr_TK_INT_LIT())) {
+                __auto_type tf2 = _KR_ADD(tf1, 1);
+                if (tf2 < c.count && _KR_EQ(kr_vec_int_get(c.int_data, tf2 * 3), kr_TK_LPAREN())) {
+                    __auto_type tfc = 0;
+                    __auto_type tf3 = _KR_ADD(tf2, 1);
+                    if (tf3 < c.count && _KR_NEQ(kr_vec_int_get(c.int_data, tf3 * 3), kr_TK_RPAREN())) {
+                        tfc = 1;
+                    }
+                    __auto_type tfsi = tf3;
+                    __auto_type tfsd = 0;
+                    while (tfsi < c.count) {
+                        __auto_type tfsk = kr_vec_int_get(c.int_data, tfsi * 3);
+                        if (_KR_EQ(tfsk, kr_TK_LPAREN()) || _KR_EQ(tfsk, kr_TK_LBRACKET()) || _KR_EQ(tfsk, kr_TK_LBRACE())) {
+                            tfsd = _KR_ADD(tfsd, 1);
+                        }
+                        if (_KR_EQ(tfsk, kr_TK_RPAREN()) || _KR_EQ(tfsk, kr_TK_RBRACKET()) || _KR_EQ(tfsk, kr_TK_RBRACE())) {
+                            if (_KR_EQ(tfsd, 0)) {
+                                break;
+                            }
+                            tfsd = tfsd - 1;
+                        }
+                        if (_KR_EQ(tfsd, 0) && _KR_EQ(tfsk, kr_TK_COMMA())) {
+                            tfc = _KR_ADD(tfc, 1);
+                        }
+                        tfsi = _KR_ADD(tfsi, 1);
+                    }
+                    __auto_type tfsig = "";
+                    __auto_type tfai = 0;
+                    while (tfai < tfc) {
+                        if (tfai > 0) {
+                            tfsig = kr_str_concat(tfsig, ", ");
+                        }
+                        tfsig = kr_str_concat(tfsig, "int64_t");
+                        tfai = _KR_ADD(tfai, 1);
+                    }
+                    __auto_type field_idx = kr_vec_string_get(c.lexemes, tf1);
+                    kr_tr_emit(c, kr_str_concat("((int64_t(*)(", kr_str_concat(tfsig, kr_str_concat("))", kr_str_concat(kr_sanitize_c_name(name), kr_str_concat(".f", kr_str_concat(field_idx, ")(")))))));
+                    c = kr_tr_advance(c);
+                    c = kr_tr_advance(c);
+                    c = kr_tr_advance(c);
+                    __auto_type tffa = 1;
+                    while (!kr_tr_at_end(c) && _KR_NEQ(kr_tr_kind(c), kr_TK_RPAREN())) {
+                        if (_KR_EQ(tffa, 0)) {
+                            kr_tr_emit(c, ", ");
+                            c = kr_tr_advance(c);
+                        }
+                        c = kr_translate_expr(c);
+                        tffa = 0;
+                    }
+                    if (!kr_tr_at_end(c)) {
+                        c = kr_tr_advance(c);
+                    }
+                    kr_tr_emit(c, ")");
+                    return c;
                 }
             }
         }
@@ -5633,7 +8406,7 @@ kr_str kr_join_output(void* out) {
     __auto_type i = 0;
     while (i < len) {
         result = kr_str_concat(result, kr_vec_string_get(out, i));
-        i = i + 1;
+        i = _KR_ADD(i, 1);
     }
     return result;
 }
@@ -5714,7 +8487,7 @@ kr_str kr_make_indent(int64_t level) {
     __auto_type i = 0;
     while (i < level) {
         result = kr_str_concat(result, "    ");
-        i = i + 1;
+        i = _KR_ADD(i, 1);
     }
     return result;
 }
@@ -6121,7 +8894,7 @@ kr_str kr_cc_cross_flags(Target t) {
 }
 
 kr_str kr_c_includes_posix() {
-    return kr_str_concat(kr_str_concat(kr_str_concat(kr_str_concat(kr_str_concat("#include <stdio.h>\n", "#include <stdlib.h>\n"), "#include <string.h>\n"), "#include <stdint.h>\n"), "#include <stdbool.h>\n"), kr_str_concat(kr_str_concat("#include <unistd.h>\n", "#include <math.h>\n"), kr_str_concat("#include <time.h>\n", "#include <ctype.h>\n")));
+    return kr_str_concat(kr_str_concat(kr_str_concat(kr_str_concat(kr_str_concat("#include <stdio.h>\n", "#include <stdlib.h>\n"), "#include <string.h>\n"), "#include <stdint.h>\n"), "#include <stdbool.h>\n"), kr_str_concat(kr_str_concat("#include <unistd.h>\n", "#include <math.h>\n"), kr_str_concat(kr_str_concat("#include <time.h>\n", "#include <ctype.h>\n"), "#include <stdarg.h>\n")));
 }
 
 kr_str kr_c_includes_windows() {
@@ -6152,7 +8925,22 @@ kr_str kr_c_typedefs_common() {
     s = kr_str_concat(s, "typedef struct { int64_t f0; int64_t f1; int64_t f2; } KrTuple3;\n");
     s = kr_str_concat(s, "typedef struct { int64_t f0; int64_t f1; int64_t f2; int64_t f3; } KrTuple4;\n");
     s = kr_str_concat(s, "typedef struct { int64_t f0; int64_t f1; int64_t f2; int64_t f3; int64_t f4; } KrTuple5;\n");
-    s = kr_str_concat(s, "typedef int64_t (*KrClosure)(int64_t);\n");
+    s = kr_str_concat(s, "typedef int64_t (*KrClosure)(void*,int64_t);\n");
+    s = kr_str_concat(s, "#define _KR_CL_FN(cl) ((void*)(*(int64_t*)(cl)))\n");
+    s = kr_str_concat(s, "#define _KR_CL_ENV(cl) ((void*)((int64_t*)(cl) + 1))\n");
+    s = kr_str_concat(s, "static void* _kr_cl_alloc(void* fn, int n, ...) {\n");
+    s = kr_str_concat(s, "  int64_t* cl = (int64_t*)malloc((1+n)*sizeof(int64_t));\n");
+    s = kr_str_concat(s, "  cl[0] = (int64_t)fn; va_list a; va_start(a,n);\n");
+    s = kr_str_concat(s, "  for(int i=0;i<n;i++) cl[1+i]=va_arg(a,int64_t);\n");
+    s = kr_str_concat(s, "  va_end(a); return (void*)cl;\n}\n");
+    s = kr_str_concat(s, "static int64_t _kr_cl_call0(void* cl) {\n");
+    s = kr_str_concat(s, "  return ((int64_t(*)(void*))_KR_CL_FN(cl))(_KR_CL_ENV(cl));\n}\n");
+    s = kr_str_concat(s, "static int64_t _kr_cl_call1(void* cl, int64_t a) {\n");
+    s = kr_str_concat(s, "  return ((int64_t(*)(void*,int64_t))_KR_CL_FN(cl))(_KR_CL_ENV(cl), a);\n}\n");
+    s = kr_str_concat(s, "static int64_t _kr_cl_call2(void* cl, int64_t a, int64_t b) {\n");
+    s = kr_str_concat(s, "  return ((int64_t(*)(void*,int64_t,int64_t))_KR_CL_FN(cl))(_KR_CL_ENV(cl), a, b);\n}\n");
+    s = kr_str_concat(s, "static int64_t _kr_cl_call3(void* cl, int64_t a, int64_t b, int64_t c) {\n");
+    s = kr_str_concat(s, "  return ((int64_t(*)(void*,int64_t,int64_t,int64_t))_KR_CL_FN(cl))(_KR_CL_ENV(cl), a, b, c);\n}\n");
     return s;
 }
 
@@ -6178,6 +8966,7 @@ kr_str kr_c_runtime_shims_posix() {
     s = kr_str_concat(s, "static inline int _kr_int_neq(int64_t a, int64_t b) { return a!=b; }\n");
     s = kr_str_concat(s, "#define _KR_EQ(a, b) __builtin_choose_expr(__builtin_types_compatible_p(__typeof__(a), char*), _kr_cmp_eq((void*)(a),(void*)(b)), _kr_int_eq((int64_t)(intptr_t)(a),(int64_t)(intptr_t)(b)))\n");
     s = kr_str_concat(s, "#define _KR_NEQ(a, b) __builtin_choose_expr(__builtin_types_compatible_p(__typeof__(a), char*), _kr_cmp_neq((void*)(a),(void*)(b)), _kr_int_neq((int64_t)(intptr_t)(a),(int64_t)(intptr_t)(b)))\n");
+    s = kr_str_concat(s, "#define _KR_ADD(a, b) __builtin_choose_expr(__builtin_types_compatible_p(__typeof__(a), char*), kr_str_concat((char*)(a),(char*)(b)), ((int64_t)(a) + (int64_t)(b)))\n");
     s = kr_str_concat(s, "#pragma clang diagnostic ignored \"-Wint-to-void-pointer-cast\"\n");
     s = kr_str_concat(s, "kr_str kr_str_concat(kr_str a, kr_str b) {\n");
     s = kr_str_concat(s, "  size_t la = strlen(a), lb = strlen(b);\n");
@@ -6267,10 +9056,17 @@ kr_str kr_c_runtime_shims_posix() {
     s = kr_str_concat(s, "typedef struct { char** keys; int64_t* vals; int64_t cap; int64_t len; } KrMapSI;\n");
     s = kr_str_concat(s, "static uint64_t _kr_hash_str(const char* s) { uint64_t h=5381; while(*s) h=h*33+(*s++); return h; }\n");
     s = kr_str_concat(s, "void* kr_map_string_int_new() {\n");
-    s = kr_str_concat(s, "  KrMapSI* m=(KrMapSI*)malloc(sizeof(KrMapSI)); m->cap=64; m->len=0;\n");
-    s = kr_str_concat(s, "  m->keys=(char**)calloc(64,sizeof(char*)); m->vals=(int64_t*)calloc(64,sizeof(int64_t)); return m;\n}\n");
+    s = kr_str_concat(s, "  KrMapSI* m=(KrMapSI*)malloc(sizeof(KrMapSI)); m->cap=256; m->len=0;\n");
+    s = kr_str_concat(s, "  m->keys=(char**)calloc(256,sizeof(char*)); m->vals=(int64_t*)calloc(256,sizeof(int64_t)); return m;\n}\n");
+    s = kr_str_concat(s, "static void _kr_mapsi_grow(KrMapSI* m) {\n");
+    s = kr_str_concat(s, "  int64_t oc=m->cap; char** ok=m->keys; int64_t* ov=m->vals;\n");
+    s = kr_str_concat(s, "  m->cap=oc*2; m->keys=(char**)calloc(m->cap,sizeof(char*)); m->vals=(int64_t*)calloc(m->cap,sizeof(int64_t)); m->len=0;\n");
+    s = kr_str_concat(s, "  for(int64_t i=0;i<oc;i++){if(ok[i]){uint64_t h=_kr_hash_str(ok[i])%m->cap;\n");
+    s = kr_str_concat(s, "    while(m->keys[h]) h=(h+1)%m->cap; m->keys[h]=ok[i]; m->vals[h]=ov[i]; m->len++;}} free(ok);free(ov);\n}\n");
     s = kr_str_concat(s, "void kr_map_string_int_set(void* mp, kr_str key, int64_t val) {\n");
-    s = kr_str_concat(s, "  KrMapSI* m=(KrMapSI*)mp; uint64_t h=_kr_hash_str(key)%m->cap;\n");
+    s = kr_str_concat(s, "  KrMapSI* m=(KrMapSI*)mp;\n");
+    s = kr_str_concat(s, "  if(m->len*10 >= m->cap*7) _kr_mapsi_grow(m);\n");
+    s = kr_str_concat(s, "  uint64_t h=_kr_hash_str(key)%m->cap;\n");
     s = kr_str_concat(s, "  while(m->keys[h]){if(strcmp(m->keys[h],key)==0){m->vals[h]=val;return;} h=(h+1)%m->cap;}\n");
     s = kr_str_concat(s, "  m->keys[h]=strdup(key); m->vals[h]=val; m->len++;\n}\n");
     s = kr_str_concat(s, "int64_t kr_map_string_int_get(void* mp, kr_str key) {\n");
@@ -6289,10 +9085,17 @@ kr_str kr_c_runtime_shims_posix() {
     s = kr_str_concat(s, "void* kr_map_string_int_values(void* mp) { KrMapSI* m=(KrMapSI*)mp; void* v=kr_vec_int_new(); for(int64_t i=0;i<m->cap;i++)if(m->keys[i])kr_vec_int_push(v,m->vals[i]); return v; }\n");
     s = kr_str_concat(s, "typedef struct { char** keys; char** vals; int64_t cap; int64_t len; } KrMapSS;\n");
     s = kr_str_concat(s, "void* kr_map_string_string_new() {\n");
-    s = kr_str_concat(s, "  KrMapSS* m=(KrMapSS*)malloc(sizeof(KrMapSS)); m->cap=64; m->len=0;\n");
-    s = kr_str_concat(s, "  m->keys=(char**)calloc(64,sizeof(char*)); m->vals=(char**)calloc(64,sizeof(char*)); return m;\n}\n");
+    s = kr_str_concat(s, "  KrMapSS* m=(KrMapSS*)malloc(sizeof(KrMapSS)); m->cap=256; m->len=0;\n");
+    s = kr_str_concat(s, "  m->keys=(char**)calloc(256,sizeof(char*)); m->vals=(char**)calloc(256,sizeof(char*)); return m;\n}\n");
+    s = kr_str_concat(s, "static void _kr_mapss_grow(KrMapSS* m) {\n");
+    s = kr_str_concat(s, "  int64_t oc=m->cap; char** ok=m->keys; char** ov=m->vals;\n");
+    s = kr_str_concat(s, "  m->cap=oc*2; m->keys=(char**)calloc(m->cap,sizeof(char*)); m->vals=(char**)calloc(m->cap,sizeof(char*)); m->len=0;\n");
+    s = kr_str_concat(s, "  for(int64_t i=0;i<oc;i++){if(ok[i]){uint64_t h=_kr_hash_str(ok[i])%m->cap;\n");
+    s = kr_str_concat(s, "    while(m->keys[h]) h=(h+1)%m->cap; m->keys[h]=ok[i]; m->vals[h]=ov[i]; m->len++;}} free(ok);free(ov);\n}\n");
     s = kr_str_concat(s, "void kr_map_string_string_set(void* mp, kr_str key, kr_str val) {\n");
-    s = kr_str_concat(s, "  KrMapSS* m=(KrMapSS*)mp; uint64_t h=_kr_hash_str(key)%m->cap;\n");
+    s = kr_str_concat(s, "  KrMapSS* m=(KrMapSS*)mp;\n");
+    s = kr_str_concat(s, "  if(m->len*10 >= m->cap*7) _kr_mapss_grow(m);\n");
+    s = kr_str_concat(s, "  uint64_t h=_kr_hash_str(key)%m->cap;\n");
     s = kr_str_concat(s, "  while(m->keys[h]){if(strcmp(m->keys[h],key)==0){free(m->vals[h]);m->vals[h]=strdup(val);return;} h=(h+1)%m->cap;}\n");
     s = kr_str_concat(s, "  m->keys[h]=strdup(key); m->vals[h]=strdup(val); m->len++;\n}\n");
     s = kr_str_concat(s, "kr_str kr_map_string_string_get(void* mp, kr_str key) {\n");
@@ -6326,7 +9129,8 @@ kr_str kr_c_runtime_shims_posix() {
     s = kr_str_concat(s, "int64_t kr_str_index_of(kr_str s, kr_str sub) { char* p=strstr(s,sub); return p?(int64_t)(p-s):-1; }\n");
     s = kr_str_concat(s, "kr_str kr_str_replace(kr_str s, kr_str old, kr_str rep) {\n");
     s = kr_str_concat(s, "  size_t ol=strlen(old),rl=strlen(rep),sl=strlen(s); char* r=(char*)malloc(sl*2+1); char* w=r;\n");
-    s = kr_str_concat(s, "  while(*s){char* p=strstr(s,old);if(!p){strcpy(w,s);break;}memcpy(w,s,p-s);w+=p-s;memcpy(w,rep,rl);w+=rl;s=p+ol;}*w=0;return r;\n}\n");
+    s = kr_str_concat(s, "  if(!ol){strcpy(r,s);return r;}\n");
+    s = kr_str_concat(s, "  while(*s){char* p=strstr(s,old);if(!p){strcpy(w,s);return r;}memcpy(w,s,p-s);w+=p-s;memcpy(w,rep,rl);w+=rl;s=p+ol;}*w=0;return r;\n}\n");
     s = kr_str_concat(s, "kr_str kr_str_to_lower(kr_str s) { size_t n=strlen(s); char* r=(char*)malloc(n+1); for(size_t i=0;i<=n;i++)r[i]=tolower((unsigned char)s[i]); return r; }\n");
     s = kr_str_concat(s, "kr_str kr_str_to_upper(kr_str s) { size_t n=strlen(s); char* r=(char*)malloc(n+1); for(size_t i=0;i<=n;i++)r[i]=toupper((unsigned char)s[i]); return r; }\n");
     s = kr_str_concat(s, "kr_str kr_str_trim(kr_str s) { while(*s==' '||*s=='\\t'||*s=='\\n'||*s=='\\r')s++; size_t n=strlen(s); while(n>0&&(s[n-1]==' '||s[n-1]=='\\t'||s[n-1]=='\\n'||s[n-1]=='\\r'))n--; char* r=(char*)malloc(n+1); memcpy(r,s,n); r[n]=0; return r; }\n");
@@ -6721,7 +9525,7 @@ kr_str kr_dir_of(kr_str path) {
     __auto_type i = len - 1;
     while (i >= 0) {
         if (_KR_EQ(kr_str_char_at(path, i), 47)) {
-            return kr_str_slice(path, 0, i + 1);
+            return kr_str_slice(path, 0, _KR_ADD(i, 1));
         }
         i = i - 1;
     }
@@ -6740,7 +9544,7 @@ kr_str kr_module_name_to_rel_path(kr_str mod_name) {
         else {
             out = kr_str_concat(out, kr_str_from_char_code(ch));
         }
-        i = i + 1;
+        i = _KR_ADD(i, 1);
     }
     return out;
 }
@@ -6753,14 +9557,14 @@ kr_str kr_resolve_imports(kr_str source, kr_str source_dir) {
         if (_KR_EQ(i, 0) || _KR_EQ(kr_str_char_at(source, i - 1), 10)) {
             __auto_type j = i;
             while (j < len && (_KR_EQ(kr_str_char_at(source, j), 32) || _KR_EQ(kr_str_char_at(source, j), 9))) {
-                j = j + 1;
+                j = _KR_ADD(j, 1);
             }
-            if (j + 7 <= len && _KR_EQ(kr_str_slice(source, j, j + 7), "import ")) {
-                __auto_type k = j + 7;
+            if (_KR_ADD(j, 7) <= len && _KR_EQ(kr_str_slice(source, j, _KR_ADD(j, 7)), "import ")) {
+                __auto_type k = _KR_ADD(j, 7);
                 while (k < len && _KR_NEQ(kr_str_char_at(source, k), 59) && _KR_NEQ(kr_str_char_at(source, k), 10)) {
-                    k = k + 1;
+                    k = _KR_ADD(k, 1);
                 }
-                __auto_type mod_name = kr_str_slice(source, j + 7, k);
+                __auto_type mod_name = kr_str_slice(source, _KR_ADD(j, 7), k);
                 __auto_type mod_rel = kr_module_name_to_rel_path(mod_name);
                 __auto_type mod_path = kr_str_concat(source_dir, kr_str_concat(mod_rel, ".kr"));
                 __auto_type mod_source = kr_file_read_string(mod_path);
@@ -6769,7 +9573,7 @@ kr_str kr_resolve_imports(kr_str source, kr_str source_dir) {
                 }
             }
         }
-        i = i + 1;
+        i = _KR_ADD(i, 1);
     }
     result = kr_str_concat(result, source);
     return result;
@@ -6796,10 +9600,10 @@ void kr_dump_tokens(void* int_data, void* lexemes, int64_t count) {
     while (i < count) {
         __auto_type k = kr_vec_int_get(int_data, i * 3);
         __auto_type lex = kr_vec_string_get(lexemes, i);
-        __auto_type ln = kr_vec_int_get(int_data, i * 3 + 1);
-        __auto_type co = kr_vec_int_get(int_data, i * 3 + 2);
+        __auto_type ln = kr_vec_int_get(int_data, _KR_ADD(i * 3, 1));
+        __auto_type co = kr_vec_int_get(int_data, _KR_ADD(i * 3, 2));
         kr_puts(kr_str_concat(kr_str_concat(kr_fmt_int((int64_t)(intptr_t)(ln)), kr_str_concat(":", kr_str_concat(kr_fmt_int((int64_t)(intptr_t)(co)), "  "))), kr_str_concat(kr_str_concat(kr_token_kind_name(k), "  "), lex)));
-        i = i + 1;
+        i = _KR_ADD(i, 1);
     }
 }
 
@@ -6905,7 +9709,7 @@ int64_t kr_main() {
         return 0;
     }
     __auto_type cc = kr_default_cc(target);
-    __auto_type cc_cmd = kr_str_concat(cc, kr_str_concat(" -o ", kr_str_concat(exe_path, kr_str_concat(" ", c_path))));
+    __auto_type cc_cmd = kr_str_concat(cc, kr_str_concat(" -o ", kr_str_concat(exe_path, kr_str_concat(" ", kr_str_concat(c_path, " -Wno-int-conversion")))));
     __auto_type cc_lflags = kr_linker_flags(target);
     if (_KR_NEQ(cc_lflags, "")) {
         cc_cmd = kr_str_concat(cc_cmd, kr_str_concat(" ", cc_lflags));

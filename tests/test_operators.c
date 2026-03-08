@@ -20,6 +20,7 @@ typedef struct { int64_t f0; int64_t f1; int64_t f2; } KrTuple3;
 typedef struct { int64_t f0; int64_t f1; int64_t f2; int64_t f3; } KrTuple4;
 typedef struct { int64_t f0; int64_t f1; int64_t f2; int64_t f3; int64_t f4; } KrTuple5;
 typedef int64_t (*KrClosure)(int64_t);
+typedef struct { void* data; void* vtable; } KrDyn;
 typedef ssize_t kr_size;
 
 void kr_puts(kr_str s) { puts(s); }
@@ -27,10 +28,10 @@ void kr_print_int(int64_t v) { printf("%lld", (long long)v); }
 int64_t kr_strlen(kr_str s, ...) { return (int64_t)strlen(s); }
 int64_t kr_abs(int64_t x) { return x < 0 ? -x : x; }
 int kr_strcmp(kr_str a, kr_str b) { return strcmp(a, b); }
-static inline bool _kr_str_eq(kr_str a, kr_str b) { return strcmp(a,b)==0; }
-static inline bool _kr_str_neq(kr_str a, kr_str b) { return strcmp(a,b)!=0; }
-static inline int _kr_cmp_eq(void* a, void* b) { return strcmp((char*)a,(char*)b)==0; }
-static inline int _kr_cmp_neq(void* a, void* b) { return strcmp((char*)a,(char*)b)!=0; }
+static inline bool _kr_str_eq(kr_str a, kr_str b) { if(!a||!b) return a==b; return strcmp(a,b)==0; }
+static inline bool _kr_str_neq(kr_str a, kr_str b) { if(!a||!b) return a!=b; return strcmp(a,b)!=0; }
+static inline int _kr_cmp_eq(void* a, void* b) { if(!a||!b) return a==b; return strcmp((char*)a,(char*)b)==0; }
+static inline int _kr_cmp_neq(void* a, void* b) { if(!a||!b) return a!=b; return strcmp((char*)a,(char*)b)!=0; }
 static inline int _kr_int_eq(int64_t a, int64_t b) { return a==b; }
 static inline int _kr_int_neq(int64_t a, int64_t b) { return a!=b; }
 #define _KR_EQ(a, b) __builtin_choose_expr(__builtin_types_compatible_p(__typeof__(a), char*), _kr_cmp_eq((void*)(a),(void*)(b)), _kr_int_eq((int64_t)(intptr_t)(a),(int64_t)(intptr_t)(b)))
@@ -140,11 +141,18 @@ int64_t kr_vec_bytes_swap_remove(void* vp, int64_t i) { KrVecBytes* v=(KrVecByte
 typedef struct { char** keys; int64_t* vals; int64_t cap; int64_t len; } KrMapSI;
 static uint64_t _kr_hash_str(const char* s) { uint64_t h=5381; while(*s) h=h*33+(*s++); return h; }
 void* kr_map_string_int_new() {
-  KrMapSI* m=(KrMapSI*)malloc(sizeof(KrMapSI)); m->cap=64; m->len=0;
-  m->keys=(char**)calloc(64,sizeof(char*)); m->vals=(int64_t*)calloc(64,sizeof(int64_t)); return m;
+  KrMapSI* m=(KrMapSI*)malloc(sizeof(KrMapSI)); m->cap=256; m->len=0;
+  m->keys=(char**)calloc(256,sizeof(char*)); m->vals=(int64_t*)calloc(256,sizeof(int64_t)); return m;
+}
+static void _kr_msi_resize(KrMapSI* m) {
+  int64_t oc=m->cap; char** ok=m->keys; int64_t* ov=m->vals;
+  m->cap=oc*2; m->len=0; m->keys=(char**)calloc(m->cap,sizeof(char*)); m->vals=(int64_t*)calloc(m->cap,sizeof(int64_t));
+  for(int64_t i=0;i<oc;i++){if(ok[i]){uint64_t h=_kr_hash_str(ok[i])%m->cap;while(m->keys[h])h=(h+1)%m->cap;m->keys[h]=ok[i];m->vals[h]=ov[i];m->len++;}}
+  free(ok);free(ov);
 }
 void kr_map_string_int_set(void* mp, kr_str key, int64_t val) {
-  KrMapSI* m=(KrMapSI*)mp; uint64_t h=_kr_hash_str(key)%m->cap;
+  KrMapSI* m=(KrMapSI*)mp; if(m->len*10>=m->cap*7) _kr_msi_resize(m);
+  uint64_t h=_kr_hash_str(key)%m->cap;
   while(m->keys[h]){if(strcmp(m->keys[h],key)==0){m->vals[h]=val;return;} h=(h+1)%m->cap;}
   m->keys[h]=strdup(key); m->vals[h]=val; m->len++;
 }
@@ -167,11 +175,18 @@ void* kr_map_string_int_keys(void* mp) { KrMapSI* m=(KrMapSI*)mp; void* v=kr_vec
 void* kr_map_string_int_values(void* mp) { KrMapSI* m=(KrMapSI*)mp; void* v=kr_vec_int_new(); for(int64_t i=0;i<m->cap;i++)if(m->keys[i])kr_vec_int_push(v,m->vals[i]); return v; }
 typedef struct { char** keys; char** vals; int64_t cap; int64_t len; } KrMapSS;
 void* kr_map_string_string_new() {
-  KrMapSS* m=(KrMapSS*)malloc(sizeof(KrMapSS)); m->cap=64; m->len=0;
-  m->keys=(char**)calloc(64,sizeof(char*)); m->vals=(char**)calloc(64,sizeof(char*)); return m;
+  KrMapSS* m=(KrMapSS*)malloc(sizeof(KrMapSS)); m->cap=256; m->len=0;
+  m->keys=(char**)calloc(256,sizeof(char*)); m->vals=(char**)calloc(256,sizeof(char*)); return m;
+}
+static void _kr_mss_resize(KrMapSS* m) {
+  int64_t oc=m->cap; char** ok=m->keys; char** ov=m->vals;
+  m->cap=oc*2; m->len=0; m->keys=(char**)calloc(m->cap,sizeof(char*)); m->vals=(char**)calloc(m->cap,sizeof(char*));
+  for(int64_t i=0;i<oc;i++){if(ok[i]){uint64_t h=_kr_hash_str(ok[i])%m->cap;while(m->keys[h])h=(h+1)%m->cap;m->keys[h]=ok[i];m->vals[h]=ov[i];m->len++;}}
+  free(ok);free(ov);
 }
 void kr_map_string_string_set(void* mp, kr_str key, kr_str val) {
-  KrMapSS* m=(KrMapSS*)mp; uint64_t h=_kr_hash_str(key)%m->cap;
+  KrMapSS* m=(KrMapSS*)mp; if(m->len*10>=m->cap*7) _kr_mss_resize(m);
+  uint64_t h=_kr_hash_str(key)%m->cap;
   while(m->keys[h]){if(strcmp(m->keys[h],key)==0){free(m->vals[h]);m->vals[h]=strdup(val);return;} h=(h+1)%m->cap;}
   m->keys[h]=strdup(key); m->vals[h]=strdup(val); m->len++;
 }
@@ -447,6 +462,7 @@ int64_t kr_kraken_union_check_tag(int64_t u,int64_t t, ...){ void* p=(void*)(int
 void kr_assert_eq(kr_str label, int64_t expected, int64_t actual);
 void kr_assert_true(kr_str label, bool value);
 int64_t kr_main();
+
 
 void kr_assert_eq(kr_str label, int64_t expected, int64_t actual) {
     if (_KR_EQ(expected, actual)) {

@@ -307,7 +307,7 @@ fn main() -> int {
 
     // Phase 3: Invoke C compiler
     let cc = default_cc(target);
-    let cc_cmd = str_concat(cc, str_concat(" -o ", str_concat(exe_path, str_concat(" ", c_path))));
+    let cc_cmd = str_concat(cc, str_concat(" -o ", str_concat(exe_path, str_concat(" ", str_concat(c_path, " -Wno-int-conversion")))));
     let cc_lflags = linker_flags(target);
     if (cc_lflags != "") {
         cc_cmd = str_concat(cc_cmd, str_concat(" ", cc_lflags));

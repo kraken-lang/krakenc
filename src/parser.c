@@ -202,8 +202,10 @@ int64_t kr_str_contains(kr_str s, kr_str sub) { return strstr(s,sub)!=NULL; }
 int64_t kr_str_starts_with(kr_str s, kr_str pfx) { return strncmp(s,pfx,strlen(pfx))==0; }
 int64_t kr_str_index_of(kr_str s, kr_str sub) { char* p=strstr(s,sub); return p?(int64_t)(p-s):-1; }
 kr_str kr_str_replace(kr_str s, kr_str old, kr_str rep) {
-  size_t ol=strlen(old),rl=strlen(rep),sl=strlen(s); char* r=(char*)malloc(sl*2+1); char* w=r;
-  while(*s){char* p=strstr(s,old);if(!p){strcpy(w,s);break;}memcpy(w,s,p-s);w+=p-s;memcpy(w,rep,rl);w+=rl;s=p+ol;}*w=0;return r;
+  size_t ol=strlen(old),rl=strlen(rep),sl=strlen(s);
+  if(!ol){char* r=(char*)malloc(sl+1);memcpy(r,s,sl+1);return r;}
+  size_t cap=sl*2+rl*16+1; char* r=(char*)malloc(cap); char* w=r;
+  while(*s){char* p=strstr(s,old);if(!p){strcpy(w,s);return r;}memcpy(w,s,p-s);w+=p-s;memcpy(w,rep,rl);w+=rl;s=p+ol;}*w=0;return r;
 }
 kr_str kr_str_to_lower(kr_str s) { size_t n=strlen(s); char* r=(char*)malloc(n+1); for(size_t i=0;i<=n;i++)r[i]=tolower((unsigned char)s[i]); return r; }
 kr_str kr_str_to_upper(kr_str s) { size_t n=strlen(s); char* r=(char*)malloc(n+1); for(size_t i=0;i<=n;i++)r[i]=toupper((unsigned char)s[i]); return r; }
