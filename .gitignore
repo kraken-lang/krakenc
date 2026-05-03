@@ -39,3 +39,6 @@ Cargo.lock
 *.tmp
 *.temp
 .cache/
+
+# Vendored toolchain (populated by tools/vendor-clang.ps1)
+/tools/llvm/

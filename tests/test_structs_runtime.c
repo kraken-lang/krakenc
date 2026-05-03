@@ -517,38 +517,3 @@ void kr_kraken_union_free(int64_t u){ free((void*)(intptr_t)u); }
 int64_t kr_kraken_union_get_tag(int64_t u){ void* p=(void*)(intptr_t)u; return p?*(int64_t*)p:0; }
 void kr_kraken_union_set_tag(int64_t u,int64_t t){ void* p=(void*)(intptr_t)u; if(p)*(int64_t*)p=t; }
 int64_t kr_kraken_union_check_tag(int64_t u,int64_t t, ...){ void* p=(void*)(intptr_t)u; return p && *(int64_t*)p==t; }
-
-/* Forward declarations */
-int64_t kr_add(int64_t a, int64_t b);
-void kr_greet(kr_str name);
-int64_t kr_main();
-
-
-int64_t kr_add(int64_t a, int64_t b) {
-    return _KR_ADD(a, b);
-}
-
-void kr_greet(kr_str name) {
-    kr_puts(kr_str_concat("Hello, ", kr_str_concat(name, "!")));
-}
-
-int64_t kr_main() {
-    __auto_type x = 10;
-    __auto_type y = 32;
-    __auto_type result = kr_add(x, y);
-    kr_puts(kr_str_concat("result: ", kr_fmt_int((int64_t)(intptr_t)(result))));
-    kr_greet("Kraken");
-    if (_KR_EQ(result, 42)) {
-        kr_puts("correct!");
-    }
-    else {
-        kr_puts("wrong!");
-    }
-    return 0;
-}
-
-
-int main(int argc, char* argv[]) {
-    kr_main();
-    return 0;
-}

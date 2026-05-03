@@ -529,21 +529,296 @@ void kr_unsetenv(kr_str name) { _putenv_s(name, ""); }
 #endif
 
 /* Forward declarations */
+int64_t kr_test_is_numeric();
+int64_t kr_test_is_boolean();
+int64_t kr_test_is_string();
+int64_t kr_test_types_equal();
+int64_t kr_test_binary_arithmetic();
+int64_t kr_test_binary_comparison();
+int64_t kr_test_binary_logical();
+int64_t kr_test_binary_bitwise();
+int64_t kr_test_unary_ops();
+int64_t kr_test_scope();
+int64_t kr_test_symbol_tracking();
+int64_t kr_test_check_program();
 int64_t kr_main();
 
 
+int64_t kr_test_is_numeric() {
+    __auto_type errors = 0;
+    if (!kr_is_numeric_type(kr_TYPE_INT())) {
+        kr_puts("FAIL: int should be numeric");
+        errors = _KR_ADD(errors, 1);
+    }
+    if (!kr_is_numeric_type(kr_TYPE_FLOAT())) {
+        kr_puts("FAIL: float should be numeric");
+        errors = _KR_ADD(errors, 1);
+    }
+    if (kr_is_numeric_type(kr_TYPE_BOOL())) {
+        kr_puts("FAIL: bool should not be numeric");
+        errors = _KR_ADD(errors, 1);
+    }
+    if (kr_is_numeric_type(kr_TYPE_STRING())) {
+        kr_puts("FAIL: string should not be numeric");
+        errors = _KR_ADD(errors, 1);
+    }
+    return errors;
+}
+
+int64_t kr_test_is_boolean() {
+    __auto_type errors = 0;
+    if (!kr_is_boolean_type(kr_TYPE_BOOL())) {
+        kr_puts("FAIL: bool should be boolean");
+        errors = _KR_ADD(errors, 1);
+    }
+    if (kr_is_boolean_type(kr_TYPE_INT())) {
+        kr_puts("FAIL: int should not be boolean");
+        errors = _KR_ADD(errors, 1);
+    }
+    return errors;
+}
+
+int64_t kr_test_is_string() {
+    __auto_type errors = 0;
+    if (!kr_is_string_type(kr_TYPE_STRING())) {
+        kr_puts("FAIL: string should be string type");
+        errors = _KR_ADD(errors, 1);
+    }
+    if (!kr_is_string_type(kr_TYPE_STR())) {
+        kr_puts("FAIL: str should be string type");
+        errors = _KR_ADD(errors, 1);
+    }
+    if (kr_is_string_type(kr_TYPE_INT())) {
+        kr_puts("FAIL: int should not be string type");
+        errors = _KR_ADD(errors, 1);
+    }
+    return errors;
+}
+
+int64_t kr_test_types_equal() {
+    __auto_type errors = 0;
+    if (!kr_types_equal(kr_TYPE_INT(), "", kr_TYPE_INT(), "")) {
+        kr_puts("FAIL: int == int");
+        errors = _KR_ADD(errors, 1);
+    }
+    if (kr_types_equal(kr_TYPE_INT(), "", kr_TYPE_FLOAT(), "")) {
+        kr_puts("FAIL: int != float");
+        errors = _KR_ADD(errors, 1);
+    }
+    if (!kr_types_equal(kr_TYPE_CUSTOM(), "Point", kr_TYPE_CUSTOM(), "Point")) {
+        kr_puts("FAIL: Point == Point");
+        errors = _KR_ADD(errors, 1);
+    }
+    if (kr_types_equal(kr_TYPE_CUSTOM(), "Point", kr_TYPE_CUSTOM(), "Line")) {
+        kr_puts("FAIL: Point != Line");
+        errors = _KR_ADD(errors, 1);
+    }
+    return errors;
+}
+
+int64_t kr_test_binary_arithmetic() {
+    __auto_type errors = 0;
+    __auto_type r = kr_check_binary_op(200, kr_TYPE_INT(), kr_TYPE_INT());
+    if (_KR_NEQ(r, kr_TYPE_INT())) {
+        kr_puts("FAIL: int + int should be int");
+        errors = _KR_ADD(errors, 1);
+    }
+    __auto_type r2 = kr_check_binary_op(200, kr_TYPE_FLOAT(), kr_TYPE_INT());
+    if (_KR_NEQ(r2, kr_TYPE_FLOAT())) {
+        kr_puts("FAIL: float + int should be float");
+        errors = _KR_ADD(errors, 1);
+    }
+    __auto_type r3 = kr_check_binary_op(202, kr_TYPE_INT(), kr_TYPE_INT());
+    if (_KR_NEQ(r3, kr_TYPE_INT())) {
+        kr_puts("FAIL: int * int should be int");
+        errors = _KR_ADD(errors, 1);
+    }
+    __auto_type r4 = kr_check_binary_op(200, kr_TYPE_STRING(), kr_TYPE_STRING());
+    if (_KR_NEQ(r4, kr_TYPE_STRING())) {
+        kr_puts("FAIL: string + string should be string");
+        errors = _KR_ADD(errors, 1);
+    }
+    __auto_type r5 = kr_check_binary_op(200, kr_TYPE_BOOL(), kr_TYPE_BOOL());
+    if (_KR_NEQ(r5, -1)) {
+        kr_puts("FAIL: bool + bool should be type error");
+        errors = _KR_ADD(errors, 1);
+    }
+    return errors;
+}
+
+int64_t kr_test_binary_comparison() {
+    __auto_type errors = 0;
+    __auto_type r = kr_check_binary_op(205, kr_TYPE_INT(), kr_TYPE_INT());
+    if (_KR_NEQ(r, kr_TYPE_BOOL())) {
+        kr_puts("FAIL: int == int should be bool");
+        errors = _KR_ADD(errors, 1);
+    }
+    __auto_type r2 = kr_check_binary_op(207, kr_TYPE_INT(), kr_TYPE_INT());
+    if (_KR_NEQ(r2, kr_TYPE_BOOL())) {
+        kr_puts("FAIL: int < int should be bool");
+        errors = _KR_ADD(errors, 1);
+    }
+    __auto_type r3 = kr_check_binary_op(205, kr_TYPE_INT(), kr_TYPE_FLOAT());
+    if (_KR_NEQ(r3, -1)) {
+        kr_puts("FAIL: int == float should be type error");
+        errors = _KR_ADD(errors, 1);
+    }
+    return errors;
+}
+
+int64_t kr_test_binary_logical() {
+    __auto_type errors = 0;
+    __auto_type r = kr_check_binary_op(211, kr_TYPE_BOOL(), kr_TYPE_BOOL());
+    if (_KR_NEQ(r, kr_TYPE_BOOL())) {
+        kr_puts("FAIL: bool && bool should be bool");
+        errors = _KR_ADD(errors, 1);
+    }
+    __auto_type r2 = kr_check_binary_op(211, kr_TYPE_INT(), kr_TYPE_INT());
+    if (_KR_NEQ(r2, -1)) {
+        kr_puts("FAIL: int && int should be type error");
+        errors = _KR_ADD(errors, 1);
+    }
+    return errors;
+}
+
+int64_t kr_test_binary_bitwise() {
+    __auto_type errors = 0;
+    __auto_type r = kr_check_binary_op(214, kr_TYPE_INT(), kr_TYPE_INT());
+    if (_KR_NEQ(r, kr_TYPE_INT())) {
+        kr_puts("FAIL: int & int should be int");
+        errors = _KR_ADD(errors, 1);
+    }
+    __auto_type r2 = kr_check_binary_op(218, kr_TYPE_INT(), kr_TYPE_INT());
+    if (_KR_NEQ(r2, kr_TYPE_INT())) {
+        kr_puts("FAIL: int << int should be int");
+        errors = _KR_ADD(errors, 1);
+    }
+    __auto_type r3 = kr_check_binary_op(214, kr_TYPE_FLOAT(), kr_TYPE_FLOAT());
+    if (_KR_NEQ(r3, -1)) {
+        kr_puts("FAIL: float & float should be type error");
+        errors = _KR_ADD(errors, 1);
+    }
+    return errors;
+}
+
+int64_t kr_test_unary_ops() {
+    __auto_type errors = 0;
+    __auto_type r = kr_check_unary_op(201, kr_TYPE_INT());
+    if (_KR_NEQ(r, kr_TYPE_INT())) {
+        kr_puts("FAIL: -int should be int");
+        errors = _KR_ADD(errors, 1);
+    }
+    __auto_type r2 = kr_check_unary_op(201, kr_TYPE_FLOAT());
+    if (_KR_NEQ(r2, kr_TYPE_FLOAT())) {
+        kr_puts("FAIL: -float should be float");
+        errors = _KR_ADD(errors, 1);
+    }
+    __auto_type r3 = kr_check_unary_op(213, kr_TYPE_BOOL());
+    if (_KR_NEQ(r3, kr_TYPE_BOOL())) {
+        kr_puts("FAIL: !bool should be bool");
+        errors = _KR_ADD(errors, 1);
+    }
+    __auto_type r4 = kr_check_unary_op(217, kr_TYPE_INT());
+    if (_KR_NEQ(r4, kr_TYPE_INT())) {
+        kr_puts("FAIL: ~int should be int");
+        errors = _KR_ADD(errors, 1);
+    }
+    __auto_type r5 = kr_check_unary_op(201, kr_TYPE_BOOL());
+    if (_KR_NEQ(r5, -1)) {
+        kr_puts("FAIL: -bool should be type error");
+        errors = _KR_ADD(errors, 1);
+    }
+    __auto_type r6 = kr_check_unary_op(213, kr_TYPE_INT());
+    if (_KR_NEQ(r6, -1)) {
+        kr_puts("FAIL: !int should be type error");
+        errors = _KR_ADD(errors, 1);
+    }
+    return errors;
+}
+
+int64_t kr_test_scope() {
+    __auto_type errors = 0;
+    __auto_type tc = kr_new_typechecker("test.kr");
+    if (_KR_NEQ(tc.scope_depth, 0)) {
+        kr_puts("FAIL: initial scope should be 0");
+        errors = _KR_ADD(errors, 1);
+    }
+    __auto_type tc2 = kr_tc_enter_scope(tc);
+    if (_KR_NEQ(tc2.scope_depth, 1)) {
+        kr_puts("FAIL: entered scope should be 1");
+        errors = _KR_ADD(errors, 1);
+    }
+    __auto_type tc3 = kr_tc_enter_scope(tc2);
+    if (_KR_NEQ(tc3.scope_depth, 2)) {
+        kr_puts("FAIL: nested scope should be 2");
+        errors = _KR_ADD(errors, 1);
+    }
+    __auto_type tc4 = kr_tc_exit_scope(tc3);
+    if (_KR_NEQ(tc4.scope_depth, 1)) {
+        kr_puts("FAIL: exited scope should be 1");
+        errors = _KR_ADD(errors, 1);
+    }
+    return errors;
+}
+
+int64_t kr_test_symbol_tracking() {
+    __auto_type errors = 0;
+    __auto_type tc = kr_new_typechecker("test.kr");
+    if (_KR_NEQ(tc.symbol_count, 0)) {
+        kr_puts("FAIL: initial symbol count should be 0");
+        errors = _KR_ADD(errors, 1);
+    }
+    __auto_type tc2 = kr_tc_add_symbol(tc);
+    if (_KR_NEQ(tc2.symbol_count, 1)) {
+        kr_puts("FAIL: symbol count should be 1");
+        errors = _KR_ADD(errors, 1);
+    }
+    __auto_type tc3 = kr_tc_add_symbol(tc2);
+    __auto_type tc4 = kr_tc_add_symbol(tc3);
+    if (_KR_NEQ(tc4.symbol_count, 3)) {
+        kr_puts("FAIL: symbol count should be 3");
+        errors = _KR_ADD(errors, 1);
+    }
+    return errors;
+}
+
+int64_t kr_test_check_program() {
+    __auto_type errors = 0;
+    __auto_type tc = kr_new_typechecker("test.kr");
+    __auto_type result = kr_check_program(tc, 5);
+    if (!result.success) {
+        kr_puts("FAIL: check_program should succeed on well-formed input");
+        errors = _KR_ADD(errors, 1);
+    }
+    if (_KR_NEQ(result.symbol_count, 5)) {
+        kr_puts("FAIL: check_program should register 5 symbols");
+        errors = _KR_ADD(errors, 1);
+    }
+    return errors;
+}
+
 int64_t kr_main() {
-    __auto_type sum = 0;
-    for (int64_t i = 0; i < 5; i++) {
-        sum = _KR_ADD(sum, i);
+    kr_puts("=== Type Checker Tests ===");
+    __auto_type failures = 0;
+    failures = _KR_ADD(failures, kr_test_is_numeric());
+    failures = _KR_ADD(failures, kr_test_is_boolean());
+    failures = _KR_ADD(failures, kr_test_is_string());
+    failures = _KR_ADD(failures, kr_test_types_equal());
+    failures = _KR_ADD(failures, kr_test_binary_arithmetic());
+    failures = _KR_ADD(failures, kr_test_binary_comparison());
+    failures = _KR_ADD(failures, kr_test_binary_logical());
+    failures = _KR_ADD(failures, kr_test_binary_bitwise());
+    failures = _KR_ADD(failures, kr_test_unary_ops());
+    failures = _KR_ADD(failures, kr_test_scope());
+    failures = _KR_ADD(failures, kr_test_symbol_tracking());
+    failures = _KR_ADD(failures, kr_test_check_program());
+    if (_KR_EQ(failures, 0)) {
+        kr_puts("All type checker tests passed.");
     }
-    kr_puts(kr_str_concat("sum(0..5)=", kr_fmt_int((int64_t)(intptr_t)(sum))));
-    __auto_type sum2 = 0;
-    for (int64_t j = 1; j < 4; j++) {
-        sum2 = _KR_ADD(sum2, j);
+    else {
+        kr_puts("Type checker tests FAILED.");
     }
-    kr_puts(kr_str_concat("sum(1..4)=", kr_fmt_int((int64_t)(intptr_t)(sum2))));
-    return 0;
+    return failures;
 }
 
 

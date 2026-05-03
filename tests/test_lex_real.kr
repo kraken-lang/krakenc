@@ -1,0 +1,16 @@
+// Mirror tokenize() behavior on a small file
+import token;
+import lexer;
+
+fn main() -> int {
+    puts("step 1: read file");
+    let s = file_read_string("tests/test_tiny.kr");
+    puts(str_concat("step 2: read complete, len=", fmt_int(strlen(s))));
+    puts(str_concat("source: ", s));
+    puts("step 3: lexing");
+    let int_data: VecInt = vec_int_new();
+    let tok_lexemes: VecString = vec_string_new();
+    let count = tokenize(s, int_data, tok_lexemes);
+    puts(str_concat("step 4: tokenized, count=", fmt_int(count)));
+    return 0;
+}

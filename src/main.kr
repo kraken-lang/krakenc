@@ -18,6 +18,7 @@ import lexer;
 import ast;
 import parser;
 import codegen;
+import llvm_ir;
 import error;
 import platform;
 
@@ -32,12 +33,15 @@ fn COMPILER_NAME() -> string    { return "krakenc"; }
 // Compile mode
 // ---------------------------------------------------------------------------
 
-fn MODE_COMPILE() -> int  { return 0; }
-fn MODE_EMIT_C() -> int   { return 1; }
-fn MODE_TOKENS() -> int   { return 3; }
-fn MODE_VERSION() -> int  { return 5; }
-fn MODE_HELP() -> int     { return 6; }
-fn MODE_TARGETS() -> int  { return 7; }
+fn MODE_COMPILE() -> int        { return 0; }
+fn MODE_EMIT_C() -> int         { return 1; }
+fn MODE_EMIT_LLVM() -> int      { return 2; }
+fn MODE_TOKENS() -> int         { return 3; }
+fn MODE_EMIT_RUNTIME() -> int   { return 4; }
+fn MODE_VERSION() -> int        { return 5; }
+fn MODE_HELP() -> int           { return 6; }
+fn MODE_TARGETS() -> int        { return 7; }
+fn MODE_COMPILE_IR() -> int     { return 8; }
 
 // ---------------------------------------------------------------------------
 // Banner
@@ -64,6 +68,9 @@ fn print_help() -> void {
     puts("");
     puts("Options:");
     puts("  --emit-c              Emit C source only (no cc invocation)");
+    puts("  --emit-llvm           Emit LLVM IR text (.ll) — inspect with: clang -x ir");
+    puts("  --compile-ir          Compile via LLVM IR (emit .ll then link with runtime)");
+    puts("  --emit-runtime        Emit C runtime only (_kr_runtime.c)");
     puts("  --tokens              Dump token stream");
     puts("  --target <triple>     Cross-compile for target platform");
     puts("  --targets             List all supported target platforms");
@@ -157,6 +164,22 @@ fn derive_c_path(input: string) -> string {
     return str_concat(input, ".c");
 }
 
+fn derive_ll_path(input: string) -> string {
+    if (str_ends_with(input, ".kr")) {
+        let base = str_slice(input, 0, strlen(input) - 3);
+        return str_concat(base, ".ll");
+    }
+    return str_concat(input, ".ll");
+}
+
+fn derive_runtime_path(input: string) -> string {
+    if (str_ends_with(input, ".kr")) {
+        let base = str_slice(input, 0, strlen(input) - 3);
+        return str_concat(base, "_runtime.c");
+    }
+    return str_concat(input, "_runtime.c");
+}
+
 fn derive_exe_path(input: string, target: Target) -> string {
     if (str_ends_with(input, ".kr")) {
         let base = str_slice(input, 0, strlen(input) - 3);
@@ -205,8 +228,11 @@ fn main() -> int {
         source_file = env_source;
         has_input = true;
     }
-    if (env_mode == "emit-c") { mode = MODE_EMIT_C(); }
-    if (env_mode == "tokens") { mode = MODE_TOKENS(); }
+    if (env_mode == "emit-c")       { mode = MODE_EMIT_C(); }
+    if (env_mode == "emit-llvm")    { mode = MODE_EMIT_LLVM(); }
+    if (env_mode == "compile-ir")   { mode = MODE_COMPILE_IR(); }
+    if (env_mode == "emit-runtime") { mode = MODE_EMIT_RUNTIME(); }
+    if (env_mode == "tokens")       { mode = MODE_TOKENS(); }
     if (env_mode == "version") { mode = MODE_VERSION(); }
     if (env_mode == "help") { mode = MODE_HELP(); }
     if (env_mode == "targets") { mode = MODE_TARGETS(); }
@@ -237,6 +263,19 @@ fn main() -> int {
         puts(str_concat("  Linker:   ", lflags));
     }
     puts("");
+
+    // --emit-runtime: emit the Kraken C runtime preamble to a standalone .c file
+    if (mode == MODE_EMIT_RUNTIME()) {
+        let rt_path = "_kr_runtime.c";
+        if (has_input) { rt_path = derive_runtime_path(source_file); }
+        let rt_source = emit_c_preamble(target);
+        let rt_file: bytes = fopen(rt_path, "w");
+        fputs(rt_source, rt_file);
+        fclose(rt_file);
+        puts(str_concat("  Runtime:  ", rt_path));
+        puts("C runtime emitted successfully.");
+        return 0;
+    }
 
     // Read source
     let source = "";
@@ -271,10 +310,81 @@ fn main() -> int {
         return 0;
     }
 
-    // Phase 2: Translate — single-pass parse + C codegen
+    // Determine output paths (needed by both backends)
+    let c_path = derive_c_path(source_file);
+    let ll_path = derive_ll_path(source_file);
+    let exe_path = derive_exe_path(source_file, target);
+
+    // --emit-llvm / --compile-ir path: translate tokens to LLVM IR text
+    if (mode == MODE_EMIT_LLVM() || mode == MODE_COMPILE_IR()) {
+        let ir_out: VecString = vec_string_new();
+        let ir_result: IrTranslateResult = translate_to_ir(
+            int_data, tok_lexemes, token_count, source_file, target, ir_out);
+
+        if (!ir_result.success) {
+            puts(str_concat("  IR errors: ", fmt_int(ir_result.errors)));
+            puts("LLVM IR emission failed.");
+            vec_string_free(ir_out);
+            vec_int_free(int_data);
+            vec_string_free(tok_lexemes);
+            return 1;
+        }
+
+        let ll_source: string = join_ir_output(ir_result.globals, ir_out);
+        vec_string_free(ir_out);
+
+        let ll_file: bytes = fopen(ll_path, "w");
+        fputs(ll_source, ll_file);
+        fclose(ll_file);
+        puts(str_concat("  IR output: ", ll_path));
+
+        if (mode == MODE_EMIT_LLVM()) {
+            puts("LLVM IR emitted successfully.");
+            vec_int_free(int_data);
+            vec_string_free(tok_lexemes);
+            return 0;
+        }
+
+        // --compile-ir: emit runtime .c, then link .ll + runtime.c
+        let rt_path = derive_runtime_path(source_file);
+        let rt_source = emit_c_preamble(target);
+        let rt_file: bytes = fopen(rt_path, "w");
+        fputs(rt_source, rt_file);
+        fclose(rt_file);
+        puts(str_concat("  Runtime:  ", rt_path));
+
+        let cc = default_cc(target);
+        // clang -x ir <file.ll> -x c <runtime.c> -o <exe>
+        // The -x flag applies to the immediately following input file.
+        let cc_cmd = str_concat(cc, str_concat(" -x ir ", str_concat(ll_path,
+            str_concat(" -x c ", str_concat(rt_path,
+            str_concat(" -o ", str_concat(exe_path, " -Wno-int-conversion")))))));
+        let cc_xflags = cc_extra_flags(target);
+        if (cc_xflags != "") {
+            cc_cmd = str_concat(cc_cmd, str_concat(" ", cc_xflags));
+        }
+        let cc_lflags = linker_flags(target);
+        if (cc_lflags != "") {
+            cc_cmd = str_concat(cc_cmd, str_concat(" ", cc_lflags));
+        }
+        puts(str_concat("  CC cmd:   ", cc_cmd));
+        let cc_result = system(cc_cmd);
+        if (cc_result != 0) {
+            puts("error: IR compilation failed.");
+            vec_int_free(int_data);
+            vec_string_free(tok_lexemes);
+            return 1;
+        }
+        puts(str_concat("  Output:   ", exe_path));
+        puts("Build complete.");
+        vec_int_free(int_data);
+        vec_string_free(tok_lexemes);
+        return 0;
+    }
+
+    // C backend path: translate tokens to C
     let out: VecString = vec_string_new();
     let result: TranslateResult = translate(int_data, tok_lexemes, token_count, source_file, target, out);
-
     if (!result.success) {
         puts(str_concat("  Errors:   ", fmt_int(result.errors)));
         puts("Compilation failed.");
@@ -283,14 +393,8 @@ fn main() -> int {
         vec_string_free(tok_lexemes);
         return 1;
     }
-
-    // Join output fragments into C source string
     let c_source: string = join_output(out);
     vec_string_free(out);
-
-    // Determine output paths
-    let c_path = derive_c_path(source_file);
-    let exe_path = derive_exe_path(source_file, target);
 
     // Write C source to file
     let c_file: bytes = fopen(c_path, "w");
@@ -305,7 +409,7 @@ fn main() -> int {
         return 0;
     }
 
-    // Phase 3: Invoke C compiler
+    // Phase 3: Invoke C compiler (C backend path)
     let cc = default_cc(target);
     let cc_cmd = str_concat(cc, str_concat(" -o ", str_concat(exe_path, str_concat(" ", str_concat(c_path, " -Wno-int-conversion")))));
     let cc_xflags = cc_extra_flags(target);

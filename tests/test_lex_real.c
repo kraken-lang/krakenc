@@ -42,7 +42,7 @@ static int64_t _kr_cl_call2(void* cl, int64_t a, int64_t b) {
 static int64_t _kr_cl_call3(void* cl, int64_t a, int64_t b, int64_t c) {
   return ((int64_t(*)(void*,int64_t,int64_t,int64_t))_KR_CL_FN(cl))(_KR_CL_ENV(cl), a, b, c);
 }
-static int64_t kr_detect_host_os() {
+int64_t kr_detect_host_os() {
 #if defined(_WIN32) || defined(_WIN64)
   return 3;
 #elif defined(__APPLE__) && defined(__MACH__)
@@ -57,7 +57,7 @@ static int64_t kr_detect_host_os() {
   return 0;
 #endif
 }
-static int64_t kr_detect_host_arch() {
+int64_t kr_detect_host_arch() {
 #if defined(__x86_64__) || defined(_M_X64)
   return 1;
 #elif defined(__aarch64__) || defined(_M_ARM64)
@@ -533,16 +533,15 @@ int64_t kr_main();
 
 
 int64_t kr_main() {
-    __auto_type sum = 0;
-    for (int64_t i = 0; i < 5; i++) {
-        sum = _KR_ADD(sum, i);
-    }
-    kr_puts(kr_str_concat("sum(0..5)=", kr_fmt_int((int64_t)(intptr_t)(sum))));
-    __auto_type sum2 = 0;
-    for (int64_t j = 1; j < 4; j++) {
-        sum2 = _KR_ADD(sum2, j);
-    }
-    kr_puts(kr_str_concat("sum(1..4)=", kr_fmt_int((int64_t)(intptr_t)(sum2))));
+    kr_puts("step 1: read file");
+    __auto_type s = kr_file_read_string("tests/test_tiny.kr");
+    kr_puts(kr_str_concat("step 2: read complete, len=", kr_fmt_int((int64_t)(intptr_t)(kr_strlen(s)))));
+    kr_puts(kr_str_concat("source: ", s));
+    kr_puts("step 3: lexing");
+    void* int_data = (void*)(intptr_t)(kr_vec_int_new());
+    void* tok_lexemes = (void*)(intptr_t)(kr_vec_string_new());
+    __auto_type count = kr_tokenize(s, int_data, tok_lexemes);
+    kr_puts(kr_str_concat("step 4: tokenized, count=", kr_fmt_int((int64_t)(intptr_t)(count))));
     return 0;
 }
 

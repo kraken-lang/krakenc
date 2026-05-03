@@ -1,0 +1,92 @@
+name: CI
+
+# Tests run on every push and PR across Windows, Linux, macOS.
+# Tagged release builds are in release.yml.
+
+on:
+  push:
+    branches: ['*']
+  pull_request:
+    branches: ['*']
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: ${{ matrix.os_name }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os_name: windows-x64
+            runner: windows-latest
+            exe_ext: .exe
+          - os_name: linux-x64
+            runner: ubuntu-latest
+            exe_ext: ''
+          - os_name: macos-arm64
+            runner: macos-latest
+            exe_ext: ''
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ---------- install LLVM ----------
+      - name: Install LLVM (Windows)
+        if: matrix.os_name == 'windows-x64'
+        shell: pwsh
+        run: |
+          choco install llvm --version=18.1.8 -y
+          echo "C:\Program Files\LLVM\bin" >> $env:GITHUB_PATH
+
+      - name: Install LLVM (Linux)
+        if: matrix.os_name == 'linux-x64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm-18 clang-18 lld-18
+          sudo ln -sf /usr/bin/clang-18 /usr/local/bin/clang
+          sudo ln -sf /usr/bin/lld-18 /usr/local/bin/ld.lld
+
+      - name: Install LLVM (macOS)
+        if: matrix.os_name == 'macos-arm64'
+        run: |
+          brew install llvm@18
+          echo "/opt/homebrew/opt/llvm@18/bin" >> $GITHUB_PATH
+
+      - name: Verify clang available
+        run: clang --version
+
+      # ---------- bootstrap stage1 ----------
+      # MVP: rely on a stage1 binary committed at tools/stage1/krakenc<ext>.
+      # If absent, this step fails loudly with instructions.
+      - name: Check for stage1
+        run: |
+          if [ ! -f "tools/stage1/krakenc${{ matrix.exe_ext }}" ]; then
+            echo "::warning::tools/stage1/krakenc${{ matrix.exe_ext }} not found."
+            echo "::warning::CI will skip until a stage1 binary is provided per platform."
+            echo "::warning::See .dev/SHIP_CHECKLIST.md - 'Bootstrap problem' section."
+            echo "STAGE1_MISSING=1" >> $GITHUB_ENV
+          fi
+
+      - name: Build stage2
+        if: env.STAGE1_MISSING != '1'
+        run: |
+          export KRAKENC_INPUT=src/main.kr
+          export KRAKENC_MODE=emit-c
+          ./tools/stage1/krakenc${{ matrix.exe_ext }}
+          clang \
+            -o krakenc${{ matrix.exe_ext }} \
+            src/main.c \
+            -Wno-int-conversion \
+            -D_CRT_SECURE_NO_WARNINGS
+
+      # ---------- run tests ----------
+      - name: Run tests (both backends)
+        if: env.STAGE1_MISSING != '1'
+        run: |
+          chmod +x tools/run-tests.sh
+          KRAKENC=./krakenc${{ matrix.exe_ext }} bash tools/run-tests.sh

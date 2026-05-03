@@ -370,7 +370,7 @@ pub fn c_typedefs_common() -> string {
     s = str_concat(s, "  return ((int64_t(*)(void*,int64_t,int64_t,int64_t))_KR_CL_FN(cl))(_KR_CL_ENV(cl), a, b, c);\n}\n");
     // Compile-time host OS detection via predefined C macros.
     // Returns the same integer constants as OS_LINUX/OS_MACOS/OS_WINDOWS etc.
-    s = str_concat(s, "static int64_t kr_detect_host_os() {\n");
+    s = str_concat(s, "int64_t kr_detect_host_os() {\n");
     s = str_concat(s, "#if defined(_WIN32) || defined(_WIN64)\n  return 3;\n");
     s = str_concat(s, "#elif defined(__APPLE__) && defined(__MACH__)\n  return 2;\n");
     s = str_concat(s, "#elif defined(__linux__)\n  return 1;\n");
@@ -378,7 +378,7 @@ pub fn c_typedefs_common() -> string {
     s = str_concat(s, "#elif defined(__wasi__) || defined(__WASI__)\n  return 5;\n");
     s = str_concat(s, "#else\n  return 0;\n#endif\n}\n");
     // Compile-time host arch detection.
-    s = str_concat(s, "static int64_t kr_detect_host_arch() {\n");
+    s = str_concat(s, "int64_t kr_detect_host_arch() {\n");
     s = str_concat(s, "#if defined(__x86_64__) || defined(_M_X64)\n  return 1;\n");
     s = str_concat(s, "#elif defined(__aarch64__) || defined(_M_ARM64)\n  return 2;\n");
     s = str_concat(s, "#elif defined(__wasm32__)\n  return 5;\n");

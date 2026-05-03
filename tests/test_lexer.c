@@ -529,21 +529,213 @@ void kr_unsetenv(kr_str name) { _putenv_s(name, ""); }
 #endif
 
 /* Forward declarations */
+int64_t kr_test_empty_source();
+int64_t kr_test_single_identifier();
+int64_t kr_test_integer_literal();
+int64_t kr_test_string_literal();
+int64_t kr_test_keywords();
+int64_t kr_test_operators();
+int64_t kr_test_delimiters();
+int64_t kr_test_line_comment();
+int64_t kr_test_block_comment();
+int64_t kr_test_full_function();
+int64_t kr_test_keyword_lookup();
+int64_t kr_test_token_kind_classification();
+int64_t kr_test_whitespace();
+int64_t kr_test_float_literal();
+int64_t kr_test_compound_assign();
 int64_t kr_main();
 
 
-int64_t kr_main() {
-    __auto_type sum = 0;
-    for (int64_t i = 0; i < 5; i++) {
-        sum = _KR_ADD(sum, i);
+int64_t kr_test_empty_source() {
+    __auto_type ts = kr_tokenize("");
+    if (_KR_NEQ(ts.count, 0)) {
+        kr_puts("FAIL: test_empty_source — expected 0 tokens");
+        return 1;
     }
-    kr_puts(kr_str_concat("sum(0..5)=", kr_fmt_int((int64_t)(intptr_t)(sum))));
-    __auto_type sum2 = 0;
-    for (int64_t j = 1; j < 4; j++) {
-        sum2 = _KR_ADD(sum2, j);
-    }
-    kr_puts(kr_str_concat("sum(1..4)=", kr_fmt_int((int64_t)(intptr_t)(sum2))));
     return 0;
+}
+
+int64_t kr_test_single_identifier() {
+    __auto_type ts = kr_tokenize("hello");
+    if (_KR_NEQ(ts.count, 1)) {
+        kr_puts("FAIL: test_single_identifier — expected 1 token");
+        return 1;
+    }
+    return 0;
+}
+
+int64_t kr_test_integer_literal() {
+    __auto_type ts = kr_tokenize("42");
+    if (_KR_NEQ(ts.count, 1)) {
+        kr_puts("FAIL: test_integer_literal — expected 1 token");
+        return 1;
+    }
+    return 0;
+}
+
+int64_t kr_test_string_literal() {
+    __auto_type ts = kr_tokenize("\"hello world\"");
+    if (_KR_NEQ(ts.count, 1)) {
+        kr_puts("FAIL: test_string_literal — expected 1 token");
+        return 1;
+    }
+    return 0;
+}
+
+int64_t kr_test_keywords() {
+    __auto_type ts = kr_tokenize("fn let if else while for return struct enum trait impl");
+    if (_KR_NEQ(ts.count, 11)) {
+        kr_puts("FAIL: test_keywords — expected 11 tokens");
+        return 1;
+    }
+    return 0;
+}
+
+int64_t kr_test_operators() {
+    __auto_type ts = kr_tokenize("+ - * / == != < > <= >= && ||");
+    if (_KR_NEQ(ts.count, 12)) {
+        kr_puts("FAIL: test_operators — expected 12 tokens");
+        return 1;
+    }
+    return 0;
+}
+
+int64_t kr_test_delimiters() {
+    __auto_type ts = kr_tokenize("( ) { } [ ] ; , . : -> ::");
+    if (_KR_NEQ(ts.count, 12)) {
+        kr_puts("FAIL: test_delimiters — expected 12 tokens");
+        return 1;
+    }
+    return 0;
+}
+
+int64_t kr_test_line_comment() {
+    __auto_type ts = kr_tokenize("x // this is a comment\ny");
+    if (_KR_NEQ(ts.count, 2)) {
+        kr_puts("FAIL: test_line_comment — expected 2 tokens");
+        return 1;
+    }
+    return 0;
+}
+
+int64_t kr_test_block_comment() {
+    __auto_type ts = kr_tokenize("x /* block */ y");
+    if (_KR_NEQ(ts.count, 2)) {
+        kr_puts("FAIL: test_block_comment — expected 2 tokens");
+        return 1;
+    }
+    return 0;
+}
+
+int64_t kr_test_full_function() {
+    __auto_type src = "fn main() -> int { return 42; }";
+    __auto_type ts = kr_tokenize(src);
+    if (_KR_NEQ(ts.count, 11)) {
+        kr_puts("FAIL: test_full_function — expected 11 tokens");
+        return 1;
+    }
+    return 0;
+}
+
+int64_t kr_test_keyword_lookup() {
+    __auto_type errors = 0;
+    if (_KR_NEQ(kr_lookup_keyword("fn"), kr_TK_KW_FN())) {
+        kr_puts("FAIL: lookup fn");
+        errors = _KR_ADD(errors, 1);
+    }
+    if (_KR_NEQ(kr_lookup_keyword("let"), kr_TK_KW_LET())) {
+        kr_puts("FAIL: lookup let");
+        errors = _KR_ADD(errors, 1);
+    }
+    if (_KR_NEQ(kr_lookup_keyword("struct"), kr_TK_KW_STRUCT())) {
+        kr_puts("FAIL: lookup struct");
+        errors = _KR_ADD(errors, 1);
+    }
+    if (_KR_NEQ(kr_lookup_keyword("notakeyword"), 0)) {
+        kr_puts("FAIL: lookup notakeyword should return 0");
+        errors = _KR_ADD(errors, 1);
+    }
+    return errors;
+}
+
+int64_t kr_test_token_kind_classification() {
+    __auto_type errors = 0;
+    if (!kr_is_keyword(kr_TK_KW_FN())) {
+        kr_puts("FAIL: fn should be keyword");
+        errors = _KR_ADD(errors, 1);
+    }
+    if (!kr_is_operator(kr_TK_OP_PLUS())) {
+        kr_puts("FAIL: + should be operator");
+        errors = _KR_ADD(errors, 1);
+    }
+    if (!kr_is_delimiter(kr_TK_LPAREN())) {
+        kr_puts("FAIL: ( should be delimiter");
+        errors = _KR_ADD(errors, 1);
+    }
+    if (!kr_is_type_keyword(kr_TK_KW_INT())) {
+        kr_puts("FAIL: int should be type keyword");
+        errors = _KR_ADD(errors, 1);
+    }
+    if (kr_is_keyword(kr_TK_OP_PLUS())) {
+        kr_puts("FAIL: + should not be keyword");
+        errors = _KR_ADD(errors, 1);
+    }
+    return errors;
+}
+
+int64_t kr_test_whitespace() {
+    __auto_type ts = kr_tokenize("   \t\n   x   \n   y   ");
+    if (_KR_NEQ(ts.count, 2)) {
+        kr_puts("FAIL: test_whitespace — expected 2 tokens");
+        return 1;
+    }
+    return 0;
+}
+
+int64_t kr_test_float_literal() {
+    __auto_type ts = kr_tokenize("3.14");
+    if (_KR_NEQ(ts.count, 1)) {
+        kr_puts("FAIL: test_float_literal — expected 1 token");
+        return 1;
+    }
+    return 0;
+}
+
+int64_t kr_test_compound_assign() {
+    __auto_type ts = kr_tokenize("+= -= *= /= %=");
+    if (_KR_NEQ(ts.count, 5)) {
+        kr_puts("FAIL: test_compound_assign — expected 5 tokens");
+        return 1;
+    }
+    return 0;
+}
+
+int64_t kr_main() {
+    kr_puts("=== Lexer Tests ===");
+    __auto_type failures = 0;
+    failures = _KR_ADD(failures, kr_test_empty_source());
+    failures = _KR_ADD(failures, kr_test_single_identifier());
+    failures = _KR_ADD(failures, kr_test_integer_literal());
+    failures = _KR_ADD(failures, kr_test_string_literal());
+    failures = _KR_ADD(failures, kr_test_keywords());
+    failures = _KR_ADD(failures, kr_test_operators());
+    failures = _KR_ADD(failures, kr_test_delimiters());
+    failures = _KR_ADD(failures, kr_test_line_comment());
+    failures = _KR_ADD(failures, kr_test_block_comment());
+    failures = _KR_ADD(failures, kr_test_full_function());
+    failures = _KR_ADD(failures, kr_test_keyword_lookup());
+    failures = _KR_ADD(failures, kr_test_token_kind_classification());
+    failures = _KR_ADD(failures, kr_test_whitespace());
+    failures = _KR_ADD(failures, kr_test_float_literal());
+    failures = _KR_ADD(failures, kr_test_compound_assign());
+    if (_KR_EQ(failures, 0)) {
+        kr_puts("All lexer tests passed.");
+    }
+    else {
+        kr_puts("Lexer tests FAILED.");
+    }
+    return failures;
 }
 
 

@@ -529,21 +529,233 @@ void kr_unsetenv(kr_str name) { _putenv_s(name, ""); }
 #endif
 
 /* Forward declarations */
+int64_t kr_test_type_mapping();
+int64_t kr_test_binary_op_emit();
+int64_t kr_test_unary_op_emit();
+int64_t kr_test_name_mangling();
+int64_t kr_test_indent();
+int64_t kr_test_codegen_state();
+int64_t kr_test_preamble();
+int64_t kr_test_generate_program();
+int64_t kr_test_dedent_floor();
 int64_t kr_main();
 
 
+int64_t kr_test_type_mapping() {
+    __auto_type errors = 0;
+    if (_KR_NEQ(kr_kraken_type_to_c(kr_TYPE_INT()), "kr_int")) {
+        kr_puts("FAIL: int -> kr_int");
+        errors = _KR_ADD(errors, 1);
+    }
+    if (_KR_NEQ(kr_kraken_type_to_c(kr_TYPE_FLOAT()), "kr_float")) {
+        kr_puts("FAIL: float -> kr_float");
+        errors = _KR_ADD(errors, 1);
+    }
+    if (_KR_NEQ(kr_kraken_type_to_c(kr_TYPE_BOOL()), "kr_bool")) {
+        kr_puts("FAIL: bool -> kr_bool");
+        errors = _KR_ADD(errors, 1);
+    }
+    if (_KR_NEQ(kr_kraken_type_to_c(kr_TYPE_STRING()), "kr_str")) {
+        kr_puts("FAIL: string -> kr_str");
+        errors = _KR_ADD(errors, 1);
+    }
+    if (_KR_NEQ(kr_kraken_type_to_c(kr_TYPE_STR()), "kr_str")) {
+        kr_puts("FAIL: str -> kr_str");
+        errors = _KR_ADD(errors, 1);
+    }
+    if (_KR_NEQ(kr_kraken_type_to_c(kr_TYPE_VOID()), "void")) {
+        kr_puts("FAIL: void -> void");
+        errors = _KR_ADD(errors, 1);
+    }
+    if (_KR_NEQ(kr_kraken_type_to_c(kr_TYPE_BYTES()), "uint8_t*")) {
+        kr_puts("FAIL: bytes -> uint8_t*");
+        errors = _KR_ADD(errors, 1);
+    }
+    return errors;
+}
+
+int64_t kr_test_binary_op_emit() {
+    __auto_type errors = 0;
+    if (_KR_NEQ(kr_emit_binary_op(200), "+")) {
+        kr_puts("FAIL: op 200 -> +");
+        errors = _KR_ADD(errors, 1);
+    }
+    if (_KR_NEQ(kr_emit_binary_op(201), "-")) {
+        kr_puts("FAIL: op 201 -> -");
+        errors = _KR_ADD(errors, 1);
+    }
+    if (_KR_NEQ(kr_emit_binary_op(202), "*")) {
+        kr_puts("FAIL: op 202 -> *");
+        errors = _KR_ADD(errors, 1);
+    }
+    if (_KR_NEQ(kr_emit_binary_op(203), "/")) {
+        kr_puts("FAIL: op 203 -> /");
+        errors = _KR_ADD(errors, 1);
+    }
+    if (_KR_NEQ(kr_emit_binary_op(205), "==")) {
+        kr_puts("FAIL: op 205 -> ==");
+        errors = _KR_ADD(errors, 1);
+    }
+    if (_KR_NEQ(kr_emit_binary_op(211), "&&")) {
+        kr_puts("FAIL: op 211 -> &&");
+        errors = _KR_ADD(errors, 1);
+    }
+    if (_KR_NEQ(kr_emit_binary_op(218), "<<")) {
+        kr_puts("FAIL: op 218 -> <<");
+        errors = _KR_ADD(errors, 1);
+    }
+    return errors;
+}
+
+int64_t kr_test_unary_op_emit() {
+    __auto_type errors = 0;
+    if (_KR_NEQ(kr_emit_unary_op(201), "-")) {
+        kr_puts("FAIL: unary 201 -> -");
+        errors = _KR_ADD(errors, 1);
+    }
+    if (_KR_NEQ(kr_emit_unary_op(213), "!")) {
+        kr_puts("FAIL: unary 213 -> !");
+        errors = _KR_ADD(errors, 1);
+    }
+    if (_KR_NEQ(kr_emit_unary_op(217), "~")) {
+        kr_puts("FAIL: unary 217 -> ~");
+        errors = _KR_ADD(errors, 1);
+    }
+    return errors;
+}
+
+int64_t kr_test_name_mangling() {
+    __auto_type errors = 0;
+    if (_KR_NEQ(kr_mangle_name("", "main"), "kr_main")) {
+        kr_puts("FAIL: mangle main");
+        errors = _KR_ADD(errors, 1);
+    }
+    if (_KR_NEQ(kr_mangle_name("lexer", "tokenize"), "kr_lexer_tokenize")) {
+        kr_puts("FAIL: mangle lexer.tokenize");
+        errors = _KR_ADD(errors, 1);
+    }
+    if (_KR_NEQ(kr_mangle_struct("Point"), "KrStruct_Point")) {
+        kr_puts("FAIL: mangle struct Point");
+        errors = _KR_ADD(errors, 1);
+    }
+    if (_KR_NEQ(kr_mangle_enum("Color"), "KrEnum_Color")) {
+        kr_puts("FAIL: mangle enum Color");
+        errors = _KR_ADD(errors, 1);
+    }
+    return errors;
+}
+
+int64_t kr_test_indent() {
+    __auto_type errors = 0;
+    if (_KR_NEQ(kr_make_indent(0), "")) {
+        kr_puts("FAIL: indent 0");
+        errors = _KR_ADD(errors, 1);
+    }
+    if (_KR_NEQ(kr_make_indent(1), "    ")) {
+        kr_puts("FAIL: indent 1");
+        errors = _KR_ADD(errors, 1);
+    }
+    if (_KR_NEQ(kr_make_indent(2), "        ")) {
+        kr_puts("FAIL: indent 2");
+        errors = _KR_ADD(errors, 1);
+    }
+    return errors;
+}
+
+int64_t kr_test_codegen_state() {
+    __auto_type errors = 0;
+    __auto_type cg = kr_new_codegen("test.kr");
+    if (_KR_NEQ(cg.indent, 0)) {
+        kr_puts("FAIL: initial indent should be 0");
+        errors = _KR_ADD(errors, 1);
+    }
+    if (_KR_NEQ(cg.line_count, 0)) {
+        kr_puts("FAIL: initial line_count should be 0");
+        errors = _KR_ADD(errors, 1);
+    }
+    __auto_type cg2 = kr_cg_indent(cg);
+    if (_KR_NEQ(cg2.indent, 1)) {
+        kr_puts("FAIL: indent should be 1");
+        errors = _KR_ADD(errors, 1);
+    }
+    __auto_type cg3 = kr_cg_indent(cg2);
+    if (_KR_NEQ(cg3.indent, 2)) {
+        kr_puts("FAIL: indent should be 2");
+        errors = _KR_ADD(errors, 1);
+    }
+    __auto_type cg4 = kr_cg_dedent(cg3);
+    if (_KR_NEQ(cg4.indent, 1)) {
+        kr_puts("FAIL: indent should be 1 after dedent");
+        errors = _KR_ADD(errors, 1);
+    }
+    __auto_type cg5 = kr_cg_emit_line(cg4);
+    if (_KR_NEQ(cg5.line_count, 1)) {
+        kr_puts("FAIL: line_count should be 1");
+        errors = _KR_ADD(errors, 1);
+    }
+    return errors;
+}
+
+int64_t kr_test_preamble() {
+    __auto_type errors = 0;
+    __auto_type cg = kr_new_codegen("test.kr");
+    __auto_type cg2 = kr_emit_preamble(cg);
+    if (_KR_EQ(cg2.line_count, 0)) {
+        kr_puts("FAIL: preamble should emit lines");
+        errors = _KR_ADD(errors, 1);
+    }
+    if (_KR_NEQ(cg2.error_count, 0)) {
+        kr_puts("FAIL: preamble should have no errors");
+        errors = _KR_ADD(errors, 1);
+    }
+    return errors;
+}
+
+int64_t kr_test_generate_program() {
+    __auto_type errors = 0;
+    __auto_type cg = kr_new_codegen("test.kr");
+    __auto_type result = kr_generate_program(cg, 3);
+    if (!result.success) {
+        kr_puts("FAIL: generate_program should succeed");
+        errors = _KR_ADD(errors, 1);
+    }
+    if (_KR_EQ(result.line_count, 0)) {
+        kr_puts("FAIL: generate_program should emit lines");
+        errors = _KR_ADD(errors, 1);
+    }
+    return errors;
+}
+
+int64_t kr_test_dedent_floor() {
+    __auto_type errors = 0;
+    __auto_type cg = kr_new_codegen("test.kr");
+    __auto_type cg2 = kr_cg_dedent(cg);
+    if (_KR_NEQ(cg2.indent, 0)) {
+        kr_puts("FAIL: dedent from 0 should stay at 0");
+        errors = _KR_ADD(errors, 1);
+    }
+    return errors;
+}
+
 int64_t kr_main() {
-    __auto_type sum = 0;
-    for (int64_t i = 0; i < 5; i++) {
-        sum = _KR_ADD(sum, i);
+    kr_puts("=== Code Generator Tests ===");
+    __auto_type failures = 0;
+    failures = _KR_ADD(failures, kr_test_type_mapping());
+    failures = _KR_ADD(failures, kr_test_binary_op_emit());
+    failures = _KR_ADD(failures, kr_test_unary_op_emit());
+    failures = _KR_ADD(failures, kr_test_name_mangling());
+    failures = _KR_ADD(failures, kr_test_indent());
+    failures = _KR_ADD(failures, kr_test_codegen_state());
+    failures = _KR_ADD(failures, kr_test_preamble());
+    failures = _KR_ADD(failures, kr_test_generate_program());
+    failures = _KR_ADD(failures, kr_test_dedent_floor());
+    if (_KR_EQ(failures, 0)) {
+        kr_puts("All code generator tests passed.");
     }
-    kr_puts(kr_str_concat("sum(0..5)=", kr_fmt_int((int64_t)(intptr_t)(sum))));
-    __auto_type sum2 = 0;
-    for (int64_t j = 1; j < 4; j++) {
-        sum2 = _KR_ADD(sum2, j);
+    else {
+        kr_puts("Code generator tests FAILED.");
     }
-    kr_puts(kr_str_concat("sum(1..4)=", kr_fmt_int((int64_t)(intptr_t)(sum2))));
-    return 0;
+    return failures;
 }
 
 

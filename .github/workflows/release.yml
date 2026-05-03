@@ -1,0 +1,157 @@
+name: Release
+
+# Builds krakenc + bundled clang on Windows / Linux / macOS when a v* tag is
+# pushed, and uploads three release archives to the GitHub release.
+#
+# Manual trigger also supported (workflow_dispatch) for dry-run testing.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write   # needed to create releases
+
+jobs:
+  build:
+    name: ${{ matrix.os_name }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os_name: windows-x64
+            runner: windows-latest
+            archive: zip
+            exe_ext: .exe
+          - os_name: linux-x64
+            runner: ubuntu-latest
+            archive: tar.gz
+            exe_ext: ''
+          - os_name: macos-arm64
+            runner: macos-latest
+            archive: tar.gz
+            exe_ext: ''
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ---------- install LLVM/clang on each runner ----------
+      - name: Install LLVM (Windows)
+        if: matrix.os_name == 'windows-x64'
+        run: |
+          choco install llvm --version=18.1.8 -y
+          echo "C:\Program Files\LLVM\bin" >> $env:GITHUB_PATH
+
+      - name: Install LLVM (Linux)
+        if: matrix.os_name == 'linux-x64'
+        run: |
+          wget -O- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
+          sudo apt-get update
+          sudo apt-get install -y llvm-18 clang-18 lld-18
+          # apt installs as clang-18; symlink so the vendor script and krakenc find it
+          sudo ln -sf /usr/bin/clang-18 /usr/local/bin/clang
+          sudo ln -sf /usr/bin/lld-18 /usr/local/bin/ld.lld
+
+      - name: Install LLVM (macOS)
+        if: matrix.os_name == 'macos-arm64'
+        run: |
+          brew install llvm@18
+          echo "/opt/homebrew/opt/llvm@18/bin" >> $GITHUB_PATH
+
+      # ---------- bootstrap krakenc on this platform ----------
+      # Stage 1 is a Rust build of the sibling kraken compiler. For now, since
+      # kraken (the bootstrap) lives in a sibling repo, we instead use a
+      # checked-in stage1 binary OR rebuild from source if available.
+      #
+      # MVP approach: use an existing krakenc binary committed somewhere, or
+      # fail loudly with instructions. Long-term, vendor a stage1 tarball.
+      #
+      # For v0.1 the README will say "build prerequisites: have stage1 binary
+      # in tools/stage1/krakenc.<ext>". This workflow runs against that.
+
+      - name: Run vendor script (Windows)
+        if: matrix.os_name == 'windows-x64'
+        shell: pwsh
+        run: pwsh tools\vendor-clang.ps1
+
+      - name: Run vendor script (POSIX)
+        if: matrix.os_name != 'windows-x64'
+        run: bash tools/vendor-clang.sh
+
+      # ---------- build stage2 ----------
+      # Assumes a stage1 binary exists at tools/stage1/krakenc<exe_ext>.
+      # If the bootstrap chain isn't ready yet, this step will fail loudly.
+      - name: Bootstrap stage2
+        shell: bash
+        run: |
+          if [ ! -f "tools/stage1/krakenc${{ matrix.exe_ext }}" ]; then
+            echo "::error::tools/stage1/krakenc${{ matrix.exe_ext }} not found."
+            echo "::error::Drop a working stage1 binary there before tagging a release."
+            exit 1
+          fi
+          export KRAKENC_INPUT=src/main.kr
+          export KRAKENC_MODE=emit-c
+          ./tools/stage1/krakenc${{ matrix.exe_ext }}
+          ./tools/llvm/bin/clang${{ matrix.exe_ext }} \
+            -o krakenc${{ matrix.exe_ext }} \
+            src/main.c \
+            -Wno-int-conversion \
+            -D_CRT_SECURE_NO_WARNINGS
+
+      # ---------- run smoke tests ----------
+      - name: Smoke test
+        shell: bash
+        run: |
+          export KRAKENC_INPUT=tests/test_minimal.kr
+          export KRAKENC_MODE=compile-ir
+          ./krakenc${{ matrix.exe_ext }}
+          ./tests/test_minimal${{ matrix.exe_ext }}
+
+      # ---------- assemble release archive ----------
+      - name: Stage release dir
+        shell: bash
+        run: |
+          mkdir -p kraken-release/bin kraken-release/examples
+          cp krakenc${{ matrix.exe_ext }} kraken-release/bin/
+          cp -r tools/llvm kraken-release/llvm
+          cp -r examples/* kraken-release/examples/ 2>/dev/null || true
+          cp README.md LICENSE kraken-release/
+
+      - name: Pack archive (zip)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          $name = "krakenc-${{ github.ref_name }}-${{ matrix.os_name }}.zip"
+          Compress-Archive -Path kraken-release\* -DestinationPath $name
+          echo "ARCHIVE=$name" >> $env:GITHUB_ENV
+
+      - name: Pack archive (tar.gz)
+        if: matrix.archive == 'tar.gz'
+        run: |
+          name="krakenc-${{ github.ref_name }}-${{ matrix.os_name }}.tar.gz"
+          tar czf "$name" -C kraken-release .
+          echo "ARCHIVE=$name" >> $GITHUB_ENV
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: krakenc-${{ matrix.os_name }}
+          path: ${{ env.ARCHIVE }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*/*
+          draft: true
+          generate_release_notes: true

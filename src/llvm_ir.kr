@@ -1,0 +1,2288 @@
+// Kraken Self-Hosted Compiler — LLVM IR Text Backend
+// Emits standard LLVM text IR (.ll) from the token stream produced by the
+// lexer. The output can be compiled directly with:
+//   clang -x ir <file.ll> -o <exe>
+//
+// Design: mirrors the Translator in parser.kr but emits LLVM IR instead of C.
+// Shares the same token SOA layout (int_data / lexemes) and sema registry.
+
+module llvm_ir;
+
+// ---------------------------------------------------------------------------
+// IR Translator state
+// ---------------------------------------------------------------------------
+
+pub struct IrTranslator {
+    pos:      int;
+    count:    int;
+    errors:   int;
+    file:     string;
+    int_data: VecInt;
+    lexemes:  VecString;
+    out:      VecString;     // function body output
+    globals:  VecString;     // module-level globals (string constants etc.)
+    sema:     MapStringString;
+    tmp:      int;       // SSA value counter (%0, %1, ...)
+    lbl:      int;       // label counter (for branches, loops)
+    fn_name:  string;    // current function being translated
+    str_idx:  int;       // global string constant counter
+    terminated: int;     // 1 if current basic block already has a terminator
+}
+
+pub struct IrTranslateResult {
+    success: bool;
+    errors:  int;
+    globals: VecString;
+}
+
+pub fn new_ir_translator(
+    token_count: int,
+    file: string,
+    id: VecInt,
+    lex: VecString,
+    o: VecString,
+    g: VecString
+) -> IrTranslator {
+    let sema = map_string_string_new();
+    // Seed return types for known Kraken stdlib functions
+    map_string_string_set(sema, "fn_ret:str_concat",      "i8*");
+    map_string_string_set(sema, "fn_ret:fmt_int",         "i8*");
+    map_string_string_set(sema, "fn_ret:fmt_float",       "i8*");
+    map_string_string_set(sema, "fn_ret:fmt_bool",        "i8*");
+    map_string_string_set(sema, "fn_ret:fmt_hex",         "i8*");
+    map_string_string_set(sema, "fn_ret:str_len",         "i64");
+    map_string_string_set(sema, "fn_ret:strlen",          "i64");
+    map_string_string_set(sema, "fn_ret:str_slice",       "i8*");
+    map_string_string_set(sema, "fn_ret:str_index_of",    "i64");
+    map_string_string_set(sema, "fn_ret:str_contains",    "i1");
+    map_string_string_set(sema, "fn_ret:str_starts_with", "i1");
+    map_string_string_set(sema, "fn_ret:str_ends_with",   "i1");
+    map_string_string_set(sema, "fn_ret:str_to_lower",    "i8*");
+    map_string_string_set(sema, "fn_ret:str_to_upper",    "i8*");
+    map_string_string_set(sema, "fn_ret:str_trim",        "i8*");
+    map_string_string_set(sema, "fn_ret:str_replace",     "i8*");
+    map_string_string_set(sema, "fn_ret:str_eq",          "i1");
+    map_string_string_set(sema, "fn_ret:str_ne",          "i1");
+    map_string_string_set(sema, "fn_ret:str_char_at",     "i64");
+    map_string_string_set(sema, "fn_ret:atoi",            "i64");
+    map_string_string_set(sema, "fn_ret:atol",            "i64");
+    map_string_string_set(sema, "fn_ret:puts",            "i32");
+    map_string_string_set(sema, "fn_ret:printf",          "i32");
+    map_string_string_set(sema, "fn_ret:sprintf",         "i32");
+    map_string_string_set(sema, "fn_ret:malloc",          "i8*");
+    map_string_string_set(sema, "fn_ret:realloc",         "i8*");
+    map_string_string_set(sema, "fn_ret:strdup",          "i8*");
+    map_string_string_set(sema, "fn_ret:getenv",          "i8*");
+    map_string_string_set(sema, "fn_ret:fopen",           "i8*");
+    map_string_string_set(sema, "fn_ret:fclose",          "i32");
+    map_string_string_set(sema, "fn_ret:fputs",           "i32");
+    map_string_string_set(sema, "fn_ret:system",          "i32");
+    map_string_string_set(sema, "fn_ret:vec_int_new",     "i8*");
+    map_string_string_set(sema, "fn_ret:vec_string_new",  "i8*");
+    map_string_string_set(sema, "fn_ret:vec_int_get",     "i64");
+    map_string_string_set(sema, "fn_ret:vec_string_get",  "i8*");
+    map_string_string_set(sema, "fn_ret:vec_int_len",     "i64");
+    map_string_string_set(sema, "fn_ret:vec_string_len",  "i64");
+    map_string_string_set(sema, "fn_ret:map_string_string_new", "i8*");
+    map_string_string_set(sema, "fn_ret:map_string_int_new",    "i8*");
+    map_string_string_set(sema, "fn_ret:map_string_string_get", "i8*");
+    map_string_string_set(sema, "fn_ret:map_string_int_get",    "i64");
+    map_string_string_set(sema, "fn_ret:map_string_string_has", "i1");
+    map_string_string_set(sema, "fn_ret:map_string_int_has",    "i1");
+    map_string_string_set(sema, "fn_ret:file_read_string",      "i8*");
+    map_string_string_set(sema, "fn_ret:from_cstr",             "i8*");
+    map_string_string_set(sema, "fn_ret:str_split",             "i8*");
+    map_string_string_set(sema, "fn_ret:str_join",              "i8*");
+    map_string_string_set(sema, "fn_ret:str_from_char_code",    "i8*");
+    // C runtime helpers injected via --emit-runtime (not Kraken-defined)
+    map_string_string_set(sema, "fn_ret:detect_host_os",   "i64");
+    map_string_string_set(sema, "fn_ret:detect_host_arch", "i64");
+    return IrTranslator {
+        pos:      0,
+        count:    token_count,
+        errors:   0,
+        file:     file,
+        int_data: id,
+        lexemes:  lex,
+        out:      o,
+        globals:  g,
+        sema:     sema,
+        tmp:      0,
+        lbl:      0,
+        fn_name:  "",
+        str_idx:  0,
+        terminated: 0,
+    };
+}
+
+// ---------------------------------------------------------------------------
+// Token access helpers (same layout as parser.kr)
+// ---------------------------------------------------------------------------
+
+fn ir_at_end(tr: IrTranslator) -> bool {
+    return tr.pos >= tr.count;
+}
+
+fn ir_kind(tr: IrTranslator) -> int {
+    if (tr.pos >= tr.count) { return 0; }
+    return vec_int_get(tr.int_data, tr.pos * 3);
+}
+
+fn ir_lexeme(tr: IrTranslator) -> string {
+    if (tr.pos >= tr.count) { return ""; }
+    return vec_string_get(tr.lexemes, tr.pos);
+}
+
+fn ir_advance(tr: IrTranslator) -> IrTranslator {
+    return IrTranslator {
+        pos:      tr.pos + 1,
+        count:    tr.count,
+        errors:   tr.errors,
+        file:     tr.file,
+        int_data: tr.int_data,
+        lexemes:  tr.lexemes,
+        out:      tr.out,
+        globals:  tr.globals,
+        sema:     tr.sema,
+        tmp:      tr.tmp,
+        lbl:      tr.lbl,
+        fn_name:  tr.fn_name,
+        str_idx:  tr.str_idx,
+        terminated: tr.terminated,
+    };
+}
+
+fn ir_peek_kind(tr: IrTranslator, offset: int) -> int {
+    let p = tr.pos + offset;
+    if (p >= tr.count) { return 0; }
+    return vec_int_get(tr.int_data, p * 3);
+}
+
+fn ir_peek_lexeme(tr: IrTranslator, offset: int) -> string {
+    let p = tr.pos + offset;
+    if (p >= tr.count) { return ""; }
+    return vec_string_get(tr.lexemes, p);
+}
+
+// ---------------------------------------------------------------------------
+// Output helpers
+// ---------------------------------------------------------------------------
+
+fn ir_emit(tr: IrTranslator, s: string) -> void {
+    vec_string_push(tr.out, s);
+}
+
+fn ir_emit_line(tr: IrTranslator, s: string) -> void {
+    vec_string_push(tr.out, str_concat(s, "\n"));
+}
+
+fn ir_emit_indent(tr: IrTranslator, s: string) -> void {
+    vec_string_push(tr.out, str_concat("  ", str_concat(s, "\n")));
+}
+
+// Emit a line into the module-level globals buffer (preamble, string constants).
+fn ir_gline(tr: IrTranslator, s: string) -> void {
+    vec_string_push(tr.globals, str_concat(s, "\n"));
+}
+
+// Allocate a new SSA temporary name like %42
+fn ir_next_tmp(tr: IrTranslator) -> string {
+    let n = tr.tmp;
+    return str_concat("%", fmt_int(n));
+}
+
+fn ir_inc_tmp(tr: IrTranslator) -> IrTranslator {
+    return IrTranslator {
+        pos:      tr.pos,
+        count:    tr.count,
+        errors:   tr.errors,
+        file:     tr.file,
+        int_data: tr.int_data,
+        lexemes:  tr.lexemes,
+        out:      tr.out,
+        globals:  tr.globals,
+        sema:     tr.sema,
+        tmp:      tr.tmp + 1,
+        lbl:      tr.lbl,
+        fn_name:  tr.fn_name,
+        str_idx:  tr.str_idx,
+        terminated: tr.terminated,
+    };
+}
+
+// Allocate a new label like "bb42"
+fn ir_next_lbl(tr: IrTranslator, prefix: string) -> string {
+    return str_concat(prefix, fmt_int(tr.lbl));
+}
+
+fn ir_inc_lbl(tr: IrTranslator) -> IrTranslator {
+    return IrTranslator {
+        pos:      tr.pos,
+        count:    tr.count,
+        errors:   tr.errors,
+        file:     tr.file,
+        int_data: tr.int_data,
+        lexemes:  tr.lexemes,
+        out:      tr.out,
+        globals:  tr.globals,
+        sema:     tr.sema,
+        tmp:      tr.tmp,
+        lbl:      tr.lbl + 1,
+        fn_name:  tr.fn_name,
+        str_idx:  tr.str_idx,
+        terminated: tr.terminated,
+    };
+}
+
+fn ir_set_fn(tr: IrTranslator, name: string) -> IrTranslator {
+    map_string_string_set(tr.sema, "current_fn:", name);
+    return IrTranslator {
+        pos:      tr.pos,
+        count:    tr.count,
+        errors:   tr.errors,
+        file:     tr.file,
+        int_data: tr.int_data,
+        lexemes:  tr.lexemes,
+        out:      tr.out,
+        globals:  tr.globals,
+        sema:     tr.sema,
+        tmp:      0,
+        lbl:      0,
+        fn_name:  name,
+        str_idx:  tr.str_idx,
+        terminated: 0,
+    };
+}
+
+fn ir_error(tr: IrTranslator) -> IrTranslator {
+    return IrTranslator {
+        pos:      tr.pos,
+        count:    tr.count,
+        errors:   tr.errors + 1,
+        file:     tr.file,
+        int_data: tr.int_data,
+        lexemes:  tr.lexemes,
+        out:      tr.out,
+        globals:  tr.globals,
+        sema:     tr.sema,
+        tmp:      tr.tmp,
+        lbl:      tr.lbl,
+        fn_name:  tr.fn_name,
+        str_idx:  tr.str_idx,
+        terminated: tr.terminated,
+    };
+}
+
+fn ir_set_terminated(tr: IrTranslator) -> IrTranslator {
+    return IrTranslator {
+        pos:      tr.pos,
+        count:    tr.count,
+        errors:   tr.errors,
+        file:     tr.file,
+        int_data: tr.int_data,
+        lexemes:  tr.lexemes,
+        out:      tr.out,
+        globals:  tr.globals,
+        sema:     tr.sema,
+        tmp:      tr.tmp,
+        lbl:      tr.lbl,
+        fn_name:  tr.fn_name,
+        str_idx:  tr.str_idx,
+        terminated: 1,
+    };
+}
+
+fn ir_inc_str(tr: IrTranslator) -> IrTranslator {
+    return IrTranslator {
+        pos:      tr.pos,
+        count:    tr.count,
+        errors:   tr.errors,
+        file:     tr.file,
+        int_data: tr.int_data,
+        lexemes:  tr.lexemes,
+        out:      tr.out,
+        globals:  tr.globals,
+        sema:     tr.sema,
+        tmp:      tr.tmp,
+        lbl:      tr.lbl,
+        fn_name:  tr.fn_name,
+        str_idx:  tr.str_idx + 1,
+        terminated: tr.terminated,
+    };
+}
+
+// ---------------------------------------------------------------------------
+// Type mapping — Kraken types to LLVM IR types
+// ---------------------------------------------------------------------------
+
+// Map a Kraken type token kind + lexeme to an LLVM IR type string.
+// Returns "i64" for int, "double" for float, "i1" for bool,
+// "i8*" for string/str, "void" for void, "i8*" for unknown/struct types.
+pub fn kr_type_to_llvm(kind: int, lex: string) -> string {
+    if (kind == TK_KW_INT())    { return "i64"; }
+    if (kind == TK_KW_FLOAT())  { return "double"; }
+    if (kind == TK_KW_BOOL())   { return "i1"; }
+    if (kind == TK_KW_STRING()) { return "i8*"; }
+    if (kind == TK_KW_VOID())   { return "void"; }
+    if (kind == TK_KW_BYTES())  { return "i8*"; }
+    // Structs, enums, opaque types — use i8* (opaque heap pointer, matches C runtime)
+    return "i8*";
+}
+
+// Return the LLVM IR default zero value for a type.
+fn llvm_zero(ty: string) -> string {
+    if (ty == "i64")    { return "0"; }
+    if (ty == "double") { return "0.0"; }
+    if (ty == "i1")     { return "0"; }
+    if (ty == "void")   { return ""; }
+    return "null";  // pointer types
+}
+
+// Return the LLVM add/sub/etc. instruction for a type.
+fn llvm_arith_instr(op: int, ty: string) -> string {
+    let is_float = (ty == "double");
+    // op codes match codegen.kr: 200=+, 201=-, 202=*, 203=/, 204=%
+    if (op == 200) {
+        if (is_float) { return "fadd"; }
+        return "add";
+    }
+    if (op == 201) {
+        if (is_float) { return "fsub"; }
+        return "sub";
+    }
+    if (op == 202) {
+        if (is_float) { return "fmul"; }
+        return "mul";
+    }
+    if (op == 203) {
+        if (is_float) { return "fdiv"; }
+        return "sdiv";
+    }
+    if (op == 204) { return "srem"; }
+    // Bitwise: 214=&, 215=|, 216=^, 218=<<, 219=>>
+    if (op == 214) { return "and"; }
+    if (op == 215) { return "or"; }
+    if (op == 216) { return "xor"; }
+    if (op == 218) { return "shl"; }
+    if (op == 219) { return "ashr"; }
+    return "add";
+}
+
+// Return the LLVM icmp predicate for a comparison op.
+fn llvm_icmp_pred(op: int) -> string {
+    if (op == 205) { return "eq"; }   // ==
+    if (op == 206) { return "ne"; }   // !=
+    if (op == 207) { return "slt"; }  // <
+    if (op == 208) { return "sle"; }  // <=
+    if (op == 209) { return "sgt"; }  // >
+    if (op == 210) { return "sge"; }  // >=
+    return "eq";
+}
+
+// ---------------------------------------------------------------------------
+// Stdlib function declarations for the IR preamble
+// ---------------------------------------------------------------------------
+
+// Emit `declare` lines for all C runtime functions krakenc programs may call.
+fn ir_emit_declarations(tr: IrTranslator) -> void {
+    ir_gline(tr, "declare i32 @puts(i8*)");
+    ir_gline(tr, "declare i32 @printf(i8*, ...)");
+    ir_gline(tr, "declare i64 @strlen(i8*)");
+    ir_gline(tr, "declare i8* @malloc(i64)");
+    ir_gline(tr, "declare void @free(i8*)");
+    ir_gline(tr, "declare i8* @realloc(i8*, i64)");
+    ir_gline(tr, "declare i8* @memcpy(i8*, i8*, i64)");
+    ir_gline(tr, "declare i32 @memcmp(i8*, i8*, i64)");
+    ir_gline(tr, "declare i8* @strcpy(i8*, i8*)");
+    ir_gline(tr, "declare i8* @strcat(i8*, i8*)");
+    ir_gline(tr, "declare i32 @strcmp(i8*, i8*)");
+    ir_gline(tr, "declare i8* @strdup(i8*)");
+    ir_gline(tr, "declare i32 @sprintf(i8*, i8*, ...)");
+    ir_gline(tr, "declare i32 @snprintf(i8*, i64, i8*, ...)");
+    ir_gline(tr, "declare void @exit(i32)");
+    ir_gline(tr, "declare i32 @system(i8*)");
+    ir_gline(tr, "declare i8* @kr_getenv(i8*)");
+    ir_gline(tr, "declare i8* @fopen(i8*, i8*)");
+    ir_gline(tr, "declare i32 @fclose(i8*)");
+    ir_gline(tr, "declare i64 @fread(i8*, i64, i64, i8*)");
+    ir_gline(tr, "declare i64 @fwrite(i8*, i64, i64, i8*)");
+    ir_gline(tr, "declare i32 @fputs(i8*, i8*)");
+    ir_gline(tr, "declare i64 @fseek(i8*, i64, i32)");
+    ir_gline(tr, "declare i64 @ftell(i8*)");
+    ir_gline(tr, "declare i64 @atol(i8*)");
+    ir_gline(tr, "declare double @atof(i8*)");
+    ir_gline(tr, "declare double @sqrt(double)");
+    ir_gline(tr, "declare double @pow(double, double)");
+    ir_gline(tr, "declare double @floor(double)");
+    ir_gline(tr, "declare double @ceil(double)");
+    ir_gline(tr, "declare double @fabs(double)");
+    ir_gline(tr, "");
+    ir_gline(tr, "; Kraken runtime functions");
+    ir_gline(tr, "declare i8* @kr_str_concat(i8*, i8*)");
+    ir_gline(tr, "declare i64 @kr_strlen(i8*)");
+    ir_gline(tr, "declare i8* @kr_fmt_int(i64)");
+    ir_gline(tr, "declare i8* @kr_fmt_float(double)");
+    ir_gline(tr, "declare i8* @kr_fmt_bool(i1)");
+    ir_gline(tr, "declare i1 @kr_str_eq(i8*, i8*)");
+    ir_gline(tr, "declare i1 @kr_str_ne(i8*, i8*)");
+    ir_gline(tr, "declare i8* @kr_str_slice(i8*, i64, i64)");
+    ir_gline(tr, "declare i64 @kr_str_index_of(i8*, i8*)");
+    ir_gline(tr, "declare i1 @kr_str_contains(i8*, i8*)");
+    ir_gline(tr, "declare i1 @kr_str_starts_with(i8*, i8*)");
+    ir_gline(tr, "declare i1 @kr_str_ends_with(i8*, i8*)");
+    ir_gline(tr, "declare i8* @kr_str_to_lower(i8*)");
+    ir_gline(tr, "declare i8* @kr_str_to_upper(i8*)");
+    ir_gline(tr, "declare i8* @kr_str_trim(i8*)");
+    ir_gline(tr, "declare i64 @kr_str_len(i8*)");
+    ir_gline(tr, "declare i8* @kr_str_replace(i8*, i8*, i8*)");
+    ir_gline(tr, "declare i64 @kr_atoi(i8*)");
+    ir_gline(tr, "declare double @kr_atof(i8*)");
+    ir_gline(tr, "declare i8* @kr_from_cstr(i8*)");
+    ir_gline(tr, "declare i8* @kr_cstr(i8*)");
+    ir_gline(tr, "declare i8* @kr_vec_int_new()");
+    ir_gline(tr, "declare void @kr_vec_int_free(i8*)");
+    ir_gline(tr, "declare void @kr_vec_int_push(i8*, i64)");
+    ir_gline(tr, "declare i64 @kr_vec_int_get(i8*, i64)");
+    ir_gline(tr, "declare void @kr_vec_int_set(i8*, i64, i64)");
+    ir_gline(tr, "declare i64 @kr_vec_int_len(i8*)");
+    ir_gline(tr, "declare i8* @kr_vec_string_new()");
+    ir_gline(tr, "declare void @kr_vec_string_free(i8*)");
+    ir_gline(tr, "declare void @kr_vec_string_push(i8*, i8*)");
+    ir_gline(tr, "declare i8* @kr_vec_string_get(i8*, i64)");
+    ir_gline(tr, "declare void @kr_vec_string_set(i8*, i64, i8*)");
+    ir_gline(tr, "declare i64 @kr_vec_string_len(i8*)");
+    ir_gline(tr, "declare i8* @kr_map_string_string_new()");
+    ir_gline(tr, "declare void @kr_map_string_string_free(i8*)");
+    ir_gline(tr, "declare void @kr_map_string_string_set(i8*, i8*, i8*)");
+    ir_gline(tr, "declare i8* @kr_map_string_string_get(i8*, i8*)");
+    ir_gline(tr, "declare i1 @kr_map_string_string_has(i8*, i8*)");
+    ir_gline(tr, "declare i8* @kr_map_string_int_new()");
+    ir_gline(tr, "declare void @kr_map_string_int_free(i8*)");
+    ir_gline(tr, "declare void @kr_map_string_int_set(i8*, i8*, i64)");
+    ir_gline(tr, "declare i64 @kr_map_string_int_get(i8*, i8*)");
+    ir_gline(tr, "declare i1 @kr_map_string_int_has(i8*, i8*)");
+    // C helpers injected by --emit-runtime (not Kraken functions)
+    ir_gline(tr, "declare i64 @kr_detect_host_os()");
+    ir_gline(tr, "declare i64 @kr_detect_host_arch()");
+    ir_gline(tr, "declare i8* @kr_file_read_string(i8*)");
+    ir_gline(tr, "declare i8* @kr_str_split(i8*, i8*)");
+    ir_gline(tr, "declare i8* @kr_str_join(i8*, i8*)");
+    ir_gline(tr, "declare i64 @kr_str_char_at(i8*, i64)");
+    ir_gline(tr, "declare i8* @kr_str_from_char_code(i64)");
+}
+
+// ---------------------------------------------------------------------------
+// Module preamble
+// ---------------------------------------------------------------------------
+
+fn ir_emit_preamble(tr: IrTranslator, target: Target) -> void {
+    ir_gline(tr, "; Generated by krakenc — Kraken Self-Hosted Compiler");
+    ir_gline(tr, str_concat("; Source: ", tr.file));
+    ir_gline(tr, "");
+    let triple = format_target(target);
+    ir_gline(tr, str_concat("target triple = \"", str_concat(triple, "\"")));
+    ir_gline(tr, "");
+    ir_emit_declarations(tr);
+    ir_gline(tr, "");
+}
+
+// ---------------------------------------------------------------------------
+// Skip helpers — advance past constructs without emitting
+// (mirrors parser.kr skip_ functions)
+// ---------------------------------------------------------------------------
+
+fn ir_skip_to_end_of_line(tr: IrTranslator) -> IrTranslator {
+    while (!ir_at_end(tr) && ir_kind(tr) != TK_SEMICOLON()) {
+        tr = ir_advance(tr);
+    }
+    if (!ir_at_end(tr)) { tr = ir_advance(tr); }
+    return tr;
+}
+
+fn ir_skip_block(tr: IrTranslator) -> IrTranslator {
+    // Expects to be called with tr pointing at '{' or just past keyword.
+    // Advances past matching '{' ... '}'.
+    let depth = 0;
+    while (!ir_at_end(tr)) {
+        let k = ir_kind(tr);
+        if (k == TK_LBRACE()) { depth = depth + 1; }
+        if (k == TK_RBRACE()) {
+            depth = depth - 1;
+            if (depth <= 0) {
+                tr = ir_advance(tr);
+                return tr;
+            }
+        }
+        tr = ir_advance(tr);
+    }
+    return tr;
+}
+
+fn ir_skip_parens(tr: IrTranslator) -> IrTranslator {
+    let depth = 0;
+    while (!ir_at_end(tr)) {
+        let k = ir_kind(tr);
+        if (k == TK_LPAREN()) { depth = depth + 1; }
+        if (k == TK_RPAREN()) {
+            depth = depth - 1;
+            if (depth <= 0) {
+                tr = ir_advance(tr);
+                return tr;
+            }
+        }
+        tr = ir_advance(tr);
+    }
+    return tr;
+}
+
+fn ir_skip_generic_params(tr: IrTranslator) -> IrTranslator {
+    if (ir_at_end(tr)) { return tr; }
+    if (ir_kind(tr) != TK_OP_LT()) { return tr; }
+    let depth = 1;
+    tr = ir_advance(tr);
+    while (!ir_at_end(tr) && depth > 0) {
+        let k = ir_kind(tr);
+        if (k == TK_OP_LT()) { depth = depth + 1; }
+        if (k == TK_OP_GT()) { depth = depth - 1; }
+        tr = ir_advance(tr);
+    }
+    return tr;
+}
+
+// Skip a type annotation (after ':'): handles generics, arrays, fn types, tuples.
+fn ir_skip_type(tr: IrTranslator) -> IrTranslator {
+    if (ir_at_end(tr)) { return tr; }
+    let k = ir_kind(tr);
+    // Array type: [T]
+    if (k == TK_LBRACKET()) {
+        tr = ir_advance(tr);
+        while (!ir_at_end(tr) && ir_kind(tr) != TK_RBRACKET()) {
+            tr = ir_advance(tr);
+        }
+        if (!ir_at_end(tr)) { tr = ir_advance(tr); }
+        return tr;
+    }
+    // Tuple type: (T, U, ...)
+    if (k == TK_LPAREN()) {
+        tr = ir_skip_parens(tr);
+        return tr;
+    }
+    // fn type: fn(...) -> T
+    if (k == TK_KW_FN()) {
+        tr = ir_advance(tr);
+        if (!ir_at_end(tr) && ir_kind(tr) == TK_LPAREN()) {
+            tr = ir_skip_parens(tr);
+        }
+        if (!ir_at_end(tr) && ir_kind(tr) == TK_ARROW()) {
+            tr = ir_advance(tr);
+            tr = ir_skip_type(tr);
+        }
+        return tr;
+    }
+    // Normal type identifier, possibly generic
+    tr = ir_advance(tr);
+    tr = ir_skip_generic_params(tr);
+    // Pointer suffix *
+    if (!ir_at_end(tr) && ir_kind(tr) == TK_OP_STAR()) {
+        tr = ir_advance(tr);
+    }
+    return tr;
+}
+
+// ---------------------------------------------------------------------------
+// String literal helpers
+// ---------------------------------------------------------------------------
+
+// Convert a Kraken source string literal (with C-style escapes) to an LLVM IR
+// string body using \XX hex escapes. Returns the converted body (without quotes).
+// Also sets *out_len to the number of actual bytes (excluding null terminator).
+// LLVM c"..." syntax: printable ASCII stays as-is, everything else uses \XX.
+fn ir_escape_string(s: string) -> string {
+    let len = strlen(s);
+    let result = "";
+    let i = 0;
+    while (i < len) {
+        let ch = str_char_at(s, i);
+        if (ch == 92 && i + 1 < len) { // backslash — check escape sequence
+            let next = str_char_at(s, i + 1);
+            if (next == 110) {  // \n → \0A
+                result = str_concat(result, "\\0A");
+            } else {
+                if (next == 116) { // \t → \09
+                    result = str_concat(result, "\\09");
+                } else {
+                    if (next == 114) { // \r → \0D
+                        result = str_concat(result, "\\0D");
+                    } else {
+                        if (next == 92) { // \\ → \5C
+                            result = str_concat(result, "\\5C");
+                        } else {
+                            if (next == 34) { // \" → \22
+                                result = str_concat(result, "\\22");
+                            } else {
+                                if (next == 48) { // \0 → \00
+                                    result = str_concat(result, "\\00");
+                                } else {
+                                    // Unknown escape: emit backslash + char as-is
+                                    result = str_concat(result, "\\");
+                                    result = str_concat(result, str_slice(s, i + 1, i + 2));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            i = i + 2;
+        } else {
+            if (ch == 34) { // literal " → \22
+                result = str_concat(result, "\\22");
+            } else {
+                result = str_concat(result, str_slice(s, i, i + 1));
+            }
+            i = i + 1;
+        }
+    }
+    return result;
+}
+
+// Count the actual byte length of a Kraken string literal (after escape resolution).
+// Includes the null terminator.
+fn ir_string_byte_len(s: string) -> int {
+    let len = strlen(s);
+    let count = 1; // null terminator
+    let i = 0;
+    while (i < len) {
+        let ch = str_char_at(s, i);
+        if (ch == 92 && i + 1 < len) { // backslash escape sequence = 1 byte
+            count = count + 1;
+            i = i + 2;
+        } else {
+            count = count + 1;
+            i = i + 1;
+        }
+    }
+    return count;
+}
+
+// Intern a string literal: emit a global constant into tr.globals and return its name.
+// Returns the global name like @.str_0
+fn ir_intern_string(tr: IrTranslator, value: string) -> string {
+    let name = str_concat("@.str_", fmt_int(tr.str_idx));
+    let nbytes = ir_string_byte_len(value);
+    let escaped = ir_escape_string(value);
+    // Emit: @.str_N = private unnamed_addr constant [N x i8] c"...\00"
+    let decl = str_concat(name, str_concat(
+        " = private unnamed_addr constant [",
+        str_concat(fmt_int(nbytes), str_concat(
+            " x i8] c\"",
+            str_concat(escaped, "\\00\"")))
+    ));
+    vec_string_push(tr.globals, str_concat(decl, "\n"));
+    return name;
+}
+
+// ---------------------------------------------------------------------------
+// Expression emission — returns (tr, result_reg)
+// result_reg is the SSA register holding the value, or an inline literal.
+// ---------------------------------------------------------------------------
+
+pub struct IrExprResult {
+    tr:  IrTranslator;
+    reg: string;    // SSA name (%N) or inline literal ("42", "0.0", "null")
+    ty:  string;    // LLVM type of the result
+}
+
+fn ir_expr_result(tr: IrTranslator, reg: string, ty: string) -> IrExprResult {
+    return IrExprResult { tr: tr, reg: reg, ty: ty };
+}
+
+// Emit code to load a named variable and return the loaded SSA value.
+fn ir_load_var(tr: IrTranslator, name: string, ty: string) -> IrExprResult {
+    let ptr_reg = str_concat("%", name);
+    let val_reg = ir_next_tmp(tr);
+    tr = ir_inc_tmp(tr);
+    let instr = str_concat(val_reg, str_concat(
+        " = load ", str_concat(ty, str_concat(
+            ", ", str_concat(ty, str_concat("* ", ptr_reg))))));
+    ir_emit_indent(tr, instr);
+    return ir_expr_result(tr, val_reg, ty);
+}
+
+// Look up the LLVM type of a local variable from sema.
+fn ir_var_type(tr: IrTranslator, name: string) -> string {
+    let key = str_concat("vtype:", name);
+    let ty = map_string_string_get(tr.sema, key);
+    if (ty == "") { return "i64"; } // default
+    return ty;
+}
+
+// Store the LLVM type of a local variable in sema.
+fn ir_set_var_type(tr: IrTranslator, name: string, ty: string) -> IrTranslator {
+    let key = str_concat("vtype:", name);
+    map_string_string_set(tr.sema, key, ty);
+    return tr;
+}
+
+// Emit an expression and return (tr, reg, type).
+// Handles: int literals, float literals, bool literals, string literals,
+// identifiers (variable loads), binary ops, unary ops, function calls.
+// For complex expressions not yet supported, emits i64 0 as a safe fallback.
+fn ir_emit_expr(tr: IrTranslator, str_count: int) -> IrExprResult {
+    if (ir_at_end(tr)) {
+        return ir_expr_result(tr, "0", "i64");
+    }
+    let k = ir_kind(tr);
+    let lex = ir_lexeme(tr);
+
+    // Integer literal
+    if (k == TK_INT_LIT()) {
+        tr = ir_advance(tr);
+        return ir_expr_result(tr, lex, "i64");
+    }
+
+    // Float literal
+    if (k == TK_FLOAT_LIT()) {
+        tr = ir_advance(tr);
+        return ir_expr_result(tr, lex, "double");
+    }
+
+    // Bool literal
+    if (k == TK_KW_TRUE()) {
+        tr = ir_advance(tr);
+        return ir_expr_result(tr, "1", "i1");
+    }
+    if (k == TK_KW_FALSE()) {
+        tr = ir_advance(tr);
+        return ir_expr_result(tr, "0", "i1");
+    }
+
+    // String literal — intern as global, return i8* GEP
+    if (k == TK_STRING_LIT()) {
+        tr = ir_advance(tr);
+        let gname = ir_intern_string(tr, lex);
+        tr = ir_inc_str(tr);
+        let nbytes = ir_string_byte_len(lex);
+        let gep_reg = ir_next_tmp(tr);
+        tr = ir_inc_tmp(tr);
+        let gep = str_concat(gep_reg, str_concat(
+            " = getelementptr [",
+            str_concat(fmt_int(nbytes), str_concat(
+                " x i8], [",
+                str_concat(fmt_int(nbytes), str_concat(
+                    " x i8]* ",
+                    str_concat(gname, ", i32 0, i32 0")))))));
+        ir_emit_indent(tr, gep);
+        return ir_expr_result(tr, gep_reg, "i8*");
+    }
+
+    // Parenthesised expression
+    if (k == TK_LPAREN()) {
+        tr = ir_advance(tr);
+        let inner = ir_emit_full_expr(tr, str_count);
+        tr = inner.tr;
+        if (!ir_at_end(tr) && ir_kind(tr) == TK_RPAREN()) {
+            tr = ir_advance(tr);
+        }
+        return ir_expr_result(tr, inner.reg, inner.ty);
+    }
+
+    // Bitwise NOT (~) — binds to a primary, not a full expression
+    if (k == TK_OP_BIT_NOT()) {
+        tr = ir_advance(tr);
+        let operand = ir_emit_expr(tr, str_count);
+        tr = operand.tr;
+        let res = ir_next_tmp(tr);
+        tr = ir_inc_tmp(tr);
+        ir_emit_indent(tr, str_concat(res, str_concat(" = xor i64 ", str_concat(operand.reg, ", -1"))));
+        return ir_expr_result(tr, res, "i64");
+    }
+
+    // Unary minus — binds to a primary
+    if (k == TK_OP_MINUS()) {
+        tr = ir_advance(tr);
+        let operand = ir_emit_expr(tr, str_count);
+        tr = operand.tr;
+        let res = ir_next_tmp(tr);
+        tr = ir_inc_tmp(tr);
+        let instr = "";
+        if (operand.ty == "double") {
+            instr = str_concat(res, str_concat(" = fneg double ", operand.reg));
+        } else {
+            instr = str_concat(res, str_concat(" = sub i64 0, ", operand.reg));
+        }
+        ir_emit_indent(tr, instr);
+        return ir_expr_result(tr, res, operand.ty);
+    }
+
+    // Logical not — binds to a primary so `!a && b` parses as `(!a) && b`
+    if (k == TK_OP_NOT()) {
+        tr = ir_advance(tr);
+        let operand = ir_emit_expr(tr, str_count);
+        tr = operand.tr;
+        let res = ir_next_tmp(tr);
+        tr = ir_inc_tmp(tr);
+        ir_emit_indent(tr, str_concat(res, str_concat(" = xor i1 ", str_concat(operand.reg, ", 1"))));
+        return ir_expr_result(tr, res, "i1");
+    }
+
+    // Identifier — could be a variable load or a function call
+    if (k == TK_IDENTIFIER()) {
+        let name = lex;
+        tr = ir_advance(tr);
+
+        // Function call: name(args...)
+        if (!ir_at_end(tr) && ir_kind(tr) == TK_LPAREN()) {
+            return ir_emit_call(tr, name, str_count);
+        }
+
+        // Struct literal: Name { field: value, ... }
+        // Disambiguate from a block by checking for IDENTIFIER ':' inside the braces.
+        if (!ir_at_end(tr) && ir_kind(tr) == TK_LBRACE()) {
+            let pk1 = tr.pos + 1;
+            let is_struct_lit = 0;
+            if (pk1 < tr.count) {
+                let k1 = vec_int_get(tr.int_data, pk1 * 3);
+                if (k1 == TK_RBRACE()) { is_struct_lit = 1; }
+                if (k1 == TK_IDENTIFIER()) {
+                    let pk2 = pk1 + 1;
+                    if (pk2 < tr.count) {
+                        let k2 = vec_int_get(tr.int_data, pk2 * 3);
+                        if (k2 == TK_COLON()) { is_struct_lit = 1; }
+                    }
+                }
+            }
+            if (is_struct_lit == 1) {
+                // Emit the struct literal by calling the runtime constructor kr_<Name>_new(fields...)
+                // Collect field values in order, then emit as a call.
+                let ctor_name = str_concat("kr_", str_concat(name, "_new"));
+                tr = ir_advance(tr); // '{'
+                let arg_regs2: VecString = vec_string_new();
+                let arg_tys2: VecString = vec_string_new();
+                while (!ir_at_end(tr) && ir_kind(tr) != TK_RBRACE()) {
+                    if (ir_kind(tr) == TK_COMMA()) { tr = ir_advance(tr); continue; }
+                    // field name + ':' + value
+                    tr = ir_advance(tr); // field name
+                    if (!ir_at_end(tr) && ir_kind(tr) == TK_COLON()) {
+                        tr = ir_advance(tr); // ':'
+                    }
+                    let fval = ir_emit_full_expr(tr, 0);
+                    tr = fval.tr;
+                    vec_string_push(arg_regs2, fval.reg);
+                    vec_string_push(arg_tys2, fval.ty);
+                }
+                if (!ir_at_end(tr)) { tr = ir_advance(tr); } // '}'
+                let args_s = "";
+                let ni = 0;
+                let nn = vec_string_len(arg_regs2);
+                while (ni < nn) {
+                    if (ni > 0) { args_s = str_concat(args_s, ", "); }
+                    let at = vec_string_get(arg_tys2, ni);
+                    let ar = vec_string_get(arg_regs2, ni);
+                    args_s = str_concat(args_s, str_concat(at, str_concat(" ", ar)));
+                    ni = ni + 1;
+                }
+                vec_string_free(arg_regs2);
+                vec_string_free(arg_tys2);
+                let res2 = ir_next_tmp(tr);
+                tr = ir_inc_tmp(tr);
+                ir_emit_indent(tr, str_concat(res2, str_concat(
+                    " = call i8* @", str_concat(ctor_name, str_concat("(", str_concat(args_s, ")"))))));
+                return ir_expr_result(tr, res2, "i8*");
+            }
+        }
+
+        // Dot: field access (name.field) or method call (name.method(...))
+        if (!ir_at_end(tr) && ir_kind(tr) == TK_DOT()) {
+            tr = ir_advance(tr); // '.'
+            let member = ir_lexeme(tr);
+            tr = ir_advance(tr); // member name
+            if (!ir_at_end(tr) && ir_kind(tr) == TK_LPAREN()) {
+                // Method call — skip args, return 0 placeholder
+                tr = ir_skip_parens(tr);
+                return ir_expr_result(tr, "0", "i64");
+            }
+            // Field access: look up struct type for 'name', find field index, GEP+load
+            let vtype_key = str_concat("vtype:", name);
+            let struct_ty = map_string_string_get(tr.sema, vtype_key);
+            // struct_ty is "i8*" — need the struct name from a separate vtype_struct: key
+            let stype_key = str_concat("vtype_struct:", name);
+            let struct_name = map_string_string_get(tr.sema, stype_key);
+            if (struct_name != "") {
+                // Find field index in struct:Name:N:name
+                let fidx = -1;
+                let fcount_s = map_string_string_get(tr.sema, str_concat("struct:", str_concat(struct_name, ":count")));
+                let fcount = atoi(fcount_s);
+                let fty_found = "i64";
+                let si = 0;
+                while (si < fcount) {
+                    let si_str = fmt_int(si);
+                    let fn_key = str_concat("struct:", str_concat(struct_name, str_concat(":", str_concat(si_str, ":name"))));
+                    let fn_val = map_string_string_get(tr.sema, fn_key);
+                    if (fn_val == member) {
+                        fidx = si;
+                        fty_found = map_string_string_get(tr.sema, str_concat("struct:", str_concat(struct_name, str_concat(":", str_concat(si_str, ":type")))));
+                        si = fcount; // break
+                    }
+                    si = si + 1;
+                }
+                if (fidx >= 0) {
+                    // Load the struct pointer
+                    let ptr_r = ir_next_tmp(tr); tr = ir_inc_tmp(tr);
+                    ir_emit_indent(tr, str_concat(ptr_r, str_concat(" = load i8*, i8** %", name)));
+                    // GEP to field offset
+                    let off = fidx * 8;
+                    let gep_r = ir_next_tmp(tr); tr = ir_inc_tmp(tr);
+                    ir_emit_indent(tr, str_concat(gep_r, str_concat(" = getelementptr i8, i8* ", str_concat(ptr_r, str_concat(", i64 ", fmt_int(off))))));
+                    // Bitcast to field type ptr
+                    let bc_r = ir_next_tmp(tr); tr = ir_inc_tmp(tr);
+                    ir_emit_indent(tr, str_concat(bc_r, str_concat(" = bitcast i8* ", str_concat(gep_r, str_concat(" to ", str_concat(fty_found, "*"))))));
+                    // Load field value
+                    let val_r = ir_next_tmp(tr); tr = ir_inc_tmp(tr);
+                    ir_emit_indent(tr, str_concat(val_r, str_concat(" = load ", str_concat(fty_found, str_concat(", ", str_concat(fty_found, str_concat("* ", bc_r)))))));
+                    return ir_expr_result(tr, val_r, fty_found);
+                }
+            }
+            // Unknown field — return 0
+            return ir_expr_result(tr, "0", "i64");
+        }
+
+        // Variable load
+        let ty = ir_var_type(tr, name);
+        let r = ir_load_var(tr, name, ty);
+        return ir_expr_result(r.tr, r.reg, r.ty);
+    }
+
+    // Binary expression emitted after a primary — handled by ir_emit_binary_expr
+    // Fallback: emit 0
+    tr = ir_advance(tr);
+    return ir_expr_result(tr, "0", "i64");
+}
+
+// Emit a binary expression: lhs OP rhs.
+// Caller passes in the already-emitted lhs result and the operator token.
+fn ir_emit_binop(tr: IrTranslator, lhs_reg: string, lhs_ty: string, op: int, str_count: int) -> IrExprResult {
+    let rhs = ir_emit_expr(tr, str_count);
+    tr = rhs.tr;
+
+    // String equality: use kr_str_eq / kr_str_ne (icmp on i8* compares pointers, not contents)
+    if ((op == 205 || op == 206) && lhs_ty == "i8*") {
+        let res = ir_next_tmp(tr);
+        tr = ir_inc_tmp(tr);
+        let fname = "@kr_str_eq";
+        if (op == 206) { fname = "@kr_str_ne"; }
+        let instr = str_concat(res, str_concat(
+            " = call i1 ", str_concat(fname, str_concat(
+                "(i8* ", str_concat(lhs_reg, str_concat(", i8* ", str_concat(rhs.reg, ")")))))));
+        ir_emit_indent(tr, instr);
+        return ir_expr_result(tr, res, "i1");
+    }
+
+    // Comparison ops return i1
+    if (op == 205 || op == 206 || op == 207 || op == 208 || op == 209 || op == 210) {
+        let res = ir_next_tmp(tr);
+        tr = ir_inc_tmp(tr);
+        let pred = llvm_icmp_pred(op);
+        let instr = str_concat(res, str_concat(
+            " = icmp ", str_concat(pred, str_concat(
+                " ", str_concat(lhs_ty, str_concat(
+                    " ", str_concat(lhs_reg, str_concat(", ", rhs.reg))))))));
+        ir_emit_indent(tr, instr);
+        return ir_expr_result(tr, res, "i1");
+    }
+
+    // Logical ops: && -> and i1, || -> or i1
+    if (op == 211) {
+        let res = ir_next_tmp(tr);
+        tr = ir_inc_tmp(tr);
+        ir_emit_indent(tr, str_concat(res, str_concat(" = and i1 ", str_concat(lhs_reg, str_concat(", ", rhs.reg)))));
+        return ir_expr_result(tr, res, "i1");
+    }
+    if (op == 212) {
+        let res = ir_next_tmp(tr);
+        tr = ir_inc_tmp(tr);
+        ir_emit_indent(tr, str_concat(res, str_concat(" = or i1 ", str_concat(lhs_reg, str_concat(", ", rhs.reg)))));
+        return ir_expr_result(tr, res, "i1");
+    }
+
+    // Arithmetic / bitwise
+    let instr_name = llvm_arith_instr(op, lhs_ty);
+    let res = ir_next_tmp(tr);
+    tr = ir_inc_tmp(tr);
+    let instr = str_concat(res, str_concat(
+        " = ", str_concat(instr_name, str_concat(
+            " ", str_concat(lhs_ty, str_concat(
+                " ", str_concat(lhs_reg, str_concat(", ", rhs.reg))))))));
+    ir_emit_indent(tr, instr);
+    return ir_expr_result(tr, res, lhs_ty);
+}
+
+// Build a binary-op instruction string: "%res = op type %lhs, %rhs"
+// Both operands are already SSA values. Returns the instruction string (not emitted).
+fn ir_build_binop_instr(res: string, lhs_reg: string, lhs_ty: string, op: int, rhs_reg: string, rhs_ty: string) -> string {
+    // Use rhs type for type inference if lhs is i1 (from prior comparison)
+    let eff_ty = lhs_ty;
+    if (eff_ty == "i1" && rhs_ty != "i1") { eff_ty = rhs_ty; }
+    // String equality: use kr_str_eq / kr_str_ne (icmp on i8* compares pointers, not contents)
+    if ((op == 205 || op == 206) && eff_ty == "i8*") {
+        let fname = "@kr_str_eq";
+        if (op == 206) { fname = "@kr_str_ne"; }
+        return str_concat(res, str_concat(" = call i1 ", str_concat(fname, str_concat(
+            "(i8* ", str_concat(lhs_reg, str_concat(", i8* ", str_concat(rhs_reg, ")")))))));
+    }
+    // Comparison ops
+    if (op == 205 || op == 206 || op == 207 || op == 208 || op == 209 || op == 210) {
+        let pred = llvm_icmp_pred(op);
+        return str_concat(res, str_concat(" = icmp ", str_concat(pred, str_concat(
+            " ", str_concat(eff_ty, str_concat(" ", str_concat(lhs_reg, str_concat(", ", rhs_reg))))))));
+    }
+    // Logical: && -> and i1, || -> or i1
+    if (op == 211) {
+        return str_concat(res, str_concat(" = and i1 ", str_concat(lhs_reg, str_concat(", ", rhs_reg))));
+    }
+    if (op == 212) {
+        return str_concat(res, str_concat(" = or i1 ", str_concat(lhs_reg, str_concat(", ", rhs_reg))));
+    }
+    // Arithmetic / bitwise
+    let instr_name = llvm_arith_instr(op, eff_ty);
+    return str_concat(res, str_concat(" = ", str_concat(instr_name, str_concat(
+        " ", str_concat(eff_ty, str_concat(" ", str_concat(lhs_reg, str_concat(", ", rhs_reg))))))));
+}
+
+// Return the precedence level for a binary operator token kind.
+// Higher value = tighter binding. Returns 0 if not a binary operator.
+fn ir_op_prec(k: int) -> int {
+    if (k == TK_OP_STAR() || k == TK_OP_SLASH() || k == TK_OP_PERCENT()) { return 60; }
+    if (k == TK_OP_PLUS() || k == TK_OP_MINUS()) { return 50; }
+    if (k == TK_OP_LSHIFT() || k == TK_OP_RSHIFT()) { return 40; }
+    if (k == TK_OP_LT() || k == TK_OP_LTE() || k == TK_OP_GT() || k == TK_OP_GTE()) { return 30; }
+    if (k == TK_OP_EQ() || k == TK_OP_NEQ()) { return 20; }
+    if (k == TK_OP_BIT_AND()) { return 17; }
+    if (k == TK_OP_BIT_XOR()) { return 16; }
+    if (k == TK_OP_BIT_OR())  { return 15; }
+    if (k == TK_OP_AND())     { return 10; }
+    if (k == TK_OP_OR())      { return 5; }
+    return 0;
+}
+
+// Map a binary operator token kind to op code.
+fn ir_op_code(k: int) -> int {
+    if (k == TK_OP_PLUS())    { return 200; }
+    if (k == TK_OP_MINUS())   { return 201; }
+    if (k == TK_OP_STAR())    { return 202; }
+    if (k == TK_OP_SLASH())   { return 203; }
+    if (k == TK_OP_PERCENT()) { return 204; }
+    if (k == TK_OP_EQ())      { return 205; }
+    if (k == TK_OP_NEQ())     { return 206; }
+    if (k == TK_OP_LT())      { return 207; }
+    if (k == TK_OP_LTE())     { return 208; }
+    if (k == TK_OP_GT())      { return 209; }
+    if (k == TK_OP_GTE())     { return 210; }
+    if (k == TK_OP_AND())     { return 211; }
+    if (k == TK_OP_OR())      { return 212; }
+    if (k == TK_OP_BIT_AND()) { return 214; }
+    if (k == TK_OP_BIT_OR())  { return 215; }
+    if (k == TK_OP_BIT_XOR()) { return 216; }
+    if (k == TK_OP_LSHIFT())  { return 218; }
+    if (k == TK_OP_RSHIFT())  { return 219; }
+    return 0;
+}
+
+// Precedence-climbing expression parser.
+// Parses a primary, then repeatedly folds in right-hand-side sub-expressions
+// whose operator precedence is >= min_prec.
+pub fn ir_emit_full_expr(tr: IrTranslator, str_count: int) -> IrExprResult {
+    return ir_prec_expr(tr, str_count, 1);
+}
+
+fn ir_prec_expr(tr: IrTranslator, str_count: int, min_prec: int) -> IrExprResult {
+    let primary = ir_emit_expr(tr, str_count);
+    tr = primary.tr;
+    let reg = primary.reg;
+    let ty = primary.ty;
+
+    while (!ir_at_end(tr)) {
+        let k = ir_kind(tr);
+        let prec = ir_op_prec(k);
+        if (prec < min_prec) { break; }
+        let op = ir_op_code(k);
+        tr = ir_advance(tr); // consume operator
+        // Parse RHS with higher precedence (left-associative: prec+1)
+        let rhs = ir_prec_expr(tr, str_count, prec + 1);
+        tr = rhs.tr;
+        // If LHS is i1 but RHS is wider, zero-extend LHS to match RHS type
+        if (ty == "i1" && rhs.ty != "i1" && rhs.ty != "" && rhs.ty != "void") {
+            let zext_res = ir_next_tmp(tr); tr = ir_inc_tmp(tr);
+            ir_emit_indent(tr, str_concat(zext_res, str_concat(" = zext i1 ", str_concat(reg, str_concat(" to ", rhs.ty)))));
+            reg = zext_res;
+            ty = rhs.ty;
+        }
+        // If RHS is i1 but LHS is wider, zero-extend RHS to match LHS type
+        let rhs_reg = rhs.reg;
+        let rhs_ty2 = rhs.ty;
+        if (rhs_ty2 == "i1" && ty != "i1" && ty != "" && ty != "void") {
+            let zext_res2 = ir_next_tmp(tr); tr = ir_inc_tmp(tr);
+            ir_emit_indent(tr, str_concat(zext_res2, str_concat(" = zext i1 ", str_concat(rhs_reg, str_concat(" to ", ty)))));
+            rhs_reg = zext_res2;
+            rhs_ty2 = ty;
+        }
+        // Emit the binary operation
+        let res = ir_next_tmp(tr);
+        tr = ir_inc_tmp(tr);
+        let instr = ir_build_binop_instr(res, reg, ty, op, rhs_reg, rhs_ty2);
+        ir_emit_indent(tr, instr);
+        // Result type: comparisons and logical produce i1; arithmetic/bitwise keep type
+        if (op >= 205 && op <= 212) {
+            ty = "i1";
+        }
+        reg = res;
+    }
+
+    return ir_expr_result(tr, reg, ty);
+}
+
+// Emit a function call: name(arg0, arg1, ...) already consumed name, at '('
+fn ir_emit_call(tr: IrTranslator, name: string, str_count: int) -> IrExprResult {
+    tr = ir_advance(tr); // consume '('
+
+    // Collect argument registers and types
+    let arg_regs: VecString = vec_string_new();
+    let arg_tys: VecString = vec_string_new();
+
+    while (!ir_at_end(tr) && ir_kind(tr) != TK_RPAREN()) {
+        let arg = ir_emit_full_expr(tr, 0);
+        tr = arg.tr;
+        vec_string_push(arg_regs, arg.reg);
+        vec_string_push(arg_tys, arg.ty);
+        if (!ir_at_end(tr) && ir_kind(tr) == TK_COMMA()) {
+            tr = ir_advance(tr);
+        }
+    }
+    if (!ir_at_end(tr)) { tr = ir_advance(tr); } // consume ')'
+
+    // Build the call instruction
+    // Look up return type from sema ("fn_ret:name")
+    let ret_key = str_concat("fn_ret:", name);
+    let ret_ty = map_string_string_get(tr.sema, ret_key);
+    if (ret_ty == "") { ret_ty = "i64"; }
+
+    // Build args string: "i64 %0, i8* %1, ..."
+    let args_str = "";
+    let n = vec_string_len(arg_regs);
+    let i = 0;
+    while (i < n) {
+        if (i > 0) { args_str = str_concat(args_str, ", "); }
+        let aty = vec_string_get(arg_tys, i);
+        let areg = vec_string_get(arg_regs, i);
+        args_str = str_concat(args_str, str_concat(aty, str_concat(" ", areg)));
+        i = i + 1;
+    }
+
+    vec_string_free(arg_regs);
+    vec_string_free(arg_tys);
+
+    // Mangle name: user-defined functions get @kr_ prefix
+    let llvm_name = ir_mangle_fn(tr, name);
+
+    if (ret_ty == "void") {
+        let instr = str_concat("call void @", str_concat(llvm_name, str_concat("(", str_concat(args_str, ")"))));
+        ir_emit_indent(tr, instr);
+        return ir_expr_result(tr, "", "void");
+    }
+
+    let res = ir_next_tmp(tr);
+    tr = ir_inc_tmp(tr);
+    let instr = str_concat(res, str_concat(
+        " = call ", str_concat(ret_ty, str_concat(
+            " @", str_concat(llvm_name, str_concat("(", str_concat(args_str, ")")))))));
+    ir_emit_indent(tr, instr);
+    return ir_expr_result(tr, res, ret_ty);
+}
+
+// Determine the LLVM function name for a call.
+// stdlib functions (puts, malloc, etc.) keep their name.
+// User-defined functions get "kr_" prefix.
+fn ir_mangle_fn(tr: IrTranslator, name: string) -> string {
+    // Check sema registry: if marked as user-defined, mangle
+    let key = str_concat("fn_user:", name);
+    let is_user = map_string_string_get(tr.sema, key);
+    if (is_user == "1") {
+        return str_concat("kr_", name);
+    }
+    // Known stdlib functions — no prefix
+    if (name == "puts")     { return "puts"; }
+    if (name == "printf")   { return "printf"; }
+    if (name == "strlen")   { return "strlen"; }
+    if (name == "malloc")   { return "malloc"; }
+    if (name == "free")     { return "free"; }
+    if (name == "exit")     { return "exit"; }
+    if (name == "system")   { return "system"; }
+    if (name == "getenv")   { return "kr_getenv"; }
+    if (name == "strcmp")   { return "strcmp"; }
+    if (name == "strdup")   { return "strdup"; }
+    if (name == "sprintf")  { return "sprintf"; }
+    if (name == "snprintf") { return "snprintf"; }
+    if (name == "fopen")    { return "fopen"; }
+    if (name == "fclose")   { return "fclose"; }
+    if (name == "fputs")    { return "fputs"; }
+    if (name == "fread")    { return "fread"; }
+    if (name == "fwrite")   { return "fwrite"; }
+    if (name == "atol")     { return "atol"; }
+    if (name == "atof")     { return "atof"; }
+    if (name == "sqrt")     { return "sqrt"; }
+    if (name == "pow")      { return "pow"; }
+    if (name == "floor")    { return "floor"; }
+    if (name == "ceil")     { return "ceil"; }
+    if (name == "fabs")     { return "fabs"; }
+    // fmt_int, str_concat etc. are kraken runtime — mangle as kr_
+    return str_concat("kr_", name);
+}
+
+// ---------------------------------------------------------------------------
+// Statement emission
+// ---------------------------------------------------------------------------
+
+// Emit a let binding:  let name [: Type] = expr;
+fn ir_emit_let(tr: IrTranslator) -> IrTranslator {
+    tr = ir_advance(tr); // consume 'let'
+
+    // Optional 'mut'
+    if (!ir_at_end(tr) && ir_kind(tr) == TK_KW_MUT()) {
+        tr = ir_advance(tr);
+    }
+
+    let name = ir_lexeme(tr);
+    tr = ir_advance(tr); // consume name
+
+    // Optional type annotation ': Type'
+    let ty = "i64"; // default
+    if (!ir_at_end(tr) && ir_kind(tr) == TK_COLON()) {
+        tr = ir_advance(tr); // ':'
+        let tk = ir_kind(tr);
+        let tlex = ir_lexeme(tr);
+        ty = kr_type_to_llvm(tk, tlex);
+        // If type is an identifier (struct/enum name), record it for field access
+        if (tk == TK_IDENTIFIER()) {
+            map_string_string_set(tr.sema, str_concat("vtype_struct:", name), tlex);
+        }
+        tr = ir_skip_type(tr);
+    }
+
+    let ptr_reg = str_concat("%", name);
+
+    // Check if alloca was already hoisted by ir_prescan_lets
+    let hkey = str_concat("hoisted:", str_concat(map_string_string_get(tr.sema, "current_fn:"), str_concat(":", name)));
+    let hoisted_ty = map_string_string_get(tr.sema, hkey);
+    let already_alloced = 0;
+    if (hoisted_ty != "") {
+        already_alloced = 1;
+        // Use hoisted type if no annotation was given
+        if (ty == "i64") { ty = hoisted_ty; }
+    }
+
+    // '= expr': emit RHS, then alloca (if not hoisted), then store
+    if (!ir_at_end(tr) && ir_kind(tr) == TK_OP_ASSIGN()) {
+        tr = ir_advance(tr); // '='
+        // Peek at RHS to infer struct type before emitting
+        if (!ir_at_end(tr) && ir_kind(tr) == TK_IDENTIFIER()) {
+            let rhs_fn = ir_lexeme(tr);
+            let rhs_next = ir_peek_kind(tr, 1);
+            if (rhs_next == TK_LPAREN()) {
+                let sret = map_string_string_get(tr.sema, str_concat("fn_struct_ret:", rhs_fn));
+                if (sret != "") {
+                    map_string_string_set(tr.sema, str_concat("vtype_struct:", name), sret);
+                }
+            }
+        }
+        let expr = ir_emit_full_expr(tr, 0);
+        tr = expr.tr;
+        // If no annotation and not hoisted with a concrete type, infer from RHS
+        if (ty == "i64" && expr.ty != "" && expr.ty != "void") {
+            ty = expr.ty;
+        }
+        if (already_alloced == 0) {
+            ir_emit_indent(tr, str_concat(ptr_reg, str_concat(" = alloca ", ty)));
+        }
+        // If RHS type doesn't match alloca type, emit appropriate cast
+        let store_reg = expr.reg;
+        if (ty != expr.ty && expr.ty != "" && expr.ty != "void") {
+            let bc = ir_next_tmp(tr); tr = ir_inc_tmp(tr);
+            // Determine cast opcode
+            let cast_op = "bitcast";
+            if ((expr.ty == "i64" || expr.ty == "i1" || expr.ty == "i32") && ty == "i8*") {
+                cast_op = "inttoptr";
+            }
+            if (expr.ty == "i8*" && (ty == "i64" || ty == "i32")) {
+                cast_op = "ptrtoint";
+            }
+            ir_emit_indent(tr, str_concat(bc, str_concat(" = ", str_concat(cast_op, str_concat(" ", str_concat(expr.ty, str_concat(" ", str_concat(expr.reg, str_concat(" to ", ty)))))))));
+            store_reg = bc;
+        }
+        // store expr into alloca
+        ir_emit_indent(tr, str_concat("store ", str_concat(ty, str_concat(
+            " ", str_concat(store_reg, str_concat(", ", str_concat(ty, str_concat("* ", ptr_reg))))))));
+    } else {
+        // No initializer
+        if (already_alloced == 0) {
+            ir_emit_indent(tr, str_concat(ptr_reg, str_concat(" = alloca ", ty)));
+        }
+    }
+
+    // ';'
+    if (!ir_at_end(tr) && ir_kind(tr) == TK_SEMICOLON()) {
+        tr = ir_advance(tr);
+    }
+
+    tr = ir_set_var_type(tr, name, ty);
+    return tr;
+}
+
+// Emit a return statement.
+fn ir_emit_return(tr: IrTranslator, ret_ty: string, str_count: int) -> IrTranslator {
+    tr = ir_advance(tr); // consume 'return'
+
+    if (!ir_at_end(tr) && ir_kind(tr) == TK_SEMICOLON()) {
+        tr = ir_advance(tr);
+        ir_emit_indent(tr, "ret void");
+        tr = ir_set_terminated(tr);
+        return tr;
+    }
+
+    let expr = ir_emit_full_expr(tr, 0);
+    tr = expr.tr;
+    ir_emit_indent(tr, str_concat("ret ", str_concat(ret_ty, str_concat(" ", expr.reg))));
+    tr = ir_set_terminated(tr);
+
+    if (!ir_at_end(tr) && ir_kind(tr) == TK_SEMICOLON()) {
+        tr = ir_advance(tr);
+    }
+    return tr;
+}
+
+// Emit an if statement (with optional else).
+fn ir_emit_if(tr: IrTranslator, ret_ty: string) -> IrTranslator {
+    tr = ir_advance(tr); // consume 'if'
+
+    // Allocate label names
+    let then_lbl = ir_next_lbl(tr, "then");
+    tr = ir_inc_lbl(tr);
+    let else_lbl = ir_next_lbl(tr, "else");
+    tr = ir_inc_lbl(tr);
+    let merge_lbl = ir_next_lbl(tr, "merge");
+    tr = ir_inc_lbl(tr);
+
+    // Condition
+    if (!ir_at_end(tr) && ir_kind(tr) == TK_LPAREN()) {
+        tr = ir_advance(tr); // '('
+    }
+    let cond = ir_emit_full_expr(tr, 0);
+    tr = cond.tr;
+    if (!ir_at_end(tr) && ir_kind(tr) == TK_RPAREN()) {
+        tr = ir_advance(tr); // ')'
+    }
+
+    // Conditional branch
+    ir_emit_indent(tr, str_concat("br i1 ", str_concat(cond.reg, str_concat(
+        ", label %", str_concat(then_lbl, str_concat(", label %", else_lbl))))));
+
+    // Then block
+    ir_emit_line(tr, str_concat(then_lbl, ":"));
+    tr = ir_set_terminated(tr);  // label starts unterminated, will be set by body
+    tr = IrTranslator { pos: tr.pos, count: tr.count, errors: tr.errors, file: tr.file,
+        int_data: tr.int_data, lexemes: tr.lexemes, out: tr.out, globals: tr.globals,
+        sema: tr.sema, tmp: tr.tmp, lbl: tr.lbl, fn_name: tr.fn_name,
+        str_idx: tr.str_idx, terminated: 0 };
+    if (!ir_at_end(tr) && ir_kind(tr) == TK_LBRACE()) {
+        tr = ir_advance(tr);
+        tr = ir_emit_block_body(tr, ret_ty);
+        if (!ir_at_end(tr) && ir_kind(tr) == TK_RBRACE()) {
+            tr = ir_advance(tr);
+        }
+    }
+    let then_terminated = tr.terminated;
+    if (then_terminated == 0) {
+        ir_emit_indent(tr, str_concat("br label %", merge_lbl));
+    }
+
+    // Else block (optional)
+    ir_emit_line(tr, str_concat(else_lbl, ":"));
+    tr = IrTranslator { pos: tr.pos, count: tr.count, errors: tr.errors, file: tr.file,
+        int_data: tr.int_data, lexemes: tr.lexemes, out: tr.out, globals: tr.globals,
+        sema: tr.sema, tmp: tr.tmp, lbl: tr.lbl, fn_name: tr.fn_name,
+        str_idx: tr.str_idx, terminated: 0 };
+    if (!ir_at_end(tr) && ir_kind(tr) == TK_KW_ELSE()) {
+        tr = ir_advance(tr);
+        if (!ir_at_end(tr) && ir_kind(tr) == TK_KW_IF()) {
+            tr = ir_emit_if(tr, ret_ty);
+        }
+        if (!ir_at_end(tr) && ir_kind(tr) == TK_LBRACE()) {
+            tr = ir_advance(tr);
+            tr = ir_emit_block_body(tr, ret_ty);
+            if (!ir_at_end(tr) && ir_kind(tr) == TK_RBRACE()) {
+                tr = ir_advance(tr);
+            }
+        }
+    }
+    let else_terminated = tr.terminated;
+    if (else_terminated == 0) {
+        ir_emit_indent(tr, str_concat("br label %", merge_lbl));
+    }
+
+    // Merge block
+    ir_emit_line(tr, str_concat(merge_lbl, ":"));
+    // If both branches terminated, merge is unreachable — emit 'unreachable' to satisfy LLVM
+    if (then_terminated == 1 && else_terminated == 1) {
+        ir_emit_indent(tr, "unreachable");
+        tr = ir_set_terminated(tr);
+    } else {
+        tr = IrTranslator { pos: tr.pos, count: tr.count, errors: tr.errors, file: tr.file,
+            int_data: tr.int_data, lexemes: tr.lexemes, out: tr.out, globals: tr.globals,
+            sema: tr.sema, tmp: tr.tmp, lbl: tr.lbl, fn_name: tr.fn_name,
+            str_idx: tr.str_idx, terminated: 0 };
+    }
+    return tr;
+}
+
+// Emit a while loop.
+fn ir_emit_while(tr: IrTranslator, ret_ty: string) -> IrTranslator {
+    tr = ir_advance(tr); // consume 'while'
+
+    let cond_lbl  = ir_next_lbl(tr, "while_cond");
+    tr = ir_inc_lbl(tr);
+    let body_lbl  = ir_next_lbl(tr, "while_body");
+    tr = ir_inc_lbl(tr);
+    let exit_lbl  = ir_next_lbl(tr, "while_exit");
+    tr = ir_inc_lbl(tr);
+
+    // Save outer loop labels (for nested loops) and install ours.
+    // map.get returns an interior pointer; map.set frees the old value, so we must
+    // dup the string here (str_concat with "" forces a fresh buffer) before the set
+    // below would invalidate the pointer.
+    let prev_exit = str_concat(map_string_string_get(tr.sema, "loop_exit"), "");
+    let prev_cond = str_concat(map_string_string_get(tr.sema, "loop_cond"), "");
+    map_string_string_set(tr.sema, "loop_exit", exit_lbl);
+    map_string_string_set(tr.sema, "loop_cond", cond_lbl);
+
+    // Jump to condition
+    ir_emit_indent(tr, str_concat("br label %", cond_lbl));
+    ir_emit_line(tr, str_concat(cond_lbl, ":"));
+
+    // Condition
+    if (!ir_at_end(tr) && ir_kind(tr) == TK_LPAREN()) {
+        tr = ir_advance(tr);
+    }
+    let cond = ir_emit_full_expr(tr, 0);
+    tr = cond.tr;
+    if (!ir_at_end(tr) && ir_kind(tr) == TK_RPAREN()) {
+        tr = ir_advance(tr);
+    }
+    ir_emit_indent(tr, str_concat("br i1 ", str_concat(cond.reg, str_concat(
+        ", label %", str_concat(body_lbl, str_concat(", label %", exit_lbl))))));
+
+    // Body
+    ir_emit_line(tr, str_concat(body_lbl, ":"));
+    tr = IrTranslator { pos: tr.pos, count: tr.count, errors: tr.errors, file: tr.file,
+        int_data: tr.int_data, lexemes: tr.lexemes, out: tr.out, globals: tr.globals,
+        sema: tr.sema, tmp: tr.tmp, lbl: tr.lbl, fn_name: tr.fn_name,
+        str_idx: tr.str_idx, terminated: 0 };
+    if (!ir_at_end(tr) && ir_kind(tr) == TK_LBRACE()) {
+        tr = ir_advance(tr);
+        tr = ir_emit_block_body(tr, ret_ty);
+        if (!ir_at_end(tr) && ir_kind(tr) == TK_RBRACE()) {
+            tr = ir_advance(tr);
+        }
+    }
+    ir_emit_indent(tr, str_concat("br label %", cond_lbl));
+
+    // Exit
+    ir_emit_line(tr, str_concat(exit_lbl, ":"));
+
+    // Restore outer loop labels
+    map_string_string_set(tr.sema, "loop_exit", prev_exit);
+    map_string_string_set(tr.sema, "loop_cond", prev_cond);
+    return tr;
+}
+
+// Emit assignment: name = expr;
+fn ir_emit_assign(tr: IrTranslator, name: string) -> IrTranslator {
+    tr = ir_advance(tr); // consume '='
+    let ty = ir_var_type(tr, name);
+    let expr = ir_emit_full_expr(tr, 0);
+    tr = expr.tr;
+    let ptr_reg = str_concat("%", name);
+    ir_emit_indent(tr, str_concat("store ", str_concat(ty, str_concat(
+        " ", str_concat(expr.reg, str_concat(", ", str_concat(ty, str_concat("* ", ptr_reg))))))));
+    if (!ir_at_end(tr) && ir_kind(tr) == TK_SEMICOLON()) {
+        tr = ir_advance(tr);
+    }
+    return tr;
+}
+
+// Emit a for loop: for (let i = init; cond; incr) { body }
+// Desugars to: alloca i; store init; br cond_lbl; cond_lbl: br body/exit; body_lbl: body+incr+br cond; exit_lbl:
+fn ir_emit_for(tr: IrTranslator, ret_ty: string) -> IrTranslator {
+    tr = ir_advance(tr); // consume 'for'
+
+    let cond_lbl = ir_next_lbl(tr, "for_cond");
+    tr = ir_inc_lbl(tr);
+    let body_lbl = ir_next_lbl(tr, "for_body");
+    tr = ir_inc_lbl(tr);
+    let exit_lbl = ir_next_lbl(tr, "for_exit");
+    tr = ir_inc_lbl(tr);
+
+    // Save outer loop labels (dup, see ir_emit_while)
+    let prev_exit_for = str_concat(map_string_string_get(tr.sema, "loop_exit"), "");
+    let prev_cond_for = str_concat(map_string_string_get(tr.sema, "loop_cond"), "");
+    map_string_string_set(tr.sema, "loop_exit", exit_lbl);
+    map_string_string_set(tr.sema, "loop_cond", cond_lbl);
+
+    // Consume '('
+    if (!ir_at_end(tr) && ir_kind(tr) == TK_LPAREN()) {
+        tr = ir_advance(tr);
+    }
+
+    // Init: either 'let name = expr;' or 'expr;'
+    let loop_var = "";
+    if (!ir_at_end(tr) && ir_kind(tr) == TK_KW_LET()) {
+        tr = ir_advance(tr); // 'let'
+        let vname = ir_lexeme(tr);
+        loop_var = vname;
+        tr = ir_advance(tr); // name
+        let ity = "i64";
+        if (!ir_at_end(tr) && ir_kind(tr) == TK_COLON()) {
+            tr = ir_advance(tr);
+            let tk2 = ir_kind(tr); let tl2 = ir_lexeme(tr);
+            ity = kr_type_to_llvm(tk2, tl2);
+            tr = ir_skip_type(tr);
+        }
+        let ptr_reg = str_concat("%", vname);
+        let for_hkey = str_concat("hoisted:", str_concat(map_string_string_get(tr.sema, "current_fn:"), str_concat(":", vname)));
+        let for_hoisted = map_string_string_get(tr.sema, for_hkey);
+        if (for_hoisted == "") {
+            ir_emit_indent(tr, str_concat(ptr_reg, str_concat(" = alloca ", ity)));
+        }
+        tr = ir_set_var_type(tr, vname, ity);
+        if (!ir_at_end(tr) && ir_kind(tr) == TK_OP_ASSIGN()) {
+            tr = ir_advance(tr); // '='
+            let init_e = ir_emit_full_expr(tr, 0);
+            tr = init_e.tr;
+            ir_emit_indent(tr, str_concat("store ", str_concat(ity, str_concat(
+                " ", str_concat(init_e.reg, str_concat(", ", str_concat(ity, str_concat("* ", ptr_reg))))))));
+        }
+        if (!ir_at_end(tr) && ir_kind(tr) == TK_SEMICOLON()) { tr = ir_advance(tr); }
+    } else {
+        // bare expression init (no let)
+        let init_e2 = ir_emit_full_expr(tr, 0);
+        tr = init_e2.tr;
+        if (!ir_at_end(tr) && ir_kind(tr) == TK_SEMICOLON()) { tr = ir_advance(tr); }
+    }
+
+    // Jump to condition
+    ir_emit_indent(tr, str_concat("br label %", cond_lbl));
+
+    // Condition label
+    ir_emit_line(tr, str_concat(cond_lbl, ":"));
+    let cond_e = ir_emit_full_expr(tr, 0);
+    tr = cond_e.tr;
+    if (!ir_at_end(tr) && ir_kind(tr) == TK_SEMICOLON()) { tr = ir_advance(tr); }
+    ir_emit_indent(tr, str_concat("br i1 ", str_concat(cond_e.reg, str_concat(
+        ", label %", str_concat(body_lbl, str_concat(", label %", exit_lbl))))));
+
+    // Capture increment token range — we need to emit it after the body.
+    // We do this by recording start/end positions and replaying after body.
+    // Simple approach: record tr.pos before increment, skip to ')', emit body,
+    // then replay by setting pos back to increment start.
+    let incr_start = tr.pos;
+    // Skip increment expr (up to ')' )
+    let depth2 = 0;
+    while (!ir_at_end(tr) && ir_kind(tr) != TK_RPAREN()) {
+        tr = ir_advance(tr);
+    }
+    let incr_end = tr.pos;
+    if (!ir_at_end(tr) && ir_kind(tr) == TK_RPAREN()) { tr = ir_advance(tr); } // ')'
+
+    // Body
+    ir_emit_line(tr, str_concat(body_lbl, ":"));
+    tr = IrTranslator { pos: tr.pos, count: tr.count, errors: tr.errors, file: tr.file,
+        int_data: tr.int_data, lexemes: tr.lexemes, out: tr.out, globals: tr.globals,
+        sema: tr.sema, tmp: tr.tmp, lbl: tr.lbl, fn_name: tr.fn_name,
+        str_idx: tr.str_idx, terminated: 0 };
+    if (!ir_at_end(tr) && ir_kind(tr) == TK_LBRACE()) {
+        tr = ir_advance(tr);
+        tr = ir_emit_block_body(tr, ret_ty);
+        if (!ir_at_end(tr) && ir_kind(tr) == TK_RBRACE()) {
+            tr = ir_advance(tr);
+        }
+    }
+
+    // Replay increment expression from saved position
+    let saved_pos = tr.pos;
+    tr = IrTranslator { pos: incr_start, count: tr.count, errors: tr.errors, file: tr.file,
+        int_data: tr.int_data, lexemes: tr.lexemes, out: tr.out, globals: tr.globals,
+        sema: tr.sema, tmp: tr.tmp, lbl: tr.lbl, fn_name: tr.fn_name,
+        str_idx: tr.str_idx, terminated: 0 };
+    // Emit the increment as a statement
+    let incr_k = ir_kind(tr);
+    if (incr_k == TK_IDENTIFIER()) {
+        let iname = ir_lexeme(tr);
+        let inext = ir_peek_kind(tr, 1);
+        tr = ir_advance(tr); // name
+        if (inext == TK_OP_ASSIGN()) {
+            tr = ir_emit_assign(tr, iname);
+        } else {
+            if (inext == TK_OP_PLUS_ASSIGN()) {
+                let ity3 = ir_var_type(tr, iname);
+                tr = ir_advance(tr); // +=
+                let rhs3 = ir_emit_full_expr(tr, 0);
+                tr = rhs3.tr;
+                let old3 = ir_next_tmp(tr); tr = ir_inc_tmp(tr);
+                let ptr3 = str_concat("%", iname);
+                ir_emit_indent(tr, str_concat(old3, str_concat(" = load ", str_concat(ity3, str_concat(", ", str_concat(ity3, str_concat("* ", ptr3)))))));
+                let new3 = ir_next_tmp(tr); tr = ir_inc_tmp(tr);
+                ir_emit_indent(tr, str_concat(new3, str_concat(" = add ", str_concat(ity3, str_concat(" ", str_concat(old3, str_concat(", ", rhs3.reg)))))));
+                ir_emit_indent(tr, str_concat("store ", str_concat(ity3, str_concat(" ", str_concat(new3, str_concat(", ", str_concat(ity3, str_concat("* ", ptr3))))))));
+            } else {
+                let expr3 = ir_emit_full_expr(tr, 0);
+                tr = expr3.tr;
+            }
+        }
+    } else {
+        let expr4 = ir_emit_full_expr(tr, 0);
+        tr = expr4.tr;
+    }
+
+    // Back to after the body
+    tr = IrTranslator { pos: saved_pos, count: tr.count, errors: tr.errors, file: tr.file,
+        int_data: tr.int_data, lexemes: tr.lexemes, out: tr.out, globals: tr.globals,
+        sema: tr.sema, tmp: tr.tmp, lbl: tr.lbl, fn_name: tr.fn_name,
+        str_idx: tr.str_idx, terminated: 0 };
+
+    ir_emit_indent(tr, str_concat("br label %", cond_lbl));
+    ir_emit_line(tr, str_concat(exit_lbl, ":"));
+
+    // Restore outer loop labels
+    map_string_string_set(tr.sema, "loop_exit", prev_exit_for);
+    map_string_string_set(tr.sema, "loop_cond", prev_cond_for);
+    return tr;
+}
+
+// Emit statements inside a block body (between '{' and '}').
+fn ir_emit_block_body(tr: IrTranslator, ret_ty: string) -> IrTranslator {
+    while (!ir_at_end(tr) && ir_kind(tr) != TK_RBRACE()) {
+        let k = ir_kind(tr);
+
+        if (k == TK_KW_LET()) {
+            tr = ir_emit_let(tr);
+            continue;
+        }
+        if (k == TK_KW_RETURN()) {
+            tr = ir_emit_return(tr, ret_ty, 0);
+            continue;
+        }
+        if (k == TK_KW_IF()) {
+            tr = ir_emit_if(tr, ret_ty);
+            continue;
+        }
+        if (k == TK_KW_WHILE()) {
+            tr = ir_emit_while(tr, ret_ty);
+            continue;
+        }
+        if (k == TK_KW_FOR()) {
+            tr = ir_emit_for(tr, ret_ty);
+            continue;
+        }
+        if (k == TK_KW_BREAK()) {
+            let brk_target = map_string_string_get(tr.sema, "loop_exit");
+            if (brk_target != "") {
+                ir_emit_indent(tr, str_concat("br label %", brk_target));
+                let dead_lbl = ir_next_lbl(tr, "after_break");
+                tr = ir_inc_lbl(tr);
+                ir_emit_line(tr, str_concat(dead_lbl, ":"));
+            }
+            tr = ir_advance(tr);
+            if (!ir_at_end(tr) && ir_kind(tr) == TK_SEMICOLON()) { tr = ir_advance(tr); }
+            continue;
+        }
+        if (k == TK_KW_CONTINUE()) {
+            let cont_target = map_string_string_get(tr.sema, "loop_cond");
+            if (cont_target != "") {
+                ir_emit_indent(tr, str_concat("br label %", cont_target));
+                let dead_lbl_c = ir_next_lbl(tr, "after_continue");
+                tr = ir_inc_lbl(tr);
+                ir_emit_line(tr, str_concat(dead_lbl_c, ":"));
+            }
+            tr = ir_advance(tr);
+            if (!ir_at_end(tr) && ir_kind(tr) == TK_SEMICOLON()) { tr = ir_advance(tr); }
+            continue;
+        }
+
+        // Identifier: could be assignment (name = ...) or expression statement (call)
+        if (k == TK_IDENTIFIER()) {
+            let name = ir_lexeme(tr);
+            let next_k = ir_peek_kind(tr, 1);
+
+            // Assignment: name = expr;
+            if (next_k == TK_OP_ASSIGN()) {
+                tr = ir_advance(tr); // name
+                tr = ir_emit_assign(tr, name);
+                continue;
+            }
+
+            // Compound assign: name += expr; etc. — lower to load/op/store
+            if (next_k == TK_OP_PLUS_ASSIGN() || next_k == TK_OP_MINUS_ASSIGN() ||
+                next_k == TK_OP_STAR_ASSIGN() || next_k == TK_OP_SLASH_ASSIGN() || next_k == TK_OP_PERCENT_ASSIGN()) {
+                let ty = ir_var_type(tr, name);
+                tr = ir_advance(tr); // name
+                let op = 200;
+                if (ir_kind(tr) == TK_OP_MINUS_ASSIGN())   { op = 201; }
+                if (ir_kind(tr) == TK_OP_STAR_ASSIGN())    { op = 202; }
+                if (ir_kind(tr) == TK_OP_SLASH_ASSIGN())   { op = 203; }
+                if (ir_kind(tr) == TK_OP_PERCENT_ASSIGN()) { op = 204; }
+                tr = ir_advance(tr); // += / -= / *= / /= / %=
+                let rhs = ir_emit_full_expr(tr, 0);
+                tr = rhs.tr;
+                let old_reg = ir_next_tmp(tr);
+                tr = ir_inc_tmp(tr);
+                let ptr_reg = str_concat("%", name);
+                ir_emit_indent(tr, str_concat(old_reg, str_concat(
+                    " = load ", str_concat(ty, str_concat(", ", str_concat(ty, str_concat("* ", ptr_reg)))))));
+                let new_reg = ir_next_tmp(tr);
+                tr = ir_inc_tmp(tr);
+                let instr = str_concat(new_reg, str_concat(
+                    " = ", str_concat(llvm_arith_instr(op, ty), str_concat(
+                        " ", str_concat(ty, str_concat(
+                            " ", str_concat(old_reg, str_concat(", ", rhs.reg))))))));
+                ir_emit_indent(tr, instr);
+                ir_emit_indent(tr, str_concat("store ", str_concat(ty, str_concat(
+                    " ", str_concat(new_reg, str_concat(", ", str_concat(ty, str_concat("* ", ptr_reg))))))));
+                if (!ir_at_end(tr) && ir_kind(tr) == TK_SEMICOLON()) { tr = ir_advance(tr); }
+                continue;
+            }
+
+            // Expression statement (function call etc.)
+            let expr = ir_emit_full_expr(tr, 0);
+            tr = expr.tr;
+            if (!ir_at_end(tr) && ir_kind(tr) == TK_SEMICOLON()) { tr = ir_advance(tr); }
+            continue;
+        }
+
+        // Expression statement (starts with non-identifier)
+        let expr = ir_emit_full_expr(tr, 0);
+        tr = expr.tr;
+        if (!ir_at_end(tr) && ir_kind(tr) == TK_SEMICOLON()) { tr = ir_advance(tr); }
+    }
+    return tr;
+}
+
+// ---------------------------------------------------------------------------
+// Function declaration pass — collect fn names and return types into sema
+// so call sites have correct type information.
+// ---------------------------------------------------------------------------
+
+fn ir_collect_fn_decls(tr: IrTranslator) -> IrTranslator {
+    while (!ir_at_end(tr)) {
+        let k = ir_kind(tr);
+        // Skip pub
+        if (k == TK_KW_PUB()) { tr = ir_advance(tr); continue; }
+
+        // Collect struct field types so constructor bodies can be emitted
+        if (k == TK_KW_STRUCT()) {
+            tr = ir_advance(tr); // 'struct'
+            if (ir_at_end(tr)) { break; }
+            let sname = ir_lexeme(tr);
+            tr = ir_advance(tr); // name
+            // Register fn_ret for constructor (returns i8*)
+            map_string_string_set(tr.sema, str_concat("fn_ret:kr_", str_concat(sname, "_new")), "i8*");
+            // Skip generic params
+            tr = ir_skip_generic_params(tr);
+            // Collect fields from struct body { f1: T1; f2: T2; }
+            let fcount = 0;
+            if (!ir_at_end(tr) && ir_kind(tr) == TK_LBRACE()) {
+                tr = ir_advance(tr); // '{'
+                while (!ir_at_end(tr) && ir_kind(tr) != TK_RBRACE()) {
+                    if (ir_kind(tr) == TK_SEMICOLON()) { tr = ir_advance(tr); continue; }
+                    if (ir_kind(tr) == TK_IDENTIFIER()) {
+                        let fname = ir_lexeme(tr);
+                        tr = ir_advance(tr); // field name
+                        let fty = "i64";
+                        if (!ir_at_end(tr) && ir_kind(tr) == TK_COLON()) {
+                            tr = ir_advance(tr); // ':'
+                            let ftk = ir_kind(tr); let ftl = ir_lexeme(tr);
+                            fty = kr_type_to_llvm(ftk, ftl);
+                            tr = ir_skip_type(tr);
+                        }
+                        // Store field info: struct:Name:N:name = fname, struct:Name:N:type = fty
+                        let fi_str = fmt_int(fcount);
+                        map_string_string_set(tr.sema, str_concat("struct:", str_concat(sname, str_concat(":", str_concat(fi_str, ":name")))), fname);
+                        map_string_string_set(tr.sema, str_concat("struct:", str_concat(sname, str_concat(":", str_concat(fi_str, ":type")))), fty);
+                        fcount = fcount + 1;
+                    } else {
+                        tr = ir_advance(tr);
+                    }
+                }
+                if (!ir_at_end(tr)) { tr = ir_advance(tr); } // '}'
+            }
+            map_string_string_set(tr.sema, str_concat("struct:", str_concat(sname, ":count")), fmt_int(fcount));
+            continue;
+        }
+
+        if (k == TK_KW_FN()) {
+            tr = ir_advance(tr); // 'fn'
+            if (ir_at_end(tr)) { break; }
+            let name = ir_lexeme(tr);
+            tr = ir_advance(tr); // name
+
+            // Mark as user-defined
+            map_string_string_set(tr.sema, str_concat("fn_user:", name), "1");
+
+            // Skip generic params
+            tr = ir_skip_generic_params(tr);
+
+            // Skip parameters
+            if (!ir_at_end(tr) && ir_kind(tr) == TK_LPAREN()) {
+                tr = ir_skip_parens(tr);
+            }
+
+            // Return type
+            let ret_ty = "i64";
+            if (!ir_at_end(tr) && ir_kind(tr) == TK_ARROW()) {
+                tr = ir_advance(tr);
+                let rtk = ir_kind(tr);
+                let rtlex = ir_lexeme(tr);
+                ret_ty = kr_type_to_llvm(rtk, rtlex);
+                // If return type is a struct name, record it for vtype_struct inference
+                if (rtk == TK_IDENTIFIER()) {
+                    map_string_string_set(tr.sema, str_concat("fn_struct_ret:", name), rtlex);
+                }
+                tr = ir_skip_type(tr);
+            }
+            map_string_string_set(tr.sema, str_concat("fn_ret:", name), ret_ty);
+
+            // Skip body
+            if (!ir_at_end(tr) && ir_kind(tr) == TK_LBRACE()) {
+                tr = ir_skip_block(tr);
+            }
+            continue;
+        }
+
+        // Skip everything else at top level
+        tr = ir_advance(tr);
+    }
+    return tr;
+}
+
+// ---------------------------------------------------------------------------
+// Let-hoisting pre-scan
+// ---------------------------------------------------------------------------
+
+// Scan token range starting at start_pos (inside a '{...}' block, just past the '{')
+// and emit alloca for every let-declared variable. Recurses into nested blocks.
+// tr position is NOT advanced — this is a read-only scan that only emits allocas.
+fn ir_prescan_lets(tr: IrTranslator, start_pos: int) -> IrTranslator {
+    let pos = start_pos;
+    let depth = 0; // nesting inside nested blocks
+    while (pos < tr.count) {
+        let k = vec_int_get(tr.int_data, pos * 3);
+        if (k == TK_LBRACE()) { depth = depth + 1; pos = pos + 1; continue; }
+        if (k == TK_RBRACE()) {
+            if (depth <= 0) { break; } // end of our block
+            depth = depth - 1; pos = pos + 1; continue;
+        }
+        if (k == TK_KW_LET()) {
+            pos = pos + 1; // skip 'let'
+            // skip optional 'mut'
+            if (pos < tr.count && vec_int_get(tr.int_data, pos * 3) == TK_KW_MUT()) { pos = pos + 1; }
+            if (pos >= tr.count) { break; }
+            let vname = vec_string_get(tr.lexemes, pos);
+            pos = pos + 1; // skip name
+            // Check for type annotation
+            let vty = "i64";
+            if (pos < tr.count && vec_int_get(tr.int_data, pos * 3) == TK_COLON()) {
+                pos = pos + 1; // ':'
+                if (pos < tr.count) {
+                    let atk = vec_int_get(tr.int_data, pos * 3);
+                    let atlex = vec_string_get(tr.lexemes, pos);
+                    vty = kr_type_to_llvm(atk, atlex);
+                    pos = pos + 1; // skip base type
+                    // skip generic params if any
+                    if (pos < tr.count && vec_int_get(tr.int_data, pos * 3) == TK_OP_LT()) {
+                        let gd = 1; pos = pos + 1;
+                        while (pos < tr.count && gd > 0) {
+                            let gk = vec_int_get(tr.int_data, pos * 3);
+                            if (gk == TK_OP_LT()) { gd = gd + 1; }
+                            if (gk == TK_OP_GT()) { gd = gd - 1; }
+                            pos = pos + 1;
+                        }
+                    }
+                }
+            }
+            // If no annotation, peek at RHS (after '=') to infer type
+            if (vty == "i64") {
+                // Skip to '='
+                let eq_pos = pos;
+                while (eq_pos < tr.count) {
+                    let ek = vec_int_get(tr.int_data, eq_pos * 3);
+                    if (ek == TK_OP_ASSIGN()) { eq_pos = eq_pos + 1; break; }
+                    if (ek == TK_SEMICOLON() || ek == TK_LBRACE() || ek == TK_RBRACE()) { break; }
+                    eq_pos = eq_pos + 1;
+                }
+                if (eq_pos < tr.count) {
+                    let rk = vec_int_get(tr.int_data, eq_pos * 3);
+                    let rlex = vec_string_get(tr.lexemes, eq_pos);
+                    // String literal → i8*
+                    if (rk == TK_STRING_LIT()) { vty = "i8*"; }
+                    // Function call: name( → look up fn_ret (stable across functions)
+                    if (rk == TK_IDENTIFIER() && eq_pos + 1 < tr.count) {
+                        let next_rk = vec_int_get(tr.int_data, (eq_pos + 1) * 3);
+                        if (next_rk == TK_LPAREN()) {
+                            let ret_v = map_string_string_get(tr.sema, str_concat("fn_ret:", rlex));
+                            if (ret_v != "") { vty = ret_v; }
+                        }
+                        // Don't look up vtype: — those are transient and pollute across functions
+                    }
+                }
+            }
+            // Only hoist if not already hoisted (in this function)
+            let hkey = str_concat("hoisted:", str_concat(map_string_string_get(tr.sema, "current_fn:"), str_concat(":", vname)));
+            let already = map_string_string_get(tr.sema, hkey);
+            if (already == "") {
+                map_string_string_set(tr.sema, hkey, vty);
+                ir_set_var_type(tr, vname, vty);
+                let ptr_reg = str_concat("%", vname);
+                ir_emit_indent(tr, str_concat(ptr_reg, str_concat(" = alloca ", vty)));
+            }
+            continue;
+        }
+        pos = pos + 1;
+    }
+    return tr;
+}
+
+// ---------------------------------------------------------------------------
+// Function codegen
+// ---------------------------------------------------------------------------
+
+fn ir_emit_function(tr: IrTranslator) -> IrTranslator {
+    // Consume 'pub' if present
+    if (!ir_at_end(tr) && ir_kind(tr) == TK_KW_PUB()) {
+        tr = ir_advance(tr);
+    }
+    tr = ir_advance(tr); // consume 'fn'
+
+    let name = ir_lexeme(tr);
+    tr = ir_advance(tr); // consume name
+
+    tr = ir_skip_generic_params(tr);
+
+    // Parse parameters: (name: Type, ...) — collect into parallel vecs
+    let params_str = "";
+    let param_names: VecString = vec_string_new();
+    let param_types: VecString = vec_string_new();
+    if (!ir_at_end(tr) && ir_kind(tr) == TK_LPAREN()) {
+        tr = ir_advance(tr); // '('
+        let first = true;
+        while (!ir_at_end(tr) && ir_kind(tr) != TK_RPAREN()) {
+            if (ir_kind(tr) == TK_COMMA()) { tr = ir_advance(tr); continue; }
+            // self parameter
+            if (ir_kind(tr) == TK_KW_SELF()) {
+                tr = ir_advance(tr);
+                if (!ir_at_end(tr) && ir_kind(tr) == TK_COLON()) {
+                    tr = ir_advance(tr);
+                    tr = ir_skip_type(tr);
+                }
+                if (!first) { params_str = str_concat(params_str, ", "); }
+                params_str = str_concat(params_str, "i8* %self.arg");
+                vec_string_push(param_names, "self");
+                vec_string_push(param_types, "i8*");
+                map_string_string_set(tr.sema, str_concat("vtype:", "self"), "i8*");
+                first = false;
+                continue;
+            }
+            // name: Type
+            let pname = ir_lexeme(tr);
+            tr = ir_advance(tr);
+            let pty = "i64";
+            if (!ir_at_end(tr) && ir_kind(tr) == TK_COLON()) {
+                tr = ir_advance(tr);
+                let ptk = ir_kind(tr);
+                let ptlex = ir_lexeme(tr);
+                pty = kr_type_to_llvm(ptk, ptlex);
+                // Record struct type name for field access
+                if (ptk == TK_IDENTIFIER()) {
+                    map_string_string_set(tr.sema, str_concat("vtype_struct:", pname), ptlex);
+                }
+                tr = ir_skip_type(tr);
+            }
+            if (!first) { params_str = str_concat(params_str, ", "); }
+            // Use .arg suffix in the IR signature to avoid collision with alloca names
+            params_str = str_concat(params_str, str_concat(pty, str_concat(" %", str_concat(pname, ".arg"))));
+            vec_string_push(param_names, pname);
+            vec_string_push(param_types, pty);
+            map_string_string_set(tr.sema, str_concat("vtype:", pname), pty);
+            first = false;
+        }
+        if (!ir_at_end(tr)) { tr = ir_advance(tr); } // ')'
+    }
+
+    // Return type
+    let ret_ty = "i64";
+    if (!ir_at_end(tr) && ir_kind(tr) == TK_ARROW()) {
+        tr = ir_advance(tr);
+        let rtk = ir_kind(tr);
+        let rtlex = ir_lexeme(tr);
+        ret_ty = kr_type_to_llvm(rtk, rtlex);
+        tr = ir_skip_type(tr);
+    }
+
+    // Mangle: main stays as main, others get kr_ prefix
+    let llvm_fn_name = "";
+    if (name == "main") {
+        llvm_fn_name = "main";
+    } else {
+        llvm_fn_name = ir_mangle_fn(tr, name);
+    }
+
+    // Function header
+    ir_emit_line(tr, str_concat("define ", str_concat(ret_ty, str_concat(
+        " @", str_concat(llvm_fn_name, str_concat("(", str_concat(params_str, ") {")))))));
+    ir_emit_line(tr, "entry:");
+
+    // Reset SSA counter and fn name for this function
+    tr = ir_set_fn(tr, name);
+
+    // Emit alloca+store for each param so they can be loaded by name in the body
+    let pi = 0;
+    let pn = vec_string_len(param_names);
+    while (pi < pn) {
+        let pname2 = vec_string_get(param_names, pi);
+        let pty2 = vec_string_get(param_types, pi);
+        let ptr_reg = str_concat("%", pname2);
+        let arg_reg = str_concat("%", str_concat(pname2, ".arg"));
+        ir_emit_indent(tr, str_concat(ptr_reg, str_concat(" = alloca ", pty2)));
+        ir_emit_indent(tr, str_concat("store ", str_concat(pty2, str_concat(
+            " ", str_concat(arg_reg, str_concat(", ", str_concat(pty2, str_concat("* ", ptr_reg))))))));
+        pi = pi + 1;
+    }
+
+    // Pre-scan body for let declarations and hoist allocas to entry block
+    map_string_string_set(tr.sema, "current_fn:", name);
+    if (!ir_at_end(tr) && ir_kind(tr) == TK_LBRACE()) {
+        tr = ir_prescan_lets(tr, tr.pos + 1);
+    }
+
+    // Body
+    if (!ir_at_end(tr) && ir_kind(tr) == TK_LBRACE()) {
+        tr = ir_advance(tr);
+        tr = ir_emit_block_body(tr, ret_ty);
+        if (!ir_at_end(tr) && ir_kind(tr) == TK_RBRACE()) {
+            tr = ir_advance(tr);
+        }
+    }
+
+    // Ensure function has a terminator — only emit if body didn't already terminate
+    if (tr.terminated == 0) {
+        if (ret_ty == "void") {
+            ir_emit_indent(tr, "ret void");
+        } else {
+            ir_emit_indent(tr, str_concat("ret ", str_concat(ret_ty, str_concat(" ", llvm_zero(ret_ty)))));
+        }
+    }
+
+    ir_emit_line(tr, "}");
+    ir_emit_line(tr, "");
+    return tr;
+}
+
+// ---------------------------------------------------------------------------
+// Top-level translation
+// ---------------------------------------------------------------------------
+
+// Skip a top-level struct/enum/impl/trait/type declaration.
+fn ir_skip_top_level_decl(tr: IrTranslator) -> IrTranslator {
+    // Advance past the keyword and skip to matching '}'
+    tr = ir_advance(tr);
+    // Find the opening '{'
+    while (!ir_at_end(tr) && ir_kind(tr) != TK_LBRACE()) {
+        tr = ir_advance(tr);
+    }
+    if (!ir_at_end(tr)) {
+        tr = ir_skip_block(tr);
+    }
+    return tr;
+}
+
+// Emit a synthetic struct constructor function for struct `sname`.
+// Emitted into tr.out (function body section).
+// kr_Foo_new(field0_ty %f0, field1_ty %f1, ...) -> i8*
+//   alloca 8*nfields bytes via malloc, store each field at offset i*8, return ptr
+fn ir_emit_struct_ctor(tr: IrTranslator, sname: string) -> IrTranslator {
+    let count_s = map_string_string_get(tr.sema, str_concat("struct:", str_concat(sname, ":count")));
+    let nfields = atoi(count_s);
+    let ctor_name = str_concat("kr_", str_concat(sname, "_new"));
+
+    // Build parameter list
+    let params_s = "";
+    let fi = 0;
+    while (fi < nfields) {
+        let fi_str = fmt_int(fi);
+        let fty = map_string_string_get(tr.sema, str_concat("struct:", str_concat(sname, str_concat(":", str_concat(fi_str, ":type")))));
+        if (fty == "") { fty = "i64"; }
+        if (fi > 0) { params_s = str_concat(params_s, ", "); }
+        params_s = str_concat(params_s, str_concat(fty, str_concat(" %f", str_concat(fi_str, ".arg"))));
+        fi = fi + 1;
+    }
+
+    ir_emit_line(tr, "");
+    ir_emit_line(tr, str_concat("define i8* @", str_concat(ctor_name, str_concat("(", str_concat(params_s, ") {")))));
+    ir_emit_line(tr, "entry:");
+
+    // Compute size: each field is 8 bytes (we use i64 for storage)
+    let sz = nfields * 8;
+    let sz_s = fmt_int(sz);
+    ir_emit_indent(tr, str_concat("%_ptr = call i8* @malloc(i64 ", str_concat(sz_s, ")")));
+
+    // Store each field at offset i*8 using GEP
+    let fi2 = 0;
+    while (fi2 < nfields) {
+        let fi2_str = fmt_int(fi2);
+        let fty2 = map_string_string_get(tr.sema, str_concat("struct:", str_concat(sname, str_concat(":", str_concat(fi2_str, ":type")))));
+        if (fty2 == "") { fty2 = "i64"; }
+        let off = fi2 * 8;
+        let off_s = fmt_int(off);
+        // GEP to byte offset
+        let gep_reg = str_concat("%_gep", fi2_str);
+        ir_emit_indent(tr, str_concat(gep_reg, str_concat(" = getelementptr i8, i8* %_ptr, i64 ", off_s)));
+        // Bitcast to field type ptr and store
+        let bc_reg = str_concat("%_bc", fi2_str);
+        ir_emit_indent(tr, str_concat(bc_reg, str_concat(" = bitcast i8* ", str_concat(gep_reg, str_concat(" to ", str_concat(fty2, "*"))))));
+        ir_emit_indent(tr, str_concat("store ", str_concat(fty2, str_concat(" %f", str_concat(fi2_str, str_concat(".arg, ", str_concat(fty2, str_concat("* ", bc_reg))))))));
+        fi2 = fi2 + 1;
+    }
+
+    ir_emit_indent(tr, "ret i8* %_ptr");
+    ir_emit_line(tr, "}");
+    return tr;
+}
+
+pub fn translate_to_ir(
+    int_data: VecInt,
+    lexemes: VecString,
+    token_count: int,
+    source_file: string,
+    target: Target,
+    out: VecString
+) -> IrTranslateResult {
+    let module_globals: VecString = vec_string_new();
+    let tr = new_ir_translator(token_count, source_file, int_data, lexemes, out, module_globals);
+
+    // Pass 1: collect all function declarations for type info
+    let tr2 = ir_collect_fn_decls(tr);
+    tr = IrTranslator {
+        pos:      0,
+        count:    tr.count,
+        errors:   tr.errors,
+        file:     tr.file,
+        int_data: tr.int_data,
+        lexemes:  tr.lexemes,
+        out:      tr.out,
+        globals:  tr.globals,
+        sema:     tr2.sema,
+        tmp:      0,
+        lbl:      0,
+        fn_name:  "",
+        str_idx:  0,
+        terminated: 0,
+    };
+
+    // Emit module preamble (target triple + stdlib declares)
+    ir_emit_preamble(tr, target);
+
+    // Pass 2: emit code for each top-level declaration
+    while (!ir_at_end(tr)) {
+        let k = ir_kind(tr);
+
+        // Skip 'pub' modifier
+        if (k == TK_KW_PUB()) {
+            let next_k = ir_peek_kind(tr, 1);
+            if (next_k == TK_KW_FN()) {
+                tr = ir_emit_function(tr);
+                continue;
+            }
+            if (next_k == TK_KW_STRUCT()) {
+                tr = ir_advance(tr); // skip 'pub'
+                let sname2 = ir_peek_lexeme(tr, 1);
+                tr = ir_skip_top_level_decl(tr);
+                let count_key2 = str_concat("struct:", str_concat(sname2, ":count"));
+                let count_s2 = map_string_string_get(tr.sema, count_key2);
+                if (count_s2 != "") {
+                    tr = ir_emit_struct_ctor(tr, sname2);
+                }
+                continue;
+            }
+            tr = ir_advance(tr);
+            tr = ir_skip_top_level_decl(tr);
+            continue;
+        }
+
+        if (k == TK_KW_FN()) {
+            tr = ir_emit_function(tr);
+            continue;
+        }
+
+        // Struct — skip token stream but emit constructor function
+        if (k == TK_KW_STRUCT()) {
+            // Peek at struct name
+            let sname = ir_peek_lexeme(tr, 1);
+            tr = ir_skip_top_level_decl(tr);
+            // Emit constructor if struct was collected
+            let count_key = str_concat("struct:", str_concat(sname, ":count"));
+            let count_s = map_string_string_get(tr.sema, count_key);
+            if (count_s != "") {
+                tr = ir_emit_struct_ctor(tr, sname);
+            }
+            continue;
+        }
+
+        // Enum, type alias, impl, trait, union — skip (no IR output needed for now)
+        if (k == TK_KW_ENUM() || k == TK_KW_IMPL() ||
+            k == TK_KW_TRAIT() || k == TK_KW_TYPE() || k == TK_KW_UNION()) {
+            tr = ir_skip_top_level_decl(tr);
+            continue;
+        }
+
+        // Module/import declarations — skip
+        if (k == TK_KW_MODULE() || k == TK_KW_IMPORT()) {
+            tr = ir_skip_to_end_of_line(tr);
+            continue;
+        }
+
+        // Const declaration — skip
+        if (k == TK_KW_CONST()) {
+            tr = ir_skip_to_end_of_line(tr);
+            continue;
+        }
+
+        // Anything else — skip token
+        tr = ir_advance(tr);
+    }
+
+    let success = (tr.errors == 0);
+    return IrTranslateResult { success: success, errors: tr.errors, globals: tr.globals };
+}
+
+// Join the globals VecString then the function-body VecString into one IR text.
+pub fn join_ir_output(globals: VecString, body: VecString) -> string {
+    let result = "";
+    let n = vec_string_len(globals);
+    let i = 0;
+    while (i < n) {
+        result = str_concat(result, vec_string_get(globals, i));
+        i = i + 1;
+    }
+    n = vec_string_len(body);
+    i = 0;
+    while (i < n) {
+        result = str_concat(result, vec_string_get(body, i));
+        i = i + 1;
+    }
+    return result;
+}

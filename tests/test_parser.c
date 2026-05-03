@@ -529,21 +529,209 @@ void kr_unsetenv(kr_str name) { _putenv_s(name, ""); }
 #endif
 
 /* Forward declarations */
+int64_t kr_test_parse_empty();
+int64_t kr_test_parse_function();
+int64_t kr_test_parse_struct();
+int64_t kr_test_parse_var_decl();
+int64_t kr_test_parse_module_import();
+int64_t kr_test_parse_enum();
+int64_t kr_test_parse_match();
+int64_t kr_test_parse_result();
+int64_t kr_test_ast_node();
+int64_t kr_test_ast_flags();
+int64_t kr_test_node_kind_names();
 int64_t kr_main();
 
 
-int64_t kr_main() {
-    __auto_type sum = 0;
-    for (int64_t i = 0; i < 5; i++) {
-        sum = _KR_ADD(sum, i);
+int64_t kr_test_parse_empty() {
+    __auto_type ts = kr_tokenize("");
+    __auto_type p = kr_new_parser(ts.count, "test.kr");
+    __auto_type result = kr_parse_program(p);
+    if (_KR_NEQ(result.node_count, 0)) {
+        kr_puts("FAIL: test_parse_empty — expected 0 nodes");
+        return 1;
     }
-    kr_puts(kr_str_concat("sum(0..5)=", kr_fmt_int((int64_t)(intptr_t)(sum))));
-    __auto_type sum2 = 0;
-    for (int64_t j = 1; j < 4; j++) {
-        sum2 = _KR_ADD(sum2, j);
+    if (!result.success) {
+        kr_puts("FAIL: test_parse_empty — should succeed");
+        return 1;
     }
-    kr_puts(kr_str_concat("sum(1..4)=", kr_fmt_int((int64_t)(intptr_t)(sum2))));
     return 0;
+}
+
+int64_t kr_test_parse_function() {
+    __auto_type src = "fn main() -> int { return 42; }";
+    __auto_type ts = kr_tokenize(src);
+    __auto_type p = kr_new_parser(ts.count, "test.kr");
+    __auto_type result = kr_parse_program(p);
+    if (_KR_EQ(result.node_count, 0)) {
+        kr_puts("FAIL: test_parse_function — expected nodes");
+        return 1;
+    }
+    return 0;
+}
+
+int64_t kr_test_parse_struct() {
+    __auto_type src = "struct Point { x: int; y: int; }";
+    __auto_type ts = kr_tokenize(src);
+    __auto_type p = kr_new_parser(ts.count, "test.kr");
+    __auto_type result = kr_parse_program(p);
+    if (_KR_EQ(result.node_count, 0)) {
+        kr_puts("FAIL: test_parse_struct — expected nodes");
+        return 1;
+    }
+    return 0;
+}
+
+int64_t kr_test_parse_var_decl() {
+    __auto_type src = "let x = 42;";
+    __auto_type ts = kr_tokenize(src);
+    __auto_type p = kr_new_parser(ts.count, "test.kr");
+    __auto_type result = kr_parse_program(p);
+    if (_KR_EQ(result.node_count, 0)) {
+        kr_puts("FAIL: test_parse_var_decl — expected nodes");
+        return 1;
+    }
+    return 0;
+}
+
+int64_t kr_test_parse_module_import() {
+    __auto_type src = "module test;\nimport other;";
+    __auto_type ts = kr_tokenize(src);
+    __auto_type p = kr_new_parser(ts.count, "test.kr");
+    __auto_type result = kr_parse_program(p);
+    if (_KR_EQ(result.node_count, 0)) {
+        kr_puts("FAIL: test_parse_module_import — expected nodes");
+        return 1;
+    }
+    return 0;
+}
+
+int64_t kr_test_parse_enum() {
+    __auto_type src = "enum Color { Red, Green, Blue }";
+    __auto_type ts = kr_tokenize(src);
+    __auto_type p = kr_new_parser(ts.count, "test.kr");
+    __auto_type result = kr_parse_program(p);
+    if (_KR_EQ(result.node_count, 0)) {
+        kr_puts("FAIL: test_parse_enum — expected nodes");
+        return 1;
+    }
+    return 0;
+}
+
+int64_t kr_test_parse_match() {
+    __auto_type src = "match (x) { 1 -> { return 1; } _ -> { return 0; } }";
+    __auto_type ts = kr_tokenize(src);
+    __auto_type p = kr_new_parser(ts.count, "test.kr");
+    __auto_type result = kr_parse_program(p);
+    if (_KR_EQ(result.node_count, 0)) {
+        kr_puts("FAIL: test_parse_match — expected nodes");
+        return 1;
+    }
+    return 0;
+}
+
+int64_t kr_test_parse_result() {
+    __auto_type errors = 0;
+    __auto_type r = kr_new_parse_result(10, 0);
+    if (_KR_NEQ(r.node_count, 10)) {
+        kr_puts("FAIL: node_count should be 10");
+        errors = _KR_ADD(errors, 1);
+    }
+    if (!r.success) {
+        kr_puts("FAIL: should be success with 0 errors");
+        errors = _KR_ADD(errors, 1);
+    }
+    __auto_type r2 = kr_new_parse_result(5, 3);
+    if (r2.success) {
+        kr_puts("FAIL: should not be success with 3 errors");
+        errors = _KR_ADD(errors, 1);
+    }
+    return errors;
+}
+
+int64_t kr_test_ast_node() {
+    __auto_type errors = 0;
+    __auto_type n = kr_new_node(kr_NODE_FN_DECL(), "main", 1, 1);
+    if (_KR_NEQ(n.kind, kr_NODE_FN_DECL())) {
+        kr_puts("FAIL: node kind should be fn_decl");
+        errors = _KR_ADD(errors, 1);
+    }
+    if (_KR_NEQ(n.name, "main")) {
+        kr_puts("FAIL: node name should be main");
+        errors = _KR_ADD(errors, 1);
+    }
+    if (_KR_NEQ(n.first_child, -1)) {
+        kr_puts("FAIL: first_child should be -1");
+        errors = _KR_ADD(errors, 1);
+    }
+    return errors;
+}
+
+int64_t kr_test_ast_flags() {
+    __auto_type errors = 0;
+    __auto_type n = kr_new_node(kr_NODE_FN_DECL(), "test", 1, 1);
+    if (kr_has_flag(n, kr_FLAG_PUBLIC())) {
+        kr_puts("FAIL: new node should not have PUBLIC flag");
+        errors = _KR_ADD(errors, 1);
+    }
+    __auto_type n2 = (AstNode){.kind = n.kind, .name = n.name, .str_value = n.str_value, .int_value = n.int_value, .line = n.line, .column = n.column, .flags = kr_FLAG_PUBLIC() | kr_FLAG_ASYNC(), .parent_id = n.parent_id, .first_child = n.first_child, .next_sibling = n.next_sibling};
+    if (!kr_has_flag(n2, kr_FLAG_PUBLIC())) {
+        kr_puts("FAIL: should have PUBLIC flag");
+        errors = _KR_ADD(errors, 1);
+    }
+    if (!kr_has_flag(n2, kr_FLAG_ASYNC())) {
+        kr_puts("FAIL: should have ASYNC flag");
+        errors = _KR_ADD(errors, 1);
+    }
+    if (kr_has_flag(n2, kr_FLAG_UNSAFE())) {
+        kr_puts("FAIL: should not have UNSAFE flag");
+        errors = _KR_ADD(errors, 1);
+    }
+    return errors;
+}
+
+int64_t kr_test_node_kind_names() {
+    __auto_type errors = 0;
+    if (_KR_NEQ(kr_node_kind_name(kr_NODE_FN_DECL()), "function_declaration")) {
+        kr_puts("FAIL: fn_decl name");
+        errors = _KR_ADD(errors, 1);
+    }
+    if (_KR_NEQ(kr_node_kind_name(kr_NODE_STRUCT_DECL()), "struct_declaration")) {
+        kr_puts("FAIL: struct_decl name");
+        errors = _KR_ADD(errors, 1);
+    }
+    if (_KR_NEQ(kr_node_kind_name(kr_EXPR_INT_LIT()), "int_literal")) {
+        kr_puts("FAIL: int_lit name");
+        errors = _KR_ADD(errors, 1);
+    }
+    if (_KR_NEQ(kr_node_kind_name(kr_EXPR_CALL()), "call")) {
+        kr_puts("FAIL: call name");
+        errors = _KR_ADD(errors, 1);
+    }
+    return errors;
+}
+
+int64_t kr_main() {
+    kr_puts("=== Parser Tests ===");
+    __auto_type failures = 0;
+    failures = _KR_ADD(failures, kr_test_parse_empty());
+    failures = _KR_ADD(failures, kr_test_parse_function());
+    failures = _KR_ADD(failures, kr_test_parse_struct());
+    failures = _KR_ADD(failures, kr_test_parse_var_decl());
+    failures = _KR_ADD(failures, kr_test_parse_module_import());
+    failures = _KR_ADD(failures, kr_test_parse_enum());
+    failures = _KR_ADD(failures, kr_test_parse_match());
+    failures = _KR_ADD(failures, kr_test_parse_result());
+    failures = _KR_ADD(failures, kr_test_ast_node());
+    failures = _KR_ADD(failures, kr_test_ast_flags());
+    failures = _KR_ADD(failures, kr_test_node_kind_names());
+    if (_KR_EQ(failures, 0)) {
+        kr_puts("All parser tests passed.");
+    }
+    else {
+        kr_puts("Parser tests FAILED.");
+    }
+    return failures;
 }
 
 
