@@ -52,7 +52,7 @@
 - [ ] Documentation generator
 - [ ] Profiling tools
 
-## Bootstrap Milestone
+## Bootstrap Milestone ✅
 
 The ultimate goal is for `krakenc` to compile itself:
 ```
@@ -60,3 +60,8 @@ krakenc src/main.kr → krakenc_stage1 (compiled by Rust compiler)
 krakenc_stage1 src/main.kr → krakenc_stage2 (compiled by stage 1)
 diff krakenc_stage1 krakenc_stage2 → identical = bootstrap complete
 ```
+
+**Achieved on Windows (x86_64-pc-windows-msvc) with clang 18.**
+- Host detection is compile-time via `#ifdef` macros — zero env-var dependency.
+- Fixed point verified: `krakenc_stage1 == krakenc_stage2` (byte-identical C output).
+- All 15 test files pass emit-C; 11/11 runtime test binaries exit 0.
