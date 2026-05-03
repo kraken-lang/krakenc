@@ -12,6 +12,10 @@ Cargo.lock
 *~
 .DS_Store
 
+# Development
+/dev/
+/.dev/
+
 # Build artifacts
 /dist/
 /build/
