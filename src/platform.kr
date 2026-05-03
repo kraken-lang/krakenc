@@ -180,10 +180,29 @@ fn new_target(os: int, arch: int, abi: int, vendor: string, triple: string) -> T
 // Uses conditional compilation markers that the Kraken compiler provides.
 // Fallback: defaults to x86_64-apple-darwin (primary dev platform).
 pub fn detect_host_target() -> Target {
-    // The Kraken runtime exposes platform info via predefined constants.
-    // For the bootstrap compiler, we detect at C level via #ifdef.
-    // For now, return the build-time default; the C preamble handles runtime checks.
-    return parse_target("x86_64-apple-darwin");
+    // Use compile-time C preprocessor macros embedded in every generated binary.
+    // kr_detect_host_os() and kr_detect_host_arch() are emitted by c_typedefs_common()
+    // and resolve via #ifdef at C compile time — always correct, zero dependencies.
+    let os = detect_host_os();
+    let arch = detect_host_arch();
+    // Map os+arch to a canonical target triple.
+    if (os == OS_WINDOWS()) {
+        if (arch == ARCH_AARCH64()) { return parse_target("aarch64-pc-windows-msvc"); }
+        return parse_target("x86_64-pc-windows-msvc");
+    }
+    if (os == OS_MACOS()) {
+        if (arch == ARCH_AARCH64()) { return parse_target("aarch64-apple-darwin"); }
+        return parse_target("x86_64-apple-darwin");
+    }
+    if (os == OS_FREEBSD()) {
+        return parse_target("x86_64-unknown-freebsd");
+    }
+    if (os == OS_WASI()) {
+        return parse_target("wasm32-unknown-wasi");
+    }
+    // Linux (default)
+    if (arch == ARCH_AARCH64()) { return parse_target("aarch64-unknown-linux-gnu"); }
+    return parse_target("x86_64-unknown-linux-gnu");
 }
 
 pub fn target_is_valid(t: Target) -> bool {
@@ -205,7 +224,7 @@ pub fn format_target_display(t: Target) -> string {
 // ---------------------------------------------------------------------------
 
 pub fn default_cc(t: Target) -> string {
-    if (t.os == OS_WINDOWS() && t.abi == ABI_MSVC()) { return "cl.exe"; }
+    if (t.os == OS_WINDOWS() && t.abi == ABI_MSVC()) { return "clang"; }
     if (t.os == OS_WINDOWS() && t.abi == ABI_GNU())  { return "x86_64-w64-mingw32-gcc"; }
     if (t.os == OS_MACOS())   { return "cc"; }
     if (t.os == OS_FREEBSD()) { return "cc"; }
@@ -220,6 +239,11 @@ pub fn cc_cross_flags(t: Target) -> string {
     if (t.os == OS_WASI()) {
         return "--target=wasm32-unknown-wasi --sysroot=/opt/wasi-sdk/share/wasi-sysroot";
     }
+    return "";
+}
+
+pub fn cc_extra_flags(t: Target) -> string {
+    if (t.os == OS_WINDOWS()) { return "-D_CRT_SECURE_NO_WARNINGS"; }
     return "";
 }
 
@@ -262,14 +286,26 @@ pub fn c_includes_windows() -> string {
                 str_concat(
                     str_concat(
                         str_concat(
-                            "#include <stdio.h>\n",
-                            "#include <stdlib.h>\n"
+                            str_concat(
+                                str_concat(
+                                    str_concat(
+                                        str_concat(
+                                            "#include <stdio.h>\n",
+                                            "#include <stdlib.h>\n"
+                                        ),
+                                        "#include <string.h>\n"
+                                    ),
+                                    "#include <stdint.h>\n"
+                                ),
+                                "#include <stdbool.h>\n"
+                            ),
+                            "#include <math.h>\n"
                         ),
-                        "#include <string.h>\n"
+                        "#include <time.h>\n"
                     ),
-                    "#include <stdint.h>\n"
+                    "#include <ctype.h>\n"
                 ),
-                "#include <stdbool.h>\n"
+                "#include <stdarg.h>\n"
             ),
             "#define WIN32_LEAN_AND_MEAN\n"
         ),
@@ -332,6 +368,21 @@ pub fn c_typedefs_common() -> string {
     s = str_concat(s, "  return ((int64_t(*)(void*,int64_t,int64_t))_KR_CL_FN(cl))(_KR_CL_ENV(cl), a, b);\n}\n");
     s = str_concat(s, "static int64_t _kr_cl_call3(void* cl, int64_t a, int64_t b, int64_t c) {\n");
     s = str_concat(s, "  return ((int64_t(*)(void*,int64_t,int64_t,int64_t))_KR_CL_FN(cl))(_KR_CL_ENV(cl), a, b, c);\n}\n");
+    // Compile-time host OS detection via predefined C macros.
+    // Returns the same integer constants as OS_LINUX/OS_MACOS/OS_WINDOWS etc.
+    s = str_concat(s, "static int64_t kr_detect_host_os() {\n");
+    s = str_concat(s, "#if defined(_WIN32) || defined(_WIN64)\n  return 3;\n");
+    s = str_concat(s, "#elif defined(__APPLE__) && defined(__MACH__)\n  return 2;\n");
+    s = str_concat(s, "#elif defined(__linux__)\n  return 1;\n");
+    s = str_concat(s, "#elif defined(__FreeBSD__)\n  return 4;\n");
+    s = str_concat(s, "#elif defined(__wasi__) || defined(__WASI__)\n  return 5;\n");
+    s = str_concat(s, "#else\n  return 0;\n#endif\n}\n");
+    // Compile-time host arch detection.
+    s = str_concat(s, "static int64_t kr_detect_host_arch() {\n");
+    s = str_concat(s, "#if defined(__x86_64__) || defined(_M_X64)\n  return 1;\n");
+    s = str_concat(s, "#elif defined(__aarch64__) || defined(_M_ARM64)\n  return 2;\n");
+    s = str_concat(s, "#elif defined(__wasm32__)\n  return 5;\n");
+    s = str_concat(s, "#else\n  return 0;\n#endif\n}\n");
     return s;
 }
 
@@ -611,7 +662,7 @@ pub fn c_runtime_shims_posix() -> string {
     s = str_concat(s, "void kr_thread_join(void* h) { (void)h; }\n");
     s = str_concat(s, "void kr_join(void* h) { (void)h; }\n");
     s = str_concat(s, "int64_t kr_timeout(void* h, int64_t ms) { (void)h; (void)ms; return 0; }\n");
-    s = str_concat(s, "void kr_sleep_ms(int64_t ms) { usleep((unsigned)(ms*1000)); }\n");
+    s = str_concat(s, "#ifndef _WIN32\nvoid kr_sleep_ms(int64_t ms) { usleep((unsigned)(ms*1000)); }\n#endif\n");
     // Time
     s = str_concat(s, "int64_t kr_time() { return (int64_t)time(NULL); }\n");
     // Char classification
@@ -645,8 +696,8 @@ pub fn c_runtime_shims_posix() -> string {
     s = str_concat(s, "void* kr_memmove(void* dst, void* src, int64_t n) { return memmove(dst,src,(size_t)n); }\n");
     s = str_concat(s, "void* kr_memset(void* p, int64_t c, int64_t n) { return memset(p,(int)c,(size_t)n); }\n");
     // Environment
-    s = str_concat(s, "int64_t kr_setenv(kr_str name, kr_str val, ...) { return (int64_t)setenv(name,val,1); }\n");
-    s = str_concat(s, "void kr_unsetenv(kr_str name) { unsetenv(name); }\n");
+    s = str_concat(s, "#ifndef _WIN32\nint64_t kr_setenv(kr_str name, kr_str val, ...) { return (int64_t)setenv(name,val,1); }\n#endif\n");
+    s = str_concat(s, "#ifndef _WIN32\nvoid kr_unsetenv(kr_str name) { unsetenv(name); }\n#endif\n");
     // String search
     s = str_concat(s, "kr_str kr_strstr(kr_str haystack, kr_str needle) { char* p=strstr(haystack,needle); return p?p:\"\"; }\n");
     s = str_concat(s, "kr_str kr_strchr(kr_str s, int64_t c) { char* p=strchr(s,(int)c); return p?p:\"\"; }\n");
@@ -660,6 +711,8 @@ pub fn c_runtime_shims_posix() -> string {
     s = str_concat(s, "int64_t kr_str_char_at_utf8(kr_str s, int64_t idx) { return (int64_t)(unsigned char)s[idx]; }\n");
     // Async stub
     s = str_concat(s, "int64_t kr_block_on(void* future) { (void)future; return 0; }\n");
+    // strdup alias for Windows (_strdup is the conformant name)
+    s = str_concat(s, "#ifdef _WIN32\n#ifndef strdup\n#define strdup _strdup\n#endif\n#endif\n");
     // Sprintf/sscanf
     s = str_concat(s, "#define kr_sprintf(...) sprintf(__VA_ARGS__)\n");
     s = str_concat(s, "#define kr_sscanf(...) sscanf(__VA_ARGS__)\n");
@@ -804,8 +857,14 @@ pub fn c_runtime_shims_posix() -> string {
 
 pub fn c_runtime_shims_windows() -> string {
     let s = c_runtime_shims_posix();
+    // Override POSIX-only shims with Windows equivalents
+    s = str_concat(s, "void kr_sleep_ms(int64_t ms) { Sleep((DWORD)ms); }\n");
+    s = str_concat(s, "int64_t kr_setenv(kr_str name, kr_str val, ...) { return (int64_t)_putenv_s(name, val); }\n");
+    s = str_concat(s, "void kr_unsetenv(kr_str name) { _putenv_s(name, \"\"); }\n");
+    s = str_concat(s, "#undef kr_snprintf\n");
     s = str_concat(s, "#define kr_snprintf _snprintf\n");
     s = str_concat(s, "#define kr_strdup _strdup\n");
+    s = str_concat(s, "#ifndef strdup\n#define strdup _strdup\n#endif\n");
     return s;
 }
 
@@ -841,7 +900,7 @@ pub fn linker_flags(t: Target) -> string {
     if (t.os == OS_LINUX() && t.abi == ABI_MUSL()) { return "-static -lm"; }
     if (t.os == OS_MACOS())                        { return "-lm"; }
     if (t.os == OS_FREEBSD())                      { return "-lm -lpthread"; }
-    if (t.os == OS_WINDOWS() && t.abi == ABI_MSVC()) { return "/link /DEFAULTLIB:msvcrt.lib"; }
+    if (t.os == OS_WINDOWS() && t.abi == ABI_MSVC()) { return ""; }
     if (t.os == OS_WINDOWS() && t.abi == ABI_GNU())  { return "-lm"; }
     if (t.os == OS_WASI())   { return ""; }
     return "";
