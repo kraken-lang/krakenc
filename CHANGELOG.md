@@ -10,7 +10,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.3] - 2026-05-03
+
 ### Added
+- **LLVM IR backend** (`src/llvm_ir.kr`, ~2,200 lines) — second backend that emits LLVM IR text and shells out to `clang -x ir` for assembly + linking with the C runtime. Selected via `KRAKENC_MODE=emit-llvm` (text-only) or `KRAKENC_MODE=compile-ir` (IR + link to native binary). All five primary test programs (`test_minimal`, `test_simple`, `test_operators`, `test_containers`, `test_structs`) build and run via the IR backend, both backends verified by `tools/run-tests.sh`. Self-hosting via IR works end-to-end: `main.exe` (built via the IR backend) compiles `src/main.kr` to a fresh `main.exe` with token-count parity (75,403 tokens).
+- **Cross-platform release pipeline** (`.github/workflows/release.yml`, `.github/workflows/ci.yml`) — GitHub Actions matrix that builds on Windows, Linux, and macOS. CI fires on every push and runs the test runner against both backends plus a gen2/gen3 fixed-point check. The release workflow fires on tag push (`v*`), bundles a vendored `clang` (~245 MB), packs platform archives, and drafts a GitHub Release. Bootstrap chain: clones the sibling `kraken-lang/kraken` Rust repo, builds it via `cargo`, uses it as stage1 to emit `src/main.c` cross-targeted to the runner, then `clang` produces the stage2 `krakenc` binary.
+- **Cross-platform clang vendoring** (`tools/vendor-clang.ps1`, `tools/vendor-clang.sh`) — copy a minimal clang toolchain (`clang`, `lld-link`/`ld.lld`, `lib/clang/18/include/`) from a system LLVM 18 install into `tools/llvm/`. The release workflow uses this to ship a self-contained toolchain with the binary archives. `tools/llvm/` is gitignored; each contributor runs the vendor script locally to populate it.
+- **Portable test runner** (`tools/run-tests.sh`) — POSIX shell script that runs the canonical test programs through krakenc, exercising both the C and LLVM IR backends. Returns non-zero on any failure. Selectable via `BACKEND=c`, `BACKEND=ir`, or `BACKEND=both` (default).
+- **Linux build path** — verified end-to-end on WSL2 Ubuntu: cross-emit `src/main.c` from a stage1 binary, build with system clang, run all 5 IR/C test programs (10/10 pass), self-host gen2 → gen3 byte-identical. No source changes were needed; `src/platform.kr` already handled POSIX paths and POSIX-specific runtime preamble correctly.
+- **Ship checklist** (`.dev/SHIP_CHECKLIST.md`) — finite list of what's left for v0.1.0 / v0.9.3 ship across all three platforms, with the bootstrap chain and verification status tracked alongside.
+
+### Fixed
+- **LLVM IR: missing C runtime declarations** (`src/llvm_ir.kr`) — added `declare i8* @kr_str_from_char_code(i64)` to `ir_emit_declarations` and the corresponding `fn_ret:` seed to `new_ir_translator`. Without it, the IR linker produced `error: use of undefined value '@kr_str_from_char_code'` for any program calling `str_from_char_code(...)`.
+- **LLVM IR: wrong `kr_str_char_at` return type** (`src/llvm_ir.kr`) — declaration claimed `i8*` but the runtime function returns `i64`. Fixed to `declare i64 @kr_str_char_at(i8*, i64)`.
+- **External linkage for host detection helpers** (`src/platform.kr`) — `kr_detect_host_os()` and `kr_detect_host_arch()` were emitted as `static` in the runtime preamble. That is fine for the C backend (everything in one TU) but breaks the IR backend, which links the runtime as a separate translation unit. Removed `static`; produces an LNK2019 unresolved external when not.
+- **String equality emit** (`src/llvm_ir.kr`) — the IR emitter compiled `==` and `!=` on `i8*` operands as `icmp eq i8*` / `icmp ne i8*`, which compares pointer values, not string contents. Fixed both `ir_emit_binop` and `ir_build_binop_instr` to emit `call i1 @kr_str_eq(...)` / `@kr_str_ne(...)` when the operand type is `i8*`. This was the cause of every `if (env_var == "value")` check silently failing.
+- **`getenv` mapping in IR backend** (`src/llvm_ir.kr`) — `ir_mangle_fn` mapped `getenv` to bare `getenv`, but the runtime defines a `kr_getenv` wrapper that returns `""` instead of NULL when the variable is unset. The IR backend now uses `kr_getenv` to match the C backend, preventing NULL dereferences in `kr_str_eq(NULL, "")`.
+- **Break/continue lowering** (`src/llvm_ir.kr`) — `break` and `continue` were emitted as comments (`; break (not yet lowered to branch)`) instead of branches. Implemented proper lowering with loop-label save/restore in `ir_emit_while` and `ir_emit_for` via `loop_exit` / `loop_cond` keys in the sema map. Break branches to the loop exit label, continue to the loop cond label, both followed by a dead-block label so subsequent code still has a basic block.
+- **Loop-label save/restore aliasing** (`src/llvm_ir.kr`) — `kr_map_string_string_get` returns the interior pointer; the next `_set` on the same key frees that pointer. The first cut of break/continue stored the loop labels in sema and restored them after nested loops, but the saved value became a dangling pointer once a nested loop overwrote the slot. Fixed by duping the saved value with `str_concat(map_get(...), "")` before the nested set.
+- **Unary operator precedence** (`src/llvm_ir.kr`) — `!`, unary `-`, and `~` parsed their operand as a full expression (`ir_emit_full_expr`) instead of a primary (`ir_emit_expr`). This made `!at_end(cur) && is_alnum(peek_char(cur))` parse as `!(at_end(cur) && is_alnum(...))`, inverting loop conditions in the lexer and causing infinite loops on input. Fixed all three to call `ir_emit_expr`. This was the biggest single bug fixed in this release.
+
+### Changed
+- **Workspace cleanup**: moved `parser.kr.fat`, `parser.kr.fat2`, `platform.kr.fat`, `platform.kr.fat2` from `src/` to `legacy/` with an explainer README. They were marked "pending disposition" since the AST→token-driven rewrite settled.
+- **Removed**: `src/main.c.bak` (186 KB stale generated artifact from a previous emit).
+- **Generated artifacts now gitignored**: `src/main.c`, `src/main.ll`, `src/main_runtime.c`, `src/parser.c`, plus `tests/*.c`, `tests/*.ll`, `tests/*_runtime.c`, `tests/*.exe`. CI regenerates these on every build via the bootstrap chain.
+- **GitHub Actions versions** — bumped `actions/checkout`, `actions/upload-artifact`, `actions/download-artifact` from `@v4` to `@v5`. Removes Node.js 20 deprecation warnings.
+
+### Added (existing Unreleased work, now released)
 - **Self-Hosting Achieved** — krakenc can now compile itself through multiple generations with byte-identical output (fixed point at gen2→gen3)
   - Multi-file import resolution: `resolve_imports()` reads imported `.kr` files and concatenates sources before tokenization
   - `dir_of()` helper extracts directory from file path for relative import resolution
@@ -287,7 +313,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Updated docs/architecture.md with detailed phase descriptions
 - Updated docs/roadmap.md with Phase 1 completion status
 
-## [0.9.2] - 2026-02-05
+## [0.9.1] - 2026-02-05
 
 ### Added
 - Initial repository structure
@@ -301,4 +327,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Note
 
-This is a placeholder release to establish the repository. No compiler code is included yet. The actual compiler implementation will begin after v0.8.47 of the main Kraken project is complete.
+This was a placeholder release to establish the repository. No compiler code was included; the actual implementation began with the next release. (The original tag for this release was `v0.9.2` due to a numbering error; corrected here for clarity.)
+
+[Unreleased]: https://github.com/kraken-lang/krakenc/compare/v0.9.3...HEAD
+[0.9.3]: https://github.com/kraken-lang/krakenc/compare/v0.9.2...v0.9.3
+[0.9.2]: https://github.com/kraken-lang/krakenc/compare/v0.9.1...v0.9.2
+[0.9.1]: https://github.com/kraken-lang/krakenc/releases/tag/v0.9.1

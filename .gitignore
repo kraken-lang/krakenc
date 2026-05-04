@@ -42,3 +42,32 @@ Cargo.lock
 
 # Vendored toolchain (populated by tools/vendor-clang.ps1)
 /tools/llvm/
+
+# Generated artifacts (CI builds these from src/*.kr; not committed)
+# After this entry was added you may need to:
+#   git rm --cached src/main.c src/main.ll src/main_runtime.c src/parser.c
+#   git rm --cached tests/*.c tests/*.ll tests/*_runtime.c
+src/main.c
+src/main.ll
+src/main_runtime.c
+src/parser.c
+src/main_gen2.c
+tests/*.c
+tests/*.ll
+tests/*_runtime.c
+tests/*.exe
+
+# Test outputs that aren't sources
+test.c
+test.exe
+_kr_runtime.c
+build_err.txt
+build/run_log.txt
+build/main_out.txt
+build/main_err.txt
+build/main_self.txt
+build/lex_out.txt
+build/test_lex.txt
+build/bc4_log.txt
+build/gen3_self.txt
+build/link_errors.txt

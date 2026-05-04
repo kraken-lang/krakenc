@@ -1,67 +1,52 @@
-# Kraken Compiler Roadmap
+# krakenc Roadmap
 
-**Status**: Phase 1 Complete
+This file is a high-level summary of what's planned. The detailed, frequently-updated version lives in [`.dev/ROADMAP.md`](../.dev/ROADMAP.md). What's already done is in [`CHANGELOG.md`](../CHANGELOG.md) and [`.dev/AUDIT.md`](../.dev/AUDIT.md).
 
-## Phase 1: Self-Hosted Compiler Foundation ✅
+## Where we are (v0.9.3)
 
-**Goal**: Implement a self-hosted compiler with full pipeline
+- Self-hosted compiler in Kraken with byte-identical gen2 → gen3 fixed point on the C backend
+- Two backends: C emission (the bootstrap path) and LLVM IR emission
+- 226 bootstrap test programs compile cleanly, 135 unit tests pass
+- Cross-platform CI on Windows, Linux, macOS (verified end-to-end on first two; macOS via the sibling kraken repo's matrix)
+- Release pipeline: tag a `v*` and GitHub Actions builds a per-platform archive (krakenc + bundled clang) and drafts a GitHub Release
 
-- [x] Establish compiler diagnostic code system (KRA0001–KRA0014)
-- [x] Implement lexer in Kraken (`src/lexer.kr`) — 80+ token kinds, full tokenization
-- [x] Implement parser in Kraken (`src/parser.kr`) — recursive descent, all constructs
-- [x] Build semantic analysis framework (`src/typechecker.kr`) — two-pass, scope management
-- [x] Create type checking system — operator type rules, type equality, classification
-- [x] Implement C code generation for bootstrapping (`src/codegen.kr`)
-- [x] Build CLI driver (`src/main.kr`) — 7 modes (compile, emit-c, check, tokens, ast, version, help)
-- [x] Comprehensive test suite — 47 tests across 4 test files
+## Near-term (`0.9.4` – `0.9.8`)
 
-**Deliverables**:
-- 7 source modules in `src/` (token, lexer, ast, parser, typechecker, codegen, error, main)
-- 4 test files in `tests/` (test_lexer, test_parser, test_typechecker, test_codegen)
-- Updated documentation (architecture.md, README.md, CHANGELOG.md)
+Smoothing-and-filling work, no major architectural shifts. Expected cadence: small focused releases.
 
-## Phase 2: Optimization and Performance
+- Verify all three platforms end-to-end on every push, not just on tag
+- Documentation pass: cover language features that exist but aren't documented well, especially around traits, generics, and dyn dispatch
+- Examples folder for `krakenc` (the compiler-side examples; language examples live in the sibling `kraken` repo)
+- Investigate the IR backend gaps that show up when self-hosting the compiler itself — most are resolved as of `0.9.3` but more edge cases will surface as more programs are exercised
+- Tighten error diagnostics: source context lines, better suggestions on common mistakes
+- Performance: profile compilation and find the obvious wins. The token-driven translator is already pretty fast but hasn't been benchmarked rigorously
 
-**Goal**: Improve compilation speed and generated code quality
+## Beta (`0.9.9`)
 
-- [ ] Implement constant folding optimization pass
-- [ ] Implement dead code elimination
-- [ ] Add incremental compilation support
-- [ ] Improve parser error recovery
-- [ ] Enhance diagnostic quality with source context display
-- [ ] Profile and optimize compiler performance
-- [ ] Implement LLVM backend (replace C emission)
+Feature-complete pre-release. Final pieces before tagging `1.0.0-RC-1`. Scope to be locked in based on what `0.9.4`–`0.9.8` reveals; current candidates:
 
-## Phase 3: Advanced Features
+- Native object-file emitter (skip the `clang` round-trip)
+- Initial package manager design — likely just a manifest format and a Git-based fetch story for `1.0`; full registry and resolver behavior post-1.0
+- LSP feature parity with the basics (go-to-definition, hover, diagnostics-on-save) via the sibling [`kraken-lsp`](https://github.com/kraken-lang/kraken-lsp) project
+- Stability commitment: define what `1.0` promises and what it doesn't
 
-**Goal**: Add advanced compiler features
+## Post-1.0 (not on the near-term radar)
 
-- [ ] Language server protocol (LSP) integration
-- [ ] Debugger support (DWARF emission)
-- [ ] Cross-compilation support
-- [ ] Compile-time evaluation (const fn)
-- [ ] Macro expansion
+These are valuable but explicitly not blocking 1.0:
 
-## Phase 4: Tooling Integration
+- Own linker (skip `lld-link` / `ld.lld`). Only matters if the linker becomes a real friction point
+- Own libc / direct-syscall layer where possible. On Windows the syscall ABI isn't stable, so this is permanently capped at "depend only on `kernel32.dll` / `ntdll.dll`" rather than "no system deps"
+- Incremental compilation
+- Parallel codegen
+- Debugger story (DWARF / PDB emission tied to a real debugger UX)
+- WASM target maturity (the wasm32-wasi triple is wired up but not heavily exercised)
 
-**Goal**: Build comprehensive development tooling
+## What's deliberately out of scope
 
-- [ ] Package manager integration
-- [ ] Build system improvements
-- [ ] IDE plugin support
-- [ ] Documentation generator
-- [ ] Profiling tools
+- Custom IDE. Kraken targets standard editors via LSP.
+- Domain-specific extensions (a separate "Kraken for X" dialect). The base language is general-purpose.
+- A web service or hosted package registry beyond what GitHub Releases provides for binary distribution. Hosted registries can come post-1.0 if there's user demand.
 
-## Bootstrap Milestone ✅
+## Honest disclaimer
 
-The ultimate goal is for `krakenc` to compile itself:
-```
-krakenc src/main.kr → krakenc_stage1 (compiled by Rust compiler)
-krakenc_stage1 src/main.kr → krakenc_stage2 (compiled by stage 1)
-diff krakenc_stage1 krakenc_stage2 → identical = bootstrap complete
-```
-
-**Achieved on Windows (x86_64-pc-windows-msvc) with clang 18.**
-- Host detection is compile-time via `#ifdef` macros — zero env-var dependency.
-- Fixed point verified: `krakenc_stage1 == krakenc_stage2` (byte-identical C output).
-- All 15 test files pass emit-C; 11/11 runtime test binaries exit 0.
+The roadmap above is what's currently believed reasonable. Compiler projects routinely discover that the next thing turns out to be either much easier or much harder than expected. Versions and dates are not commitments; the milestone names are checkpoints, not delivery dates.
