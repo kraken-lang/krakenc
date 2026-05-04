@@ -31,6 +31,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Loop-label save/restore aliasing** (`src/llvm_ir.kr`) — `kr_map_string_string_get` returns the interior pointer; the next `_set` on the same key frees that pointer. The first cut of break/continue stored the loop labels in sema and restored them after nested loops, but the saved value became a dangling pointer once a nested loop overwrote the slot. Fixed by duping the saved value with `str_concat(map_get(...), "")` before the nested set.
 - **Unary operator precedence** (`src/llvm_ir.kr`) — `!`, unary `-`, and `~` parsed their operand as a full expression (`ir_emit_full_expr`) instead of a primary (`ir_emit_expr`). This made `!at_end(cur) && is_alnum(peek_char(cur))` parse as `!(at_end(cur) && is_alnum(...))`, inverting loop conditions in the lexer and causing infinite loops on input. Fixed all three to call `ir_emit_expr`. This was the biggest single bug fixed in this release.
 
+### Known issues
+- **Compiler peak memory ~24 GB on full self-emit** — `kr_str_concat` in the runtime preamble (`src/platform.kr`) never frees its input buffers, producing O(N^2) memory growth across the ~30,000 concats a full emit performs. Visible impact: the gen2/gen3 fixed-point check is currently disabled on Linux CI (7 GB runner cap); macOS CI takes ~2 minutes for the same check; Windows CI runs in normal time. Tracked for `0.9.4` — see `.dev/AUDIT.md` "Known items deferred past 0.9.3".
+
 ### Changed
 - **Workspace cleanup**: moved `parser.kr.fat`, `parser.kr.fat2`, `platform.kr.fat`, `platform.kr.fat2` from `src/` to `legacy/` with an explainer README. They were marked "pending disposition" since the AST→token-driven rewrite settled.
 - **Removed**: `src/main.c.bak` (186 KB stale generated artifact from a previous emit).

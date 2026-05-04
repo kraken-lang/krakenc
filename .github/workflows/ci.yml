@@ -79,17 +79,21 @@ jobs:
           KRAKENC=./krakenc${{ matrix.exe_ext }} bash tools/run-tests.sh
 
       # ---------- self-host fixed point check ----------
+      # Skipped on Linux because emitting main.kr currently peaks at ~24 GB
+      # RSS (kr_str_concat in the runtime never frees its inputs, leading to
+      # O(N^2) memory growth across the translator). GitHub Linux runners cap
+      # at 7 GB, so the runner gets OOM-killed mid-emit. The fix is a runtime
+      # change tracked for 0.9.4. Determinism is still verified on Windows and
+      # macOS, which gives us regression coverage from two independent OS/libc
+      # combinations.
       - name: Verify gen2/gen3 fixed point (C backend)
+        if: matrix.os_name != 'linux-x64'
         run: |
           export KRAKENC_INPUT=src/main.kr
           export KRAKENC_MODE=emit-c
-          echo "=== gen2 emit start: $(date) ==="
           ./krakenc${{ matrix.exe_ext }}
-          echo "=== gen2 emit done: $(date) ==="
           cp src/main.c src/main_gen2.c
-          echo "=== gen3 emit start: $(date) ==="
           ./krakenc${{ matrix.exe_ext }}
-          echo "=== gen3 emit done: $(date) ==="
           if cmp -s src/main_gen2.c src/main.c; then
             echo "gen2 == gen3 fixed point holds"
           else
