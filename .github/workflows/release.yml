@@ -78,13 +78,17 @@ jobs:
           clang -o krakenc${{ matrix.exe_ext }} src/main.c -Wno-int-conversion ${{ matrix.cc_extra }}
 
       # ---------- vendor clang for the release bundle ----------
+      # macOS is intentionally not bundled — Homebrew clang is a small wrapper
+      # that aborts when copied to a new location, and macOS users get clang
+      # via Xcode Command Line Tools by default. The macOS archive ships only
+      # the krakenc binary; users compile their .c output with system clang.
       - name: Run vendor script (Windows)
         if: matrix.os_name == 'windows-x64'
         shell: pwsh
         run: pwsh tools\vendor-clang.ps1
 
-      - name: Run vendor script (POSIX)
-        if: matrix.os_name != 'windows-x64'
+      - name: Run vendor script (Linux)
+        if: matrix.os_name == 'linux-x64'
         run: bash tools/vendor-clang.sh
 
       # ---------- run smoke tests ----------
@@ -98,7 +102,9 @@ jobs:
         run: |
           mkdir -p kraken-release/bin
           cp krakenc${{ matrix.exe_ext }} kraken-release/bin/
-          cp -r tools/llvm kraken-release/llvm
+          if [ -d tools/llvm ]; then
+            cp -r tools/llvm kraken-release/llvm
+          fi
           cp README.md LICENSE kraken-release/
 
       - name: Pack archive (zip)
