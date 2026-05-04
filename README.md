@@ -77,45 +77,45 @@ KRAKENC_MODE=version ./krakenc
 
 ## Building from source
 
-The chicken-and-egg of self-hosted compilers: to build `krakenc` from `.kr` source, you need an existing `krakenc`. Three ways forward:
-
-### 1. Use a pre-built release (easiest)
-
-Download the platform archive from the GitHub Releases page, extract, and run `bin/krakenc`. The release ships a bundled `clang` so no extra toolchain install is required beyond the OS-provided libc/linker layer (Xcode CLT on macOS, system libc on Linux, kernel32/ucrt on Windows).
-
-### 2. Bootstrap from the sibling Rust compiler
-
-The sibling [`kraken`](https://github.com/kraken-lang/kraken) repository contains a Rust+LLVM compiler that can compile any `.kr` file. Use it as stage1:
+`src/main.c` is committed in the repo as the **portable bootstrap source** — a single C file that builds krakenc on Windows, Linux, and macOS via `#ifdef`-gated platform code. The bootstrap is one step:
 
 ```bash
-git clone https://github.com/kraken-lang/kraken
-cd kraken
-cargo build --release -p kraken     # produces target/release/kraken (the stage1 binary)
+# Linux
+clang -o krakenc src/main.c -Wno-int-conversion -lm -lpthread
 
-# Use stage1 to emit krakenc's C source
-cd ../krakenc
-KRAKENC_INPUT=src/main.kr KRAKENC_MODE=emit-c ../kraken/target/release/kraken
+# macOS
+clang -o krakenc src/main.c -Wno-int-conversion -lm
 
-# Compile that C with clang
-clang -o krakenc src/main.c -Wno-int-conversion \
-    $([ "$(uname)" = "Linux" ] && echo "-lm -lpthread") \
-    $([ "$(uname)" = "Darwin" ] && echo "-lm")
+# Windows
+clang -o krakenc.exe src/main.c -Wno-int-conversion -D_CRT_SECURE_NO_WARNINGS
 ```
 
-Both [`.github/workflows/ci.yml`](.github/workflows/ci.yml) and [`.github/workflows/release.yml`](.github/workflows/release.yml) automate this on every push.
+That's it. No Rust toolchain, no chicken-and-egg, no separate stage1 binary — just clang and the OS-provided libc layer (Xcode CLT on macOS, system libc on Linux, kernel32/ucrt on Windows).
 
-### 3. Use an existing krakenc to rebuild itself
+### Rebuilding from .kr source
 
-Once you have a working `krakenc` binary on your machine:
+Once you have a working `krakenc` binary, you can regenerate `src/main.c` from the `.kr` sources and rebuild:
 
 ```bash
 KRAKENC_INPUT=src/main.kr KRAKENC_MODE=emit-c ./krakenc
-clang -o krakenc src/main.c -Wno-int-conversion -D_CRT_SECURE_NO_WARNINGS
+
+# Then rebuild as above
+clang -o krakenc src/main.c -Wno-int-conversion -lm -lpthread   # or your platform's flags
 
 # Verify the gen2 == gen3 fixed point
 KRAKENC_INPUT=src/main.kr KRAKENC_MODE=emit-c ./krakenc
-# Compare the new src/main.c to the previous one - should be byte-identical
+# src/main.c should be byte-identical to the previous emit
 ```
+
+When you commit `.kr` source changes, regenerate `src/main.c` and commit it in the same change. The CI workflow verifies the gen2/gen3 fixed point on every push to catch drift.
+
+### Pre-built releases
+
+For end users who want a working binary without building anything: download the platform archive from the [GitHub Releases](https://github.com/kraken-lang/krakenc/releases) page. The release ships a bundled `clang` and runtime headers so no separate LLVM install is required.
+
+### Relationship to the sibling kraken (Rust) compiler
+
+Earlier versions of `krakenc` were bootstrapped via the sibling [`kraken-lang/kraken`](https://github.com/kraken-lang/kraken) Rust+LLVM compiler. As `krakenc` gained features the Rust compiler doesn't fully support (closures with complex captures, large-scale generics, dyn trait dispatch), that path no longer works for the current `krakenc`. The committed `src/main.c` is now the canonical bootstrap source.
 
 ## Bundled clang (optional)
 

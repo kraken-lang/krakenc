@@ -43,11 +43,12 @@ Cargo.lock
 # Vendored toolchain (populated by tools/vendor-clang.ps1)
 /tools/llvm/
 
-# Generated artifacts (CI builds these from src/*.kr; not committed)
-# After this entry was added you may need to:
-#   git rm --cached src/main.c src/main.ll src/main_runtime.c src/parser.c
-#   git rm --cached tests/*.c tests/*.ll tests/*_runtime.c
-src/main.c
+# src/main.c is intentionally tracked: it is the portable bootstrap source.
+# Anyone with clang can build krakenc directly with `clang src/main.c -o krakenc`
+# (plus -lm -lpthread on Linux, -lm on macOS). It is regenerated whenever any
+# .kr source under src/ changes; commit the regen alongside the .kr edit.
+
+# Generated artifacts that ARE build-only (not bootstrap sources)
 src/main.ll
 src/main_runtime.c
 src/parser.c

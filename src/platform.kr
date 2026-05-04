@@ -329,10 +329,56 @@ pub fn c_includes_wasi() -> string {
     );
 }
 
+// Portable include block: standard headers always, with the platform-specific
+// pieces gated by #ifdef so the same emitted .c file builds on Windows, Linux,
+// and macOS. Used by default; allows the same main.c to serve as a portable
+// bootstrap source committed to git.
+pub fn c_includes_portable() -> string {
+    return str_concat(
+        str_concat(
+            str_concat(
+                str_concat(
+                    str_concat(
+                        str_concat(
+                            str_concat(
+                                str_concat(
+                                    "#include <stdio.h>\n",
+                                    "#include <stdlib.h>\n"
+                                ),
+                                "#include <string.h>\n"
+                            ),
+                            "#include <stdint.h>\n"
+                        ),
+                        "#include <stdbool.h>\n"
+                    ),
+                    "#include <math.h>\n"
+                ),
+                str_concat(
+                    str_concat("#include <time.h>\n", "#include <ctype.h>\n"),
+                    "#include <stdarg.h>\n"
+                )
+            ),
+            "#ifdef _WIN32\n"
+        ),
+        str_concat(
+            str_concat(
+                "#define WIN32_LEAN_AND_MEAN\n",
+                "#include <windows.h>\n"
+            ),
+            str_concat(
+                "#else\n",
+                str_concat(
+                    "#include <unistd.h>\n",
+                    "#endif\n"
+                )
+            )
+        )
+    );
+}
+
 pub fn c_includes_for_target(t: Target) -> string {
-    if (os_is_windows(t.os)) { return c_includes_windows(); }
-    if (t.os == OS_WASI())   { return c_includes_wasi(); }
-    return c_includes_posix();
+    if (t.os == OS_WASI()) { return c_includes_wasi(); }
+    return c_includes_portable();
 }
 
 // ---------------------------------------------------------------------------
@@ -388,8 +434,10 @@ pub fn c_typedefs_common() -> string {
 
 // Size type varies per platform
 pub fn c_size_type(t: Target) -> string {
-    if (os_is_windows(t.os)) { return "typedef long long kr_size;\n"; }
-    return "typedef ssize_t kr_size;\n";
+    // `long long` is portable C99 (guaranteed >= 64 bits) and works on every
+    // host without depending on POSIX `ssize_t`. Avoiding the per-target branch
+    // here keeps the emitted .c file portable across Windows/Linux/macOS.
+    return "typedef long long kr_size;\n";
 }
 
 // ---------------------------------------------------------------------------
@@ -857,7 +905,10 @@ pub fn c_runtime_shims_posix() -> string {
 
 pub fn c_runtime_shims_windows() -> string {
     let s = c_runtime_shims_posix();
-    // Override POSIX-only shims with Windows equivalents
+    // Override POSIX-only shims with Windows equivalents.
+    // All Windows-specific bits are #ifdef _WIN32 gated so the same emitted .c
+    // file remains buildable on Linux/macOS as well as Windows.
+    s = str_concat(s, "#ifdef _WIN32\n");
     s = str_concat(s, "void kr_sleep_ms(int64_t ms) { Sleep((DWORD)ms); }\n");
     s = str_concat(s, "int64_t kr_setenv(kr_str name, kr_str val, ...) { return (int64_t)_putenv_s(name, val); }\n");
     s = str_concat(s, "void kr_unsetenv(kr_str name) { _putenv_s(name, \"\"); }\n");
@@ -865,6 +916,7 @@ pub fn c_runtime_shims_windows() -> string {
     s = str_concat(s, "#define kr_snprintf _snprintf\n");
     s = str_concat(s, "#define kr_strdup _strdup\n");
     s = str_concat(s, "#ifndef strdup\n#define strdup _strdup\n#endif\n");
+    s = str_concat(s, "#endif\n");
     return s;
 }
 
@@ -874,9 +926,10 @@ pub fn c_runtime_shims_wasi() -> string {
 }
 
 pub fn c_runtime_shims_for_target(t: Target) -> string {
-    if (os_is_windows(t.os)) { return c_runtime_shims_windows(); }
-    if (t.os == OS_WASI())   { return c_runtime_shims_wasi(); }
-    return c_runtime_shims_posix();
+    if (t.os == OS_WASI()) { return c_runtime_shims_wasi(); }
+    // Always emit the full shim block (Windows-specific bits are #ifdef _WIN32
+    // gated) so the same emitted .c file builds on every host.
+    return c_runtime_shims_windows();
 }
 
 // ---------------------------------------------------------------------------

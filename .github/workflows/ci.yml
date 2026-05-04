@@ -3,12 +3,15 @@ name: CI
 # Tests run on every push and PR across Windows, Linux, macOS.
 # Tagged release builds are in release.yml.
 #
-# Bootstrap chain:
-#   1. Clone the sibling kraken-lang/kraken (Rust + LLVM compiler) repo
-#   2. cargo build --release -p kraken         -> stage1 (Rust-built krakenc)
-#   3. stage1 src/main.kr --emit-c             -> src/main.c (cross-targeted)
-#   4. clang src/main.c -o krakenc             -> stage2 (the Kraken-self-hosted krakenc)
-#   5. tools/run-tests.sh                       -> verify both backends, all targets
+# Bootstrap chain (no external compiler dependency at this level):
+#   1. clang src/main.c -o krakenc      -> stage2 (Kraken-self-hosted krakenc)
+#   2. tools/run-tests.sh                -> verify both backends
+#   3. emit-c, save, re-emit, compare    -> gen2/gen3 fixed-point check
+#
+# src/main.c is committed as the portable bootstrap source. It is regenerated
+# from src/main.kr (and the rest of src/*.kr) whenever the source changes; the
+# regen is committed alongside the .kr edit. The same main.c builds on all
+# three platforms via #ifdef-gated platform code.
 
 on:
   push:
@@ -28,104 +31,49 @@ jobs:
           - os_name: windows-x64
             runner: windows-latest
             exe_ext: .exe
-            llvm_path: 'C:\Program Files\LLVM'
-            target: x86_64-pc-windows-msvc
+            cc_extra: '-D_CRT_SECURE_NO_WARNINGS'
           - os_name: linux-x64
             runner: ubuntu-latest
             exe_ext: ''
-            llvm_path: /usr/lib/llvm-18
-            target: x86_64-unknown-linux-gnu
+            cc_extra: '-lm -lpthread'
           - os_name: macos-arm64
             runner: macos-latest
             exe_ext: ''
-            llvm_path: /opt/homebrew/opt/llvm@18
-            target: aarch64-apple-darwin
+            cc_extra: '-lm'
 
     defaults:
       run:
         shell: bash
 
-    env:
-      LLVM_SYS_180_PREFIX: ${{ matrix.llvm_path }}
-
     steps:
       - uses: actions/checkout@v5
 
-      # ---------- install LLVM ----------
-      - name: Install LLVM (Windows)
+      # ---------- install clang ----------
+      - name: Install clang (Windows)
         if: matrix.os_name == 'windows-x64'
         shell: pwsh
         run: |
-          choco install llvm --version=18.1.8 -y
+          choco install llvm -y --no-progress
           echo "C:\Program Files\LLVM\bin" >> $env:GITHUB_PATH
 
-      - name: Install LLVM (Linux)
+      - name: Install clang (Linux)
         if: matrix.os_name == 'linux-x64'
         run: |
-          wget https://apt.llvm.org/llvm.sh
-          chmod +x llvm.sh
-          sudo ./llvm.sh 18
-          sudo apt-get install -y libzstd-dev libpolly-18-dev clang-18 lld-18
-          sudo ln -sf /usr/bin/clang-18 /usr/local/bin/clang
-          sudo ln -sf /usr/bin/lld-18 /usr/local/bin/ld.lld
+          sudo apt-get update
+          sudo apt-get install -y clang lld
 
-      - name: Install LLVM (macOS)
-        if: matrix.os_name == 'macos-arm64'
-        run: |
-          brew install llvm@18 zstd
-          echo "/opt/homebrew/opt/llvm@18/bin" >> $GITHUB_PATH
-          echo "LIBRARY_PATH=$(brew --prefix zstd)/lib:$LIBRARY_PATH" >> $GITHUB_ENV
+      # macOS runners ship with clang via Xcode CLT; nothing to install.
 
-      - name: Verify clang available
+      - name: Verify clang
         run: clang --version
 
-      # ---------- bootstrap: build stage1 from sibling kraken Rust repo ----------
-      - name: Checkout kraken (Rust bootstrap)
-        uses: actions/checkout@v5
-        with:
-          repository: kraken-lang/kraken
-          path: kraken-bootstrap
-
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo registry
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            kraken-bootstrap/target
-          key: ${{ runner.os }}-cargo-stage1-${{ hashFiles('kraken-bootstrap/Cargo.lock') }}
-
-      - name: Build kraken-runtime (required by stage1)
-        working-directory: kraken-bootstrap
-        run: bash runtime/build.sh
-
-      - name: Build stage1 (kraken Rust compiler)
-        working-directory: kraken-bootstrap
-        run: cargo build --release -p kraken
-
-      # ---------- bootstrap: stage1 emits krakenc's C source, clang compiles it ----------
-      - name: Emit krakenc C source via stage1
+      # ---------- build stage2 from the committed bootstrap C source ----------
+      - name: Build krakenc
         run: |
-          export KRAKENC_INPUT=src/main.kr
-          export KRAKENC_MODE=emit-c
-          export KRAKENC_TARGET=${{ matrix.target }}
-          ./kraken-bootstrap/target/release/kraken${{ matrix.exe_ext }}
+          clang -o krakenc${{ matrix.exe_ext }} src/main.c -Wno-int-conversion ${{ matrix.cc_extra }}
 
-      - name: Build stage2 (Kraken-self-hosted krakenc)
-        run: |
-          clang \
-            -o krakenc${{ matrix.exe_ext }} \
-            src/main.c \
-            -Wno-int-conversion \
-            -D_CRT_SECURE_NO_WARNINGS \
-            $([ "${{ matrix.os_name }}" = "linux-x64" ] && echo "-lm -lpthread") \
-            $([ "${{ matrix.os_name }}" = "macos-arm64" ] && echo "-lm")
-
-      # ---------- run tests ----------
-      - name: Run tests (both backends)
+      # ---------- run tests (both backends) ----------
+      - name: Run tests
         run: |
           chmod +x tools/run-tests.sh
           KRAKENC=./krakenc${{ matrix.exe_ext }} bash tools/run-tests.sh
@@ -135,15 +83,13 @@ jobs:
         run: |
           export KRAKENC_INPUT=src/main.kr
           export KRAKENC_MODE=emit-c
-          export KRAKENC_TARGET=${{ matrix.target }}
-          # Save the gen2 main.c (already emitted by stage2 in the test phase)
-          cp src/main.c src/main_gen2.c
-          # Re-emit via the gen2 binary -> gen3 main.c
           ./krakenc${{ matrix.exe_ext }}
-          # Compare
+          cp src/main.c src/main_gen2.c
+          ./krakenc${{ matrix.exe_ext }}
           if cmp -s src/main_gen2.c src/main.c; then
             echo "gen2 == gen3 fixed point holds"
           else
             echo "::error::gen2 != gen3 - self-host fixed point broken"
+            diff src/main_gen2.c src/main.c | head -40 || true
             exit 1
           fi
