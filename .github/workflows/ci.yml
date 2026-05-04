@@ -79,32 +79,17 @@ jobs:
           KRAKENC=./krakenc${{ matrix.exe_ext }} bash tools/run-tests.sh
 
       # ---------- self-host fixed point check ----------
-      # Verbose + per-step timeouts so any hang surfaces with a clear error
-      # rather than the runner-shutdown mystery message.
       - name: Verify gen2/gen3 fixed point (C backend)
         run: |
-          set -x
           export KRAKENC_INPUT=src/main.kr
           export KRAKENC_MODE=emit-c
-
-          echo "::group::gen2 emit"
-          time timeout 60 ./krakenc${{ matrix.exe_ext }}
-          ls -la src/main.c
-          echo "::endgroup::"
-
+          ./krakenc${{ matrix.exe_ext }}
           cp src/main.c src/main_gen2.c
-          echo "saved gen2 main.c: $(wc -c < src/main_gen2.c) bytes"
-
-          echo "::group::gen3 emit"
-          time timeout 60 ./krakenc${{ matrix.exe_ext }}
-          ls -la src/main.c
-          echo "::endgroup::"
-
+          ./krakenc${{ matrix.exe_ext }}
           if cmp -s src/main_gen2.c src/main.c; then
             echo "gen2 == gen3 fixed point holds"
           else
             echo "::error::gen2 != gen3 - self-host fixed point broken"
-            echo "first diff:"
             diff src/main_gen2.c src/main.c | head -40 || true
             exit 1
           fi
