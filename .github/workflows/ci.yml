@@ -83,9 +83,13 @@ jobs:
         run: |
           export KRAKENC_INPUT=src/main.kr
           export KRAKENC_MODE=emit-c
+          echo "=== gen2 emit start: $(date) ==="
           ./krakenc${{ matrix.exe_ext }}
+          echo "=== gen2 emit done: $(date) ==="
           cp src/main.c src/main_gen2.c
+          echo "=== gen3 emit start: $(date) ==="
           ./krakenc${{ matrix.exe_ext }}
+          echo "=== gen3 emit done: $(date) ==="
           if cmp -s src/main_gen2.c src/main.c; then
             echo "gen2 == gen3 fixed point holds"
           else
