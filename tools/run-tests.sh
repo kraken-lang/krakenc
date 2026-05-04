@@ -47,13 +47,18 @@ TESTS=(
     test_structs
 )
 
-# Expected first line of each test's stdout
-declare -A EXPECTED
-EXPECTED[test_minimal]="hello from krakenc"
-EXPECTED[test_simple]="result: 42"
-EXPECTED[test_operators]="=== krakenc Operator Tests ==="
-EXPECTED[test_containers]="v[0]=10"
-EXPECTED[test_structs]="dist_sq: 25"
+# Expected first line of each test's stdout. Function rather than associative
+# array so this works on bash 3.2 (macOS) — `declare -A` requires bash 4+.
+expected_first_line() {
+    case "$1" in
+        test_minimal)   echo "hello from krakenc" ;;
+        test_simple)    echo "result: 42" ;;
+        test_operators) echo "=== krakenc Operator Tests ===" ;;
+        test_containers) echo "v[0]=10" ;;
+        test_structs)   echo "dist_sq: 25" ;;
+        *) echo "" ;;
+    esac
+}
 
 PASS=0
 FAIL=0
@@ -85,9 +90,9 @@ run_one() {
         return
     fi
 
-    local got
+    local got want
     got="$("$exe" 2>&1 | head -n1 | tr -d '\r')"
-    local want="${EXPECTED[$name]}"
+    want="$(expected_first_line "$name")"
     if [[ "$got" == "$want" ]]; then
         echo "  PASS ${label} ${name}"
         PASS=$((PASS + 1))
